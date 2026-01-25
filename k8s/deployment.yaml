@@ -16,7 +16,7 @@ spec:
         app: polymarket-arb-bot
     spec:
       imagePullSecrets:
-      - name: github-creds
+      - name: ghcr-pull-secret
       containers:
       - name: arb-bot
         image: ghcr.io/mx-town/polymarket-arb-bot:latest
