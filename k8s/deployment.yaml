@@ -20,6 +20,7 @@ spec:
       containers:
       - name: arb-bot
         image: ghcr.io/mx-town/polymarket-arb-bot:latest
+        imagePullPolicy: Always 
         env:
         - name: DRY_RUN
           valueFrom:
