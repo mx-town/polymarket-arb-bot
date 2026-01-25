@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: polymarket-arb-config
+  namespace: default
+data:
+  dry_run: "true"
+  min_spread: "0.02"
+  max_position_size: "50"
+  poll_interval: "2.0"

@@ -17,13 +17,7 @@ spec:
     spec:
       containers:
       - name: arb-bot
-        image: python:3.11-slim
-        command:
-          - sh
-          - -c
-          - |
-            pip install --no-cache-dir py-clob-client requests python-dotenv && \
-            python /app/arb_bot.py
+        image: ghcr.io/mx-town/polymarket-arb-bot:latest
         env:
         - name: DRY_RUN
           valueFrom:
@@ -57,9 +51,6 @@ spec:
               name: polymarket-credentials
               key: funder_address
               optional: true
-        volumeMounts:
-        - name: bot-code
-          mountPath: /app
         resources:
           requests:
             memory: "128Mi"
@@ -67,7 +58,3 @@ spec:
           limits:
             memory: "256Mi"
             cpu: "500m"
-      volumes:
-      - name: bot-code
-        configMap:
-          name: polymarket-arb-code
