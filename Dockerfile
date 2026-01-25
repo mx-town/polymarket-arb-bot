@@ -5,6 +5,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
+COPY src/arb_bot.py .
 
-CMD ["python", "src/arb_bot.py"]
+CMD ["python", "arb_bot.py"]
