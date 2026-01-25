@@ -1,0 +1,13 @@
+[project]
+name = "polymarket-arb-bot"
+version = "0.1.0"
+description = "Polymarket arbitrage bot"
+requires-python = ">=3.11"
+dependencies = [
+    "py-clob-client",
+    "requests",
+    "python-dotenv",
+]
+
+[project.scripts]
+arb-bot = "src.arb_bot:main"

@@ -8,6 +8,7 @@ and executes risk-free arbitrage by buying both sides.
 
 import os
 import time
+import json
 import logging
 from datetime import datetime
 from typing import Optional
@@ -55,6 +56,21 @@ class ArbOpportunity:
     timestamp: datetime
 
 
+def parse_json_field(value):
+    """Parse a field that might be a JSON string or already a list"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 class PolymarketArbBot:
     def __init__(self):
         self.client: Optional[ClobClient] = None
@@ -93,7 +109,27 @@ class PolymarketArbBot:
             markets = resp.json()
             
             # Filter for binary markets only (exactly 2 outcomes)
-            binary_markets = [m for m in markets if len(m.get("clobTokenIds", [])) == 2 or len(m.get("tokens", [])) == 2]
+            binary_markets = []
+            for m in markets:
+                # clobTokenIds and outcomes may be JSON strings that need parsing
+                clob_tokens = parse_json_field(m.get("clobTokenIds"))
+                outcomes = parse_json_field(m.get("outcomes"))
+                
+                # Check if binary (exactly 2 outcomes)
+                if len(clob_tokens) == 2:
+                    # Store parsed tokens for later use
+                    m['_parsed_clob_tokens'] = clob_tokens
+                    binary_markets.append(m)
+                elif len(outcomes) == 2 and len(clob_tokens) == 0:
+                    # Fallback: has 2 outcomes but no clob tokens parsed
+                    # Try tokens array as backup
+                    tokens = m.get("tokens", [])
+                    if isinstance(tokens, list) and len(tokens) == 2:
+                        token_ids = [t.get("token_id") for t in tokens if t.get("token_id")]
+                        if len(token_ids) == 2:
+                            m['_parsed_clob_tokens'] = token_ids
+                            binary_markets.append(m)
+            
             logger.info(f"Fetched {len(markets)} markets, {len(binary_markets)} are binary")
             return binary_markets
             
@@ -103,13 +139,13 @@ class PolymarketArbBot:
 
     def check_arbitrage(self, market: dict) -> Optional[ArbOpportunity]:
         """Check if a market has an arbitrage opportunity"""
-        # Get token IDs - try both field names
-        token_ids = market.get("clobTokenIds", [])
-        if not token_ids:
-            tokens = market.get("tokens", [])
-            token_ids = [t.get("token_id") for t in tokens if t.get("token_id")]
+        # Get token IDs from pre-parsed field or try to parse again
+        token_ids = market.get("_parsed_clob_tokens")
         
-        if len(token_ids) != 2:
+        if not token_ids:
+            token_ids = parse_json_field(market.get("clobTokenIds"))
+        
+        if not token_ids or len(token_ids) != 2:
             return None
             
         try:
