@@ -78,15 +78,14 @@ class PolymarketArbBot:
             self.client = ClobClient(CLOB_HOST)  # Read-only
             logger.info("Running in DRY RUN mode (read-only)")
 
-    def get_active_markets(self, tag: Optional[str] = None) -> list:
+    def get_active_markets(self, limit: int = 100, offset: int = 0) -> list:
         """Fetch active binary markets from Gamma API"""
         params = {
-            "active": "true",
             "closed": "false",
-            "limit": 100,
+            "archived": "false",
+            "limit": limit,
+            "offset": offset,
         }
-        if tag:
-            params["tag"] = tag
             
         try:
             resp = requests.get(f"{GAMMA_HOST}/markets", params=params, timeout=10)
@@ -94,8 +93,8 @@ class PolymarketArbBot:
             markets = resp.json()
             
             # Filter for binary markets only (exactly 2 outcomes)
-            binary_markets = [m for m in markets if len(m.get("tokens", [])) == 2]
-            logger.info(f"Found {len(binary_markets)} active binary markets")
+            binary_markets = [m for m in markets if len(m.get("clobTokenIds", [])) == 2 or len(m.get("tokens", [])) == 2]
+            logger.info(f"Fetched {len(markets)} markets, {len(binary_markets)} are binary")
             return binary_markets
             
         except Exception as e:
@@ -104,17 +103,21 @@ class PolymarketArbBot:
 
     def check_arbitrage(self, market: dict) -> Optional[ArbOpportunity]:
         """Check if a market has an arbitrage opportunity"""
-        tokens = market.get("tokens", [])
-        if len(tokens) != 2:
+        # Get token IDs - try both field names
+        token_ids = market.get("clobTokenIds", [])
+        if not token_ids:
+            tokens = market.get("tokens", [])
+            token_ids = [t.get("token_id") for t in tokens if t.get("token_id")]
+        
+        if len(token_ids) != 2:
             return None
             
         try:
-            # Get order books for both outcomes
-            yes_token = tokens[0]
-            no_token = tokens[1]
+            yes_token_id = token_ids[0]
+            no_token_id = token_ids[1]
             
-            yes_book = self.client.get_order_book(yes_token["token_id"])
-            no_book = self.client.get_order_book(no_token["token_id"])
+            yes_book = self.client.get_order_book(yes_token_id)
+            no_book = self.client.get_order_book(no_token_id)
             
             # Get best ask (lowest sell price) for each side
             yes_asks = yes_book.asks if hasattr(yes_book, 'asks') else []
@@ -131,10 +134,10 @@ class PolymarketArbBot:
             if total_cost < (1.0 - MIN_SPREAD):
                 profit = 1.0 - total_cost
                 return ArbOpportunity(
-                    market_id=market.get("condition_id", ""),
+                    market_id=market.get("conditionId", market.get("condition_id", "")),
                     market_name=market.get("question", "Unknown"),
-                    yes_token_id=yes_token["token_id"],
-                    no_token_id=no_token["token_id"],
+                    yes_token_id=yes_token_id,
+                    no_token_id=no_token_id,
                     yes_ask=yes_ask,
                     no_ask=no_ask,
                     total_cost=total_cost,
@@ -202,7 +205,7 @@ class PolymarketArbBot:
                 
         return opportunities
 
-    def run(self, tags: Optional[list[str]] = None):
+    def run(self):
         """Main bot loop"""
         logger.info("=" * 60)
         logger.info("Polymarket Arbitrage Bot Starting")
@@ -212,34 +215,24 @@ class PolymarketArbBot:
         logger.info(f"  Dry run: {DRY_RUN}")
         logger.info("=" * 60)
         
-        # Default to esports tags if none specified
-        if not tags:
-            tags = ["esports", "gaming", "league-of-legends", "dota", "csgo"]
-        
         while True:
             try:
-                # Fetch markets
+                # Fetch all active markets (paginate if needed)
                 all_markets = []
-                for tag in tags:
-                    markets = self.get_active_markets(tag=tag)
+                offset = 0
+                while True:
+                    markets = self.get_active_markets(limit=100, offset=offset)
+                    if not markets:
+                        break
                     all_markets.extend(markets)
+                    if len(markets) < 100:
+                        break
+                    offset += 100
                 
-                # Also get general markets
-                all_markets.extend(self.get_active_markets())
-                
-                # Dedupe by condition_id
-                seen = set()
-                unique_markets = []
-                for m in all_markets:
-                    cid = m.get("condition_id")
-                    if cid and cid not in seen:
-                        seen.add(cid)
-                        unique_markets.append(m)
-                
-                logger.info(f"Scanning {len(unique_markets)} unique markets...")
+                logger.info(f"Scanning {len(all_markets)} total binary markets...")
                 
                 # Scan for opportunities
-                opportunities = self.scan_markets(unique_markets)
+                opportunities = self.scan_markets(all_markets)
                 
                 if opportunities:
                     logger.info(f"Found {len(opportunities)} arbitrage opportunities!")
