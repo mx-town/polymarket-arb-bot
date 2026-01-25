@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polymarket-arb-bot
+  namespace: default
+  labels:
+    app: polymarket-arb-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: polymarket-arb-bot
+  template:
+    metadata:
+      labels:
+        app: polymarket-arb-bot
+    spec:
+      containers:
+      - name: arb-bot
+        image: python:3.11-slim
+        command:
+          - sh
+          - -c
+          - |
+            pip install --no-cache-dir py-clob-client requests python-dotenv && \
+            python /app/arb_bot.py
+        env:
+        - name: DRY_RUN
+          valueFrom:
+            configMapKeyRef:
+              name: polymarket-arb-config
+              key: dry_run
+        - name: MIN_SPREAD
+          valueFrom:
+            configMapKeyRef:
+              name: polymarket-arb-config
+              key: min_spread
+        - name: MAX_POSITION_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: polymarket-arb-config
+              key: max_position_size
+        - name: POLL_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: polymarket-arb-config
+              key: poll_interval
+        - name: POLYMARKET_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: polymarket-credentials
+              key: private_key
+              optional: true
+        - name: POLYMARKET_FUNDER_ADDRESS
+          valueFrom:
+            secretKeyRef:
+              name: polymarket-credentials
+              key: funder_address
+              optional: true
+        volumeMounts:
+        - name: bot-code
+          mountPath: /app
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+      - name: bot-code
+        configMap:
+          name: polymarket-arb-code
