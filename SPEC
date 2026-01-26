@@ -1,0 +1,873 @@
+# Polymarket Arbitrage Bot - Technical Plan
+
+## Overview
+
+Two-phase build:
+- **Phase 1 (Strategy 5):** Conservative arb - buy both sides when Up+Down < $1.00
+- **Phase 2 (Strategy 1):** Lag arb - predict windows using Binance spot feed
+
+Target markets: BTC and ETH Up/Down (15-min and 1-hour windows)
+
+---
+
+## Phase 1: Conservative Arbitrage Bot
+
+### Strategy
+1. Monitor Up/Down markets via WebSocket
+2. When YES_ask + NO_ask < threshold (e.g., $0.99), buy both
+3. Hold until resolution OR exit early if one side pumps
+4. Guaranteed profit if entry < $1.00
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    PHASE 1 ARCHITECTURE                 │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌─────────────┐      ┌─────────────┐                  │
+│  │ Gamma API   │      │ CLOB WSS    │                  │
+│  │ (discovery) │      │ (prices)    │                  │
+│  └──────┬──────┘      └──────┬──────┘                  │
+│         │                    │                          │
+│         ▼                    ▼                          │
+│  ┌─────────────────────────────────────┐               │
+│  │         Market Manager              │               │
+│  │  • Track active Up/Down markets     │               │
+│  │  • Maintain token ID mappings       │               │
+│  └──────────────────┬──────────────────┘               │
+│                     │                                   │
+│                     ▼                                   │
+│  ┌─────────────────────────────────────┐               │
+│  │         Signal Engine               │               │
+│  │  • Calculate Up_ask + Down_ask      │               │
+│  │  • Check vs threshold               │               │
+│  │  • Track open positions             │               │
+│  └──────────────────┬──────────────────┘               │
+│                     │                                   │
+│                     ▼                                   │
+│  ┌─────────────────────────────────────┐               │
+│  │         Executor                    │               │
+│  │  • Place limit orders via CLOB      │               │
+│  │  • Monitor fills                    │               │
+│  │  • Exit logic                       │               │
+│  └─────────────────────────────────────┘               │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## API Reference
+
+### 1. Gamma API (Market Discovery)
+
+**Base URL:** `https://gamma-api.polymarket.com`
+
+#### Find Up/Down Markets
+
+```
+GET /events
+```
+
+**Parameters:**
+| Param | Value | Description |
+|-------|-------|-------------|
+| `active` | `true` | Only active events |
+| `closed` | `false` | Not closed |
+| `tag_id` | `100639` | Game bets / short-term |
+| `limit` | `100` | Results per page |
+| `offset` | `0` | Pagination |
+
+**Filter for Up/Down markets:**
+- Search `slug` or `title` containing: `btc-updown`, `eth-updown`, `up-or-down`
+- Or filter by `series_id` for specific crypto pairs
+
+#### Response fields needed:
+```
+event.id
+event.slug
+event.markets[].id
+event.markets[].question
+event.markets[].clobTokenIds    # JSON string: ["YES_TOKEN", "NO_TOKEN"]
+event.markets[].outcomes        # JSON string: ["Up", "Down"]
+event.markets[].outcomePrices   # JSON string (ignore - use CLOB)
+event.markets[].endDate         # Resolution time
+```
+
+**Polling interval:** Every 60 seconds (discover new markets)
+
+---
+
+### 2. CLOB WebSocket (Real-time Prices)
+
+**Endpoint:** `wss://ws-subscriptions-clob.polymarket.com/ws/market`
+
+#### Subscribe to Market Channel
+
+**Send on connect:**
+```json
+{
+  "type": "market",
+  "assets_ids": [
+    "UP_TOKEN_ID_1",
+    "DOWN_TOKEN_ID_1",
+    "UP_TOKEN_ID_2",
+    "DOWN_TOKEN_ID_2"
+  ]
+}
+```
+
+#### Keepalive
+Send ping every 30 seconds:
+```json
+{"type": "ping"}
+```
+
+#### Incoming Message Types
+
+**1. Book Snapshot (`event_type: "book"`):**
+```json
+{
+  "event_type": "book",
+  "asset_id": "TOKEN_ID",
+  "market": "CONDITION_ID",
+  "bids": [["0.52", "1000"], ["0.51", "500"]],
+  "asks": [["0.54", "800"], ["0.55", "1200"]],
+  "timestamp": "1706000000000"
+}
+```
+- `bids`: [[price, size], ...] sorted high to low
+- `asks`: [[price, size], ...] sorted low to high
+
+**2. Price Change (`event_type: "price_change"`):**
+```json
+{
+  "event_type": "price_change",
+  "asset_id": "TOKEN_ID",
+  "price_changes": [
+    {
+      "best_bid": "0.52",
+      "best_ask": "0.54",
+      "last_trade_price": "0.53"
+    }
+  ]
+}
+```
+
+**3. Last Trade Price (`event_type: "last_trade_price"`):**
+```json
+{
+  "event_type": "last_trade_price",
+  "asset_id": "TOKEN_ID",
+  "price": "0.53"
+}
+```
+
+---
+
+### 3. CLOB REST API (Execution)
+
+**Base URL:** `https://clob.polymarket.com`
+
+#### Authentication Required
+All order endpoints need L2 authentication headers.
+
+**Headers:**
+```
+POLY_ADDRESS: <wallet_address>
+POLY_SIGNATURE: <signed_message>
+POLY_TIMESTAMP: <unix_timestamp>
+POLY_NONCE: <random_nonce>
+POLY_API_KEY: <api_key>
+POLY_PASSPHRASE: <passphrase>
+POLY_SECRET: <secret>
+```
+
+Use `py-clob-client` which handles signing:
+```python
+from py_clob_client.client import ClobClient
+client = ClobClient(host, key=private_key, chain_id=137, funder=funder_address)
+creds = client.create_or_derive_api_creds()
+client.set_api_creds(creds)
+```
+
+#### Get Order Book (REST fallback)
+
+```
+GET /book
+```
+
+**Parameters:**
+| Param | Value |
+|-------|-------|
+| `token_id` | Token ID |
+
+#### Get Multiple Order Books (Batch)
+
+```
+GET /books
+```
+
+**Body:**
+```json
+[
+  {"token_id": "TOKEN_1"},
+  {"token_id": "TOKEN_2"}
+]
+```
+
+#### Place Order
+
+```
+POST /order
+```
+
+**Order structure (via py-clob-client):**
+```python
+from py_clob_client.clob_types import OrderArgs
+from py_clob_client.order_builder.constants import BUY, SELL
+
+order_args = OrderArgs(
+    token_id="TOKEN_ID",
+    price=0.52,           # Limit price
+    size=100,             # Number of shares
+    side=BUY,             # BUY or SELL
+    fee_rate_bps=0,       # Optional: fee rate
+    nonce=None,           # Optional: auto-generated
+    expiration=None,      # Optional: order expiry
+)
+
+order = client.create_order(order_args)
+response = client.post_order(order, OrderType.GTC)  # GTC, FOK, or GTD
+```
+
+**Order Types:**
+- `GTC` - Good Till Cancelled
+- `FOK` - Fill Or Kill (all or nothing)
+- `GTD` - Good Till Date
+
+#### Cancel Order
+
+```
+DELETE /order/{order_id}
+```
+
+#### Get Open Orders
+
+```
+GET /orders
+```
+
+**Parameters:**
+| Param | Value |
+|-------|-------|
+| `market` | Condition ID (optional) |
+| `asset_id` | Token ID (optional) |
+
+#### Get Positions
+
+```
+GET /positions
+```
+
+Returns current holdings across all markets.
+
+---
+
+## Configuration Parameters
+
+### Trading Parameters
+
+```yaml
+# Entry thresholds
+max_combined_price: 0.99      # Only enter if Up_ask + Down_ask < this
+target_profit_pct: 0.015      # Target 1.5% per trade
+min_profit_pct: 0.005         # Minimum acceptable profit
+
+# Position sizing
+position_size_usd: 50         # USD per side (total = 2x)
+max_position_per_market: 200  # Max USD exposure per market
+max_total_exposure: 1000      # Max total USD in positions
+
+# Exit parameters
+exit_on_pump_threshold: 0.10  # Exit if one side moves +10%
+exit_before_resolution_sec: 60  # Exit N seconds before market closes
+min_exit_profit_pct: 0.005    # Don't exit at loss unless forced
+
+# Timing
+min_time_to_resolution_sec: 300  # Don't enter if < 5 min left
+```
+
+### Market Filters
+
+```yaml
+# Which markets to trade
+market_types:
+  - "btc-updown-15m"
+  - "btc-updown-1h"  
+  - "eth-updown-15m"
+  - "eth-updown-1h"
+
+# Liquidity requirements
+min_liquidity_usd: 1000       # Minimum market liquidity
+min_book_depth: 500           # Min size at best bid/ask
+max_spread_pct: 0.05          # Max bid-ask spread per side
+```
+
+### Risk Management
+
+```yaml
+# Circuit breakers
+max_consecutive_losses: 3     # Pause after N losses
+max_daily_loss_usd: 100       # Stop trading if daily loss exceeds
+cooldown_after_loss_sec: 300  # Wait N seconds after loss
+
+# Order safety
+max_slippage_pct: 0.02        # Cancel if price moves > 2%
+order_timeout_sec: 10         # Cancel unfilled orders after N sec
+require_both_fills: true      # Only count as position if both sides fill
+```
+
+---
+
+## Data Structures
+
+### Market State
+
+```
+MarketState:
+  market_id: str              # Condition ID
+  slug: str                   # Human-readable identifier
+  up_token_id: str
+  down_token_id: str
+  resolution_time: datetime
+  
+  # Real-time from WebSocket
+  up_best_bid: float
+  up_best_ask: float
+  up_bid_size: float
+  up_ask_size: float
+  
+  down_best_bid: float
+  down_best_ask: float
+  down_bid_size: float
+  down_ask_size: float
+  
+  # Derived
+  combined_ask: float         # up_best_ask + down_best_ask
+  combined_bid: float         # up_best_bid + down_best_bid
+  potential_profit: float     # 1.0 - combined_ask
+  
+  last_update: datetime
+```
+
+### Position
+
+```
+Position:
+  market_id: str
+  entry_time: datetime
+  
+  up_shares: float
+  up_entry_price: float
+  down_shares: float
+  down_entry_price: float
+  
+  total_cost: float           # up_shares * up_price + down_shares * down_price
+  guaranteed_payout: float    # min(up_shares, down_shares) * 1.0
+  current_profit: float       # Based on current prices
+  
+  status: enum                # PENDING, OPEN, EXITING, CLOSED
+```
+
+### Trade Log
+
+```
+Trade:
+  id: str
+  market_id: str
+  timestamp: datetime
+  
+  side: str                   # "UP" or "DOWN"
+  direction: str              # "BUY" or "SELL"
+  price: float
+  size: float
+  
+  order_id: str
+  fill_status: str            # FILLED, PARTIAL, CANCELLED
+```
+
+---
+
+## Execution Flow
+
+### Startup Sequence
+
+```
+1. Load configuration
+2. Initialize CLOB client with credentials
+3. Fetch active Up/Down markets from Gamma API
+4. Extract token IDs for each market
+5. Connect to CLOB WebSocket
+6. Subscribe to all token IDs
+7. Wait for initial book snapshots
+8. Enter main loop
+```
+
+### Main Loop
+
+```
+LOOP (on each WebSocket message):
+  
+  1. UPDATE MARKET STATE
+     - Parse message (book/price_change)
+     - Update corresponding market's bid/ask
+     - Recalculate combined_ask, potential_profit
+  
+  2. CHECK ENTRY CONDITIONS (for markets without position)
+     - combined_ask < max_combined_price?
+     - time_to_resolution > min_time?
+     - liquidity sufficient?
+     - within exposure limits?
+     
+     IF all conditions met:
+       → EXECUTE ENTRY
+  
+  3. CHECK EXIT CONDITIONS (for open positions)
+     - One side pumped > threshold?
+     - Approaching resolution?
+     - Combined bid > entry cost? (profit available)
+     
+     IF exit condition met:
+       → EXECUTE EXIT
+  
+  4. HOUSEKEEPING (every N seconds)
+     - Check for stale data
+     - Cancel unfilled orders
+     - Log stats
+     - Check circuit breakers
+```
+
+### Entry Execution
+
+```
+ENTRY(market):
+  
+  1. VALIDATE
+     - Re-fetch order book via REST (confirm WSS data)
+     - Verify combined_ask still < threshold
+     - Check available balance
+  
+  2. CALCULATE SIZES
+     - shares = position_size_usd / combined_ask
+     - Round to valid tick size
+  
+  3. PLACE ORDERS (near-simultaneously)
+     - Place UP buy limit at up_best_ask
+     - Place DOWN buy limit at down_best_ask
+     - Use FOK or aggressive limit
+  
+  4. VERIFY FILLS
+     - Wait up to order_timeout_sec
+     - If both filled → position OPEN
+     - If one filled → attempt to sell back OR complete other side
+     - If neither filled → no position, retry next opportunity
+  
+  5. RECORD
+     - Log entry details
+     - Update position tracker
+```
+
+### Exit Execution
+
+```
+EXIT(position, reason):
+  
+  1. DETERMINE EXIT TYPE
+     - RESOLUTION: Hold, let market settle
+     - PUMP_EXIT: Sell the pumped side
+     - EARLY_EXIT: Sell both sides
+  
+  2. FOR PUMP_EXIT
+     - Identify which side pumped (e.g., UP at 0.65 from 0.52)
+     - Place sell order for pumped side
+     - Keep other side (will be worth more if outcome flips)
+     - OR sell both if profit locked
+  
+  3. FOR EARLY_EXIT
+     - Place sell orders for both sides
+     - Use limit orders at best_bid
+  
+  4. VERIFY FILLS
+     - Confirm exits filled
+     - Calculate realized P&L
+  
+  5. RECORD
+     - Log exit details
+     - Update stats
+```
+
+---
+
+## Phase 2: Lag Arbitrage (Upgrade)
+
+### Additional Components
+
+Add Binance WebSocket feed to predict WHEN arb windows will appear.
+
+### Binance WebSocket (Recommended)
+
+**Direct stream URL (no subscribe message needed):**
+```
+wss://stream.binance.com:9443/ws/btcusdt@aggTrade
+wss://stream.binance.com:9443/ws/ethusdt@aggTrade
+```
+
+**Or multi-stream:**
+```
+wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/ethusdt@aggTrade
+```
+
+**Available streams:**
+| Stream | URL suffix | Description |
+|--------|------------|-------------|
+| Agg trades | `@aggTrade` | Aggregated trades (recommended - less noisy) |
+| Individual trades | `@trade` | Every single trade |
+| Ticker | `@ticker` | 24hr rolling stats |
+| Mini ticker | `@miniTicker` | Subset of ticker data |
+
+**Incoming aggTrade message:**
+```json
+{
+  "e": "aggTrade",
+  "E": 1706000000000,
+  "s": "BTCUSDT",
+  "a": 123456789,
+  "p": "42150.50",
+  "q": "0.5",
+  "f": 100,
+  "l": 105,
+  "T": 1706000000000,
+  "m": true
+}
+```
+- `p`: price (string)
+- `q`: quantity (string)
+- `T`: trade time (ms)
+- `m`: is buyer maker (true = sell pressure, false = buy pressure)
+
+**Connection limits:**
+- 5 incoming messages/sec
+- Max 1024 streams per connection
+- Auto-disconnect after 24 hours
+- Ping every 20 sec, must pong within 60 sec
+
+---
+
+### Coinbase WebSocket (Alternative)
+
+**Endpoint:** `wss://ws-feed.exchange.coinbase.com`
+
+**Subscribe message (send after connect):**
+```json
+{
+  "type": "subscribe",
+  "product_ids": ["BTC-USD", "ETH-USD"],
+  "channels": ["ticker", "matches"]
+}
+```
+
+**Incoming ticker message:**
+```json
+{
+  "type": "ticker",
+  "sequence": 754296790,
+  "product_id": "BTC-USD",
+  "price": "42150.50",
+  "best_bid": "42150.00",
+  "best_ask": "42151.00",
+  "side": "sell",
+  "time": "2024-01-26T12:00:00.123456Z",
+  "trade_id": 28157206,
+  "last_size": "0.5"
+}
+```
+
+**Channels:**
+| Channel | Description |
+|---------|-------------|
+| `ticker` | Real-time price updates on trades |
+| `matches` | Trade executions |
+| `level2` | Full order book updates |
+| `heartbeat` | 1 message/sec heartbeat |
+
+**Notes:**
+- No auth required for public data
+- Use Coinbase if Binance is geo-blocked
+- Slightly higher latency than Binance
+
+### Enhanced Signal Logic
+
+```
+SIGNAL ENGINE (Phase 2):
+
+  1. TRACK SPOT MOMENTUM
+     - Calculate 10-second price change on Binance
+     - Detect significant moves (> 0.1%)
+  
+  2. PREDICT POLYMARKET LAG
+     - When spot moves sharply, Polymarket books lag
+     - The "wrong" side briefly stays cheap
+     - Window typically lasts 1-5 seconds
+  
+  3. AGGRESSIVE ENTRY
+     - Don't wait for combined < $0.99
+     - Enter when:
+       a) Spot moved significantly AND
+       b) Combined < $1.00 (any profit margin) AND
+       c) Direction aligns (spot up → buy UP cheap before it reprices)
+  
+  4. FASTER EXIT
+     - Exit as soon as prices normalize
+     - Don't wait for resolution
+     - Target: 0.5-1% per trade, high frequency
+```
+
+### Phase 2 Architecture Addition
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    PHASE 2 ADDITIONS                    │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌─────────────┐                                       │
+│  │ Binance WSS │                                       │
+│  │ (BTC/ETH)   │                                       │
+│  └──────┬──────┘                                       │
+│         │                                               │
+│         ▼                                               │
+│  ┌─────────────────────────────────────┐               │
+│  │      Spot Price Tracker             │               │
+│  │  • 10-sec rolling window            │               │
+│  │  • Momentum detection               │               │
+│  │  • Direction signal                 │               │
+│  └──────────────────┬──────────────────┘               │
+│                     │                                   │
+│                     ▼                                   │
+│  ┌─────────────────────────────────────┐               │
+│  │      Enhanced Signal Engine         │               │
+│  │  • Spot momentum + Polymarket lag   │               │
+│  │  • Predictive entry (not reactive)  │               │
+│  │  • Faster exit on normalization     │               │
+│  └─────────────────────────────────────┘               │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Phase 2 Parameters
+
+```yaml
+# Spot tracking
+spot_momentum_window_sec: 10      # Rolling window for momentum
+spot_move_threshold_pct: 0.10     # Significant move = 0.1%
+spot_direction_confidence: 0.7    # Require 70% of trades in direction
+
+# Lag prediction  
+expected_lag_ms: 2000             # Polymarket typically lags 2 sec
+max_lag_window_ms: 5000           # Give up after 5 sec
+
+# Aggressive entry (Phase 2)
+max_combined_price_lag: 1.00      # Enter at up to $1.00 during lag
+min_profit_during_lag: 0.001      # Accept 0.1% if lag-predicted
+
+# Fast exit
+exit_on_price_normalization: true
+normalization_threshold: 0.005    # Exit when spread < 0.5%
+```
+
+---
+
+## File Structure
+
+```
+polymarket-arb-bot/
+├── src/
+│   ├── __init__.py
+│   ├── main.py                 # Entry point
+│   ├── config.py               # Load/validate configuration
+│   │
+│   ├── market/
+│   │   ├── __init__.py
+│   │   ├── discovery.py        # Gamma API - find Up/Down markets
+│   │   ├── state.py            # Market state management
+│   │   └── filters.py          # Market filtering logic
+│   │
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── polymarket_ws.py    # CLOB WebSocket client
+│   │   ├── binance_ws.py       # Binance WebSocket (Phase 2)
+│   │   └── price_tracker.py    # Spot price momentum (Phase 2)
+│   │
+│   ├── strategy/
+│   │   ├── __init__.py
+│   │   ├── signals.py          # Entry/exit signal logic
+│   │   ├── conservative.py     # Phase 1 strategy
+│   │   └── lag_arb.py          # Phase 2 strategy
+│   │
+│   ├── execution/
+│   │   ├── __init__.py
+│   │   ├── orders.py           # Order creation/placement
+│   │   ├── position.py         # Position tracking
+│   │   └── risk.py             # Risk management/circuit breakers
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── logging.py          # Structured logging
+│       └── metrics.py          # Performance tracking
+│
+├── config/
+│   ├── default.yaml            # Default configuration
+│   └── production.yaml         # Production overrides
+│
+├── tests/
+│   ├── test_signals.py
+│   ├── test_execution.py
+│   └── mock_websocket.py       # WebSocket simulator for testing
+│
+├── scripts/
+│   ├── analyze_spreads.py      # Market analysis tool
+│   └── backtest.py             # Historical backtesting
+│
+├── pyproject.toml
+├── Dockerfile
+└── README.md
+```
+
+---
+
+## Testing Plan
+
+### Unit Tests
+- Signal calculation logic
+- Position P&L calculations
+- Risk limit checks
+- Order size rounding
+
+### Integration Tests
+- WebSocket connection/reconnection
+- Order placement and cancellation
+- Position tracking accuracy
+
+### Paper Trading
+1. Run with `dry_run: true`
+2. Log all signals that WOULD have been executed
+3. Track theoretical P&L
+4. Verify against actual market outcomes
+
+### Backtesting (Optional)
+- Fetch historical order book data via CLOB API
+- Replay through strategy
+- Calculate theoretical performance
+
+---
+
+## Monitoring & Logging
+
+### Key Metrics to Track
+```
+# Performance
+total_trades
+win_rate
+avg_profit_per_trade
+total_pnl
+sharpe_ratio (if enough data)
+
+# Execution
+avg_fill_time_ms
+slippage_per_trade
+partial_fill_rate
+
+# Market
+opportunities_seen
+opportunities_taken
+opportunities_missed (filled by others)
+avg_window_duration_ms
+
+# System
+websocket_reconnects
+message_latency_ms
+order_api_latency_ms
+```
+
+### Log Format
+```
+timestamp | level | component | event | details
+```
+
+Example:
+```
+2024-01-26T12:00:00.123Z | INFO | signal | OPPORTUNITY | market=btc-15m combined=0.985 profit=1.5%
+2024-01-26T12:00:00.125Z | INFO | executor | ENTRY | market=btc-15m up=0.52 down=0.465 size=100
+2024-01-26T12:00:00.250Z | INFO | executor | FILLED | market=btc-15m side=UP price=0.52 size=100
+2024-01-26T12:00:00.255Z | INFO | executor | FILLED | market=btc-15m side=DOWN price=0.465 size=100
+2024-01-26T12:05:30.000Z | INFO | executor | EXIT | market=btc-15m reason=PUMP side=UP price=0.62
+2024-01-26T12:05:30.100Z | INFO | position | CLOSED | market=btc-15m pnl=+$1.85 duration=5m30s
+```
+
+---
+
+## Deployment
+
+### Local Development
+```bash
+# Install dependencies
+uv sync
+
+# Run with dry-run
+uv run src/main.py --config config/default.yaml --dry-run
+
+# Run live (requires credentials)
+export POLYMARKET_PRIVATE_KEY=...
+export POLYMARKET_FUNDER_ADDRESS=...
+uv run src/main.py --config config/production.yaml
+```
+
+### Production (K8s)
+- Use existing k8s/ manifests
+- Add secrets for credentials
+- Set resource limits (low CPU/memory needed)
+- Add health check endpoint
+
+### Raspberry Pi
+- Works fine for Phase 1 (conservative)
+- May need optimization for Phase 2 (higher frequency)
+- Use `uvloop` for better async performance
+
+---
+
+## Risk Checklist
+
+Before going live:
+
+- [ ] Test with small position sizes first ($5-10 per side)
+- [ ] Verify order placement and cancellation works
+- [ ] Confirm fills are tracked correctly
+- [ ] Test partial fill handling
+- [ ] Verify P&L calculations match actual balance changes
+- [ ] Set conservative circuit breakers
+- [ ] Monitor for a full day before scaling
+- [ ] Have kill switch ready (scale deployment to 0)
+
+---
+
+## Next Steps
+
+1. **Build Phase 1** with Claude Code using this spec
+2. **Paper trade** for 24-48 hours
+3. **Live trade** with minimal capital ($50-100)
+4. **Validate** performance matches expectations
+5. **Scale** position sizes if profitable
+6. **Add Phase 2** for higher frequency
+
+Good luck! 🎯
