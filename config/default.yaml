@@ -8,13 +8,13 @@ trading:
   fee_rate: 0.02            # ~2% round-trip fees
 
 polling:
-  interval: 5.0             # Seconds between market scans
-  batch_size: 50            # Order books per API call
-  max_markets: 0            # 0 = all markets
+  interval: 5.0                  # Seconds between market scans
+  batch_size: 50                 # Order books per API call
+  max_markets: 0                 # 0 = all markets
+  market_refresh_interval: 300   # Refresh markets every 5 minutes
 
 websocket:
-  enabled: false
-  ping_interval: 5.0   # Polymarket recommends 5s
+  ping_interval: 5.0        # Polymarket recommends 5s
   reconnect_delay: 5.0
 
 # Phase 1: Conservative arbitrage thresholds
@@ -52,6 +52,9 @@ filters:
   min_liquidity_usd: 1000.0
   min_book_depth: 500.0
   max_spread_pct: 0.05
+  max_market_age_hours: 1.0     # Prefer markets created within 1 hour
+  fallback_age_hours: 24.0      # Fallback to 24h if no recent markets
+  min_volume_24h: 100.0         # Minimum volume to ensure activity
   market_types:
     - btc-updown
     - eth-updown

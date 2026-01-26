@@ -11,12 +11,13 @@ Strategies:
 import time
 import signal
 import sys
+import threading
 from typing import Optional, Union
 
 from src.config import build_config, BotConfig
 from src.utils.logging import setup_logging, get_logger
 from src.utils.metrics import BotMetrics
-from src.market.discovery import fetch_updown_markets, fetch_all_markets
+from src.market.discovery import fetch_updown_markets, fetch_all_markets, fetch_recent_updown_markets
 from src.market.state import MarketStateManager, MarketState
 from src.market.filters import get_tradeable_markets
 from src.strategy.signals import ArbOpportunity, SignalDetector
@@ -53,6 +54,9 @@ class ArbBot:
         # Price tracker for lag arb
         self.price_tracker: Optional[PriceTracker] = None
 
+        # Market refresh thread
+        self._refresh_thread: Optional[threading.Thread] = None
+
         # Strategy (set based on config)
         self.strategy: Optional[Union[ConservativeStrategy, LagArbStrategy]] = None
 
@@ -67,7 +71,7 @@ class ArbBot:
         print(f"  Min gross:       ${cfg.trading.min_spread} ({cfg.trading.min_spread*100:.1f}%)")
         print(f"  Min net profit:  ${cfg.trading.min_net_profit} ({cfg.trading.min_net_profit*100:.2f}%)")
         print(f"  Max position:    ${cfg.trading.max_position_size}")
-        print(f"  WebSocket:       {'enabled' if cfg.websocket.enabled else 'disabled'}")
+        print(f"  Market refresh:  {cfg.polling.market_refresh_interval}s")
         if cfg.strategy == "lag_arb":
             print(f"  Binance feed:    enabled (candle-based)")
             print(f"  Candle interval: {cfg.lag_arb.candle_interval}")
@@ -89,26 +93,15 @@ class ArbBot:
             self.config.funder_address,
         )
 
-        # Discover markets
-        if self.config.filters.market_types:
-            logger.info("DISCOVER", f"Filtering for: {self.config.filters.market_types}")
-            self.state_manager = fetch_updown_markets(
-                max_markets=self.config.polling.max_markets,
-                market_types=self.config.filters.market_types,
-            )
-        else:
-            # Fetch all binary markets for polling mode
-            raw_markets = fetch_all_markets(max_markets=self.config.polling.max_markets)
-            self.state_manager = MarketStateManager()
-            for m in raw_markets:
-                state = MarketState(
-                    market_id=m["condition_id"],
-                    slug=m.get("slug", ""),
-                    question=m["question"],
-                    up_token_id=m["yes_token"],
-                    down_token_id=m["no_token"],
-                )
-                self.state_manager.add_market(state)
+        # Discover recent markets
+        logger.info("DISCOVER", f"Filtering for: {self.config.filters.market_types}")
+        self.state_manager = fetch_recent_updown_markets(
+            max_age_hours=self.config.filters.max_market_age_hours,
+            fallback_age_hours=self.config.filters.fallback_age_hours,
+            min_volume_24h=self.config.filters.min_volume_24h,
+            market_types=self.config.filters.market_types,
+            max_markets=self.config.polling.max_markets,
+        )
 
         logger.info("MARKETS_LOADED", f"count={len(self.state_manager.markets)}")
 
@@ -118,9 +111,12 @@ class ArbBot:
         else:
             self._init_conservative()
 
-        # Connect Polymarket WebSocket if enabled
-        if self.config.websocket.enabled:
-            self._init_polymarket_ws()
+        # Connect Polymarket WebSocket (always enabled)
+        self._init_polymarket_ws()
+
+        # Start market refresh thread
+        if self.config.polling.market_refresh_interval > 0:
+            self._start_market_refresh_thread()
 
         self.metrics.start()
         logger.info("INIT_COMPLETE", "Bot initialized")
@@ -191,6 +187,54 @@ class ArbBot:
             logger.info("POLYMARKET_WS_READY", "Polymarket WebSocket connected")
         else:
             logger.warning("POLYMARKET_WS_TIMEOUT", "Polymarket WebSocket connection timeout")
+
+    def _start_market_refresh_thread(self):
+        """Start background thread to refresh markets periodically"""
+        self._refresh_thread = threading.Thread(
+            target=self._market_refresh_loop,
+            daemon=True,
+            name="market-refresh",
+        )
+        self._refresh_thread.start()
+        logger.info(
+            "REFRESH_THREAD",
+            f"Started with interval={self.config.polling.market_refresh_interval}s",
+        )
+
+    def _market_refresh_loop(self):
+        """Periodically check for new markets"""
+        interval = self.config.polling.market_refresh_interval
+        while self.running:
+            time.sleep(interval)
+            if not self.running:
+                break
+            try:
+                self._refresh_markets()
+            except Exception as e:
+                logger.error("MARKET_REFRESH_ERROR", str(e))
+
+    def _refresh_markets(self):
+        """Fetch new markets and update subscriptions"""
+        new_manager = fetch_recent_updown_markets(
+            max_age_hours=self.config.filters.max_market_age_hours,
+            fallback_age_hours=self.config.filters.fallback_age_hours,
+            min_volume_24h=self.config.filters.min_volume_24h,
+            market_types=self.config.filters.market_types,
+            max_markets=self.config.polling.max_markets,
+        )
+
+        # Find new markets not in current state
+        new_tokens = []
+        for market_id, market in new_manager.markets.items():
+            if market_id not in self.state_manager.markets:
+                self.state_manager.add_market(market)
+                new_tokens.extend([market.up_token_id, market.down_token_id])
+                logger.info("NEW_MARKET", f"slug={market.slug}")
+
+        # Subscribe to new tokens
+        if new_tokens and self.polymarket_ws:
+            self.polymarket_ws.add_tokens(new_tokens)
+            logger.info("SUBSCRIBED_NEW", f"tokens={len(new_tokens)}")
 
     def _on_direction_signal(self, signal: DirectionSignal):
         """
@@ -315,69 +359,6 @@ class ArbBot:
                     f"market={market.slug} pnl=${pnl:.4f} reason={reason}",
                 )
 
-    def run_polling_cycle(self):
-        """Run one polling-mode scan cycle"""
-        self.metrics.cycles += 1
-        cycle_start = time.time()
-
-        logger.info("CYCLE_START", f"cycle={self.metrics.cycles}")
-
-        # Fetch fresh order books
-        token_ids = self.state_manager.get_all_token_ids()
-        book_map = self.executor.get_order_books_batch(token_ids)
-
-        # Update state from books
-        for token_id, book in book_map.items():
-            bids = book.get("bids", [])
-            asks = book.get("asks", [])
-
-            if bids and asks:
-                best_bid = float(bids[0].price) if hasattr(bids[0], "price") else float(bids[0][0])
-                best_ask = float(asks[0].price) if hasattr(asks[0], "price") else float(asks[0][0])
-                bid_size = float(bids[0].size) if hasattr(bids[0], "size") else float(bids[0][1]) if len(bids[0]) > 1 else 0
-                ask_size = float(asks[0].size) if hasattr(asks[0], "size") else float(asks[0][1]) if len(asks[0]) > 1 else 0
-
-                self.state_manager.update_from_book(token_id, best_bid, best_ask, bid_size, ask_size)
-
-        self.metrics.markets_scanned = len(self.state_manager.markets)
-
-        # Scan for opportunities based on strategy
-        tradeable = get_tradeable_markets(
-            self.state_manager,
-            self.config.filters,
-            self.config.conservative.min_time_to_resolution_sec,
-        )
-
-        if isinstance(self.strategy, ConservativeStrategy):
-            opportunities = scan_for_opportunities(
-                tradeable,
-                self.config.trading,
-                self.config.conservative,
-            )
-        else:
-            # Lag arb: check each market with strategy
-            opportunities = []
-            for market in tradeable:
-                signal = self.strategy.check_entry(market)
-                if signal and signal.opportunity:
-                    opportunities.append(signal.opportunity)
-
-        # Execute opportunities
-        for opp in opportunities:
-            if not self.position_manager.has_position(opp.market_id):
-                self._execute_entry(opp)
-
-        cycle_time = time.time() - cycle_start
-        self.metrics.cycle_complete()
-
-        if opportunities:
-            logger.info("CYCLE_COMPLETE", f"opps={len(opportunities)} time={cycle_time:.1f}s")
-        else:
-            logger.info(
-                "CYCLE_COMPLETE",
-                f"no_opps (need >{self.config.trading.min_spread*100:.1f}% gross) time={cycle_time:.1f}s",
-            )
-
     def run(self):
         """Main run loop"""
         self._print_banner()
@@ -393,22 +374,14 @@ class ArbBot:
         signal.signal(signal.SIGTERM, handle_shutdown)
 
         try:
-            if self.config.websocket.enabled:
-                # WebSocket mode: events trigger trades
-                logger.info("MODE", "Running in WebSocket mode")
-                while self.running:
-                    time.sleep(1)
+            # WebSocket mode: events trigger trades
+            logger.info("MODE", "Running in WebSocket mode")
+            while self.running:
+                time.sleep(1)
 
-                    # For lag arb, also check for expired windows and exits
-                    if isinstance(self.strategy, LagArbStrategy):
-                        self._check_position_exits()
-            else:
-                # Polling mode: periodic scans
-                logger.info("MODE", "Running in polling mode")
-                while self.running:
-                    self.run_polling_cycle()
-                    logger.info("WAIT", f"Next scan in {self.config.polling.interval}s")
-                    time.sleep(self.config.polling.interval)
+                # For lag arb, also check for expired windows and exits
+                if isinstance(self.strategy, LagArbStrategy):
+                    self._check_position_exits()
 
         finally:
             self.shutdown()

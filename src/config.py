@@ -33,11 +33,11 @@ class PollingConfig:
     interval: float = 5.0
     batch_size: int = 50
     max_markets: int = 0
+    market_refresh_interval: float = 300.0  # Refresh markets every 5 minutes
 
 
 @dataclass
 class WebSocketConfig:
-    enabled: bool = False
     ping_interval: float = 30.0
     reconnect_delay: float = 5.0
 
@@ -79,6 +79,9 @@ class FilterConfig:
     min_book_depth: float = 500.0
     max_spread_pct: float = 0.05
     market_types: list = field(default_factory=lambda: ["btc-updown", "eth-updown"])
+    max_market_age_hours: float = 1.0       # Prefer markets created within 1 hour
+    fallback_age_hours: float = 24.0        # Fallback to 24h if no recent markets
+    min_volume_24h: float = 100.0           # Minimum volume to ensure activity
 
 
 @dataclass
@@ -130,8 +133,6 @@ def parse_args() -> argparse.Namespace:
                         help="Max markets to scan (0 = all)")
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Order books to fetch per API call")
-    parser.add_argument("--websocket", action="store_true",
-                        help="Enable WebSocket mode (real-time)")
     parser.add_argument("--strategy", choices=["conservative", "lag_arb"], default=None,
                         help="Trading strategy to use")
     parser.add_argument("-v", "--verbose", action="store_true",
@@ -174,12 +175,12 @@ def build_config(args: Optional[argparse.Namespace] = None) -> BotConfig:
             interval=p.get("interval", config.polling.interval),
             batch_size=p.get("batch_size", config.polling.batch_size),
             max_markets=p.get("max_markets", config.polling.max_markets),
+            market_refresh_interval=p.get("market_refresh_interval", config.polling.market_refresh_interval),
         )
 
     if "websocket" in yaml_config:
         w = yaml_config["websocket"]
         config.websocket = WebSocketConfig(
-            enabled=w.get("enabled", config.websocket.enabled),
             ping_interval=w.get("ping_interval", config.websocket.ping_interval),
             reconnect_delay=w.get("reconnect_delay", config.websocket.reconnect_delay),
         )
@@ -224,6 +225,9 @@ def build_config(args: Optional[argparse.Namespace] = None) -> BotConfig:
             min_book_depth=f.get("min_book_depth", config.filters.min_book_depth),
             max_spread_pct=f.get("max_spread_pct", config.filters.max_spread_pct),
             market_types=f.get("market_types", config.filters.market_types),
+            max_market_age_hours=f.get("max_market_age_hours", config.filters.max_market_age_hours),
+            fallback_age_hours=f.get("fallback_age_hours", config.filters.fallback_age_hours),
+            min_volume_24h=f.get("min_volume_24h", config.filters.min_volume_24h),
         )
 
     # Apply environment variables (override YAML)
@@ -253,8 +257,6 @@ def build_config(args: Optional[argparse.Namespace] = None) -> BotConfig:
         config.polling.max_markets = args.max_markets
     if args.batch_size is not None:
         config.polling.batch_size = args.batch_size
-    if args.websocket:
-        config.websocket.enabled = True
     if args.strategy is not None:
         config.strategy = args.strategy
         if args.strategy == "lag_arb":
