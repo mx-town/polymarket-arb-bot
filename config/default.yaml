@@ -1,0 +1,53 @@
+# Polymarket Arbitrage Bot Configuration
+
+trading:
+  dry_run: true
+  min_spread: 0.02          # Minimum gross profit to consider
+  min_net_profit: 0.005     # Minimum net profit after fees
+  max_position_size: 100.0  # Max USDC per trade
+  fee_rate: 0.02            # ~2% round-trip fees
+
+polling:
+  interval: 5.0             # Seconds between market scans
+  batch_size: 50            # Order books per API call
+  max_markets: 0            # 0 = all markets
+
+websocket:
+  enabled: false
+  ping_interval: 30.0
+  reconnect_delay: 5.0
+
+# Phase 1: Conservative arbitrage thresholds
+conservative:
+  max_combined_price: 0.99       # Only enter if Up_ask + Down_ask < this
+  min_time_to_resolution_sec: 300
+  exit_on_pump_threshold: 0.10   # Exit if one side moves +10%
+
+# Phase 2: Lag arbitrage (candle-based)
+# Uses Binance 1H candle open as reference price
+# If spot >= open → "Up" wins, else "Down" wins
+lag_arb:
+  enabled: false
+  candle_interval: 1h             # Use 1H candles (0% fees)
+  spot_momentum_window_sec: 10    # Rolling window for momentum confirmation
+  spot_move_threshold_pct: 0.002  # 0.2% from candle open = clear direction
+  max_combined_price: 0.995       # Entry threshold
+  expected_lag_ms: 2000           # Polymarket typically lags 2 seconds
+  max_lag_window_ms: 5000         # Give up after 5 seconds
+  fee_rate: 0.0                   # 1H markets have 0% fees
+
+# Risk management
+risk:
+  max_consecutive_losses: 3
+  max_daily_loss_usd: 100.0
+  cooldown_after_loss_sec: 300
+  max_total_exposure: 1000.0
+
+# Market filters
+filters:
+  min_liquidity_usd: 1000.0
+  min_book_depth: 500.0
+  max_spread_pct: 0.05
+  market_types:
+    - btc-updown
+    - eth-updown

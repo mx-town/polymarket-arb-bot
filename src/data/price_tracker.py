@@ -1,0 +1,413 @@
+"""
+Price tracker for lag arbitrage signal detection.
+
+KEY INSIGHT: Polymarket 1H markets resolve based on Binance 1H candle.
+- Reference price = candle OPEN (not close)
+- If close >= open → "Up" wins
+- If close < open → "Down" wins
+
+We compare current spot vs candle open to predict the winner,
+then check if Polymarket hasn't caught up (combined_ask < $1.00).
+"""
+
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Dict, Callable
+from enum import Enum
+
+import requests
+
+from src.data.binance_ws import AggTrade
+from src.config import LagArbConfig
+from src.utils.logging import get_logger
+
+logger = get_logger("price_tracker")
+
+BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+
+
+class Direction(Enum):
+    UP = "up"
+    DOWN = "down"
+    NEUTRAL = "neutral"
+
+
+@dataclass
+class CandleState:
+    """State of current Binance candle"""
+
+    symbol: str
+    interval: str  # "1h" or "15m"
+    open_time: int  # Unix ms
+    close_time: int  # Unix ms
+    open_price: float  # THE reference price
+    current_price: float  # Latest spot price
+    high: float
+    low: float
+    fetched_at: datetime
+
+    @property
+    def move_from_open(self) -> float:
+        """Percentage move from candle open"""
+        if self.open_price == 0:
+            return 0.0
+        return (self.current_price - self.open_price) / self.open_price
+
+    @property
+    def time_remaining_sec(self) -> float:
+        """Seconds until candle closes"""
+        now_ms = datetime.now().timestamp() * 1000
+        return max(0, (self.close_time - now_ms) / 1000)
+
+    @property
+    def is_stale(self) -> bool:
+        """Check if candle data needs refresh"""
+        # Refresh if past close time
+        now_ms = datetime.now().timestamp() * 1000
+        return now_ms > self.close_time
+
+
+@dataclass
+class DirectionSignal:
+    """
+    Signal indicating predicted market direction.
+    
+    Based on spot price vs candle open (primary)
+    with momentum confirmation (secondary).
+    """
+
+    symbol: str
+    direction: Direction
+    move_from_open: float  # % move from candle open
+    momentum: float  # Short-term momentum (confirmation)
+    confidence: float  # 0.0 to 1.0
+    current_price: float
+    candle_open: float
+    timestamp: datetime
+
+    @property
+    def is_significant(self) -> bool:
+        """Check if signal is actionable"""
+        return (
+            self.direction != Direction.NEUTRAL
+            and abs(self.move_from_open) >= 0.002  # 0.2% from open
+            and self.confidence >= 0.5
+        )
+
+    @property
+    def expected_winner(self) -> Optional[str]:
+        """Which outcome should win at resolution?"""
+        if self.direction == Direction.UP:
+            return "UP"
+        elif self.direction == Direction.DOWN:
+            return "DOWN"
+        return None
+
+
+@dataclass
+class PricePoint:
+    """A single price observation"""
+
+    price: float
+    timestamp: datetime
+    direction: str  # "buy" or "sell"
+    quantity: float
+
+
+def fetch_candle_open(symbol: str, interval: str = "1h") -> Optional[CandleState]:
+    """
+    Fetch current candle from Binance Klines API.
+    
+    GET https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1
+    
+    Response: [[open_time, open, high, low, close, volume, close_time, ...]]
+    """
+    try:
+        resp = requests.get(
+            BINANCE_KLINES_URL,
+            params={"symbol": symbol, "interval": interval, "limit": 1},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        kline = resp.json()[0]
+
+        return CandleState(
+            symbol=symbol,
+            interval=interval,
+            open_time=int(kline[0]),
+            close_time=int(kline[6]),
+            open_price=float(kline[1]),  # THE reference price
+            current_price=float(kline[4]),  # Current close (within candle)
+            high=float(kline[2]),
+            low=float(kline[3]),
+            fetched_at=datetime.now(),
+        )
+    except Exception as e:
+        logger.error("KLINES_ERROR", f"symbol={symbol} error={e}")
+        return None
+
+
+class SymbolTracker:
+    """Tracks price and candle state for a single symbol"""
+
+    def __init__(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        momentum_window_sec: float = 10.0,
+        move_threshold: float = 0.002,  # 0.2% from candle open
+        momentum_threshold: float = 0.001,  # 0.1% momentum for confirmation
+    ):
+        self.symbol = symbol
+        self.interval = interval
+        self.momentum_window_sec = momentum_window_sec
+        self.move_threshold = move_threshold
+        self.momentum_threshold = momentum_threshold
+
+        # Candle state (fetched from Klines API)
+        self.candle: Optional[CandleState] = None
+
+        # Rolling window of price points (for momentum)
+        self.prices: deque[PricePoint] = deque()
+
+        # Current spot price (from WebSocket)
+        self.current_price: float = 0.0
+        self.last_signal: Optional[DirectionSignal] = None
+
+    def refresh_candle(self) -> bool:
+        """Fetch fresh candle data from Binance"""
+        candle = fetch_candle_open(self.symbol, self.interval)
+        if candle:
+            self.candle = candle
+            logger.info(
+                "CANDLE_REFRESH",
+                f"symbol={self.symbol} open={candle.open_price:.2f} "
+                f"remaining={candle.time_remaining_sec:.0f}s",
+            )
+            return True
+        return False
+
+    def add_trade(self, trade: AggTrade):
+        """Add a trade from WebSocket"""
+        now = datetime.now()
+
+        point = PricePoint(
+            price=trade.price,
+            timestamp=now,
+            direction=trade.direction,
+            quantity=trade.quantity,
+        )
+
+        self.prices.append(point)
+        self.current_price = trade.price
+
+        # Update candle's current price
+        if self.candle:
+            self.candle.current_price = trade.price
+
+        # Prune old data
+        self._prune_old_data(now)
+
+    def _prune_old_data(self, now: datetime):
+        """Remove data older than momentum window"""
+        cutoff = now.timestamp() - self.momentum_window_sec
+
+        while self.prices and self.prices[0].timestamp.timestamp() < cutoff:
+            self.prices.popleft()
+
+    def get_momentum(self) -> float:
+        """Calculate short-term momentum (10-sec window)"""
+        if len(self.prices) < 2:
+            return 0.0
+
+        oldest = self.prices[0].price
+        newest = self.prices[-1].price
+
+        if oldest == 0:
+            return 0.0
+
+        return (newest - oldest) / oldest
+
+    def is_momentum_confirming(self, direction: Direction) -> bool:
+        """Check if momentum confirms the expected direction"""
+        momentum = self.get_momentum()
+
+        if direction == Direction.UP:
+            # Not dumping hard
+            return momentum > -self.momentum_threshold
+        elif direction == Direction.DOWN:
+            # Not pumping hard
+            return momentum < self.momentum_threshold
+
+        return False
+
+    def get_signal(self) -> DirectionSignal:
+        """
+        Calculate direction signal based on spot vs candle open.
+        
+        Primary: spot vs candle_open → predicts winner
+        Secondary: momentum → confirms not reversing
+        """
+        if not self.candle or self.current_price == 0:
+            return DirectionSignal(
+                symbol=self.symbol,
+                direction=Direction.NEUTRAL,
+                move_from_open=0.0,
+                momentum=0.0,
+                confidence=0.0,
+                current_price=self.current_price,
+                candle_open=0.0,
+                timestamp=datetime.now(),
+            )
+
+        # Check if candle is stale (needs refresh)
+        if self.candle.is_stale:
+            self.refresh_candle()
+
+        move = self.candle.move_from_open
+        momentum = self.get_momentum()
+
+        # Determine direction from candle comparison
+        if move >= self.move_threshold:
+            direction = Direction.UP
+        elif move <= -self.move_threshold:
+            direction = Direction.DOWN
+        else:
+            direction = Direction.NEUTRAL
+
+        # Calculate confidence
+        # Higher if momentum confirms direction
+        if direction != Direction.NEUTRAL:
+            momentum_confirms = self.is_momentum_confirming(direction)
+            confidence = 0.8 if momentum_confirms else 0.5
+        else:
+            confidence = 0.0
+
+        signal = DirectionSignal(
+            symbol=self.symbol,
+            direction=direction,
+            move_from_open=move,
+            momentum=momentum,
+            confidence=confidence,
+            current_price=self.current_price,
+            candle_open=self.candle.open_price,
+            timestamp=datetime.now(),
+        )
+
+        self.last_signal = signal
+        return signal
+
+
+class PriceTracker:
+    """
+    Tracks prices across multiple symbols for lag arbitrage.
+    
+    For 1H markets:
+    - Fetches candle OPEN from Binance Klines API
+    - Compares spot vs candle open to predict winner
+    - Detects when Polymarket hasn't caught up (lag window)
+    """
+
+    def __init__(
+        self,
+        config: LagArbConfig,
+        on_signal: Optional[Callable[[DirectionSignal], None]] = None,
+    ):
+        self.config = config
+        self.on_signal = on_signal
+
+        self.trackers: Dict[str, SymbolTracker] = {}
+
+        # Map Polymarket assets to Binance symbols
+        self.asset_to_symbol = {
+            "btc": "BTCUSDT",
+            "eth": "ETHUSDT",
+        }
+
+    def initialize(self):
+        """Initialize trackers and fetch initial candle data"""
+        for asset, symbol in self.asset_to_symbol.items():
+            tracker = self._get_or_create_tracker(symbol)
+            tracker.refresh_candle()
+
+    def _get_or_create_tracker(self, symbol: str) -> SymbolTracker:
+        """Get or create tracker for symbol"""
+        if symbol not in self.trackers:
+            self.trackers[symbol] = SymbolTracker(
+                symbol=symbol,
+                interval="1h",  # Use 1H candles (0% fees)
+                momentum_window_sec=self.config.spot_momentum_window_sec,
+                move_threshold=self.config.spot_move_threshold_pct,
+                momentum_threshold=0.001,  # 0.1% for confirmation
+            )
+        return self.trackers[symbol]
+
+    def refresh_candles(self):
+        """Refresh all candle data (call at top of each hour)"""
+        for tracker in self.trackers.values():
+            tracker.refresh_candle()
+
+    def on_trade(self, trade: AggTrade):
+        """
+        Handle incoming trade from Binance WebSocket.
+        
+        Updates tracker and emits signal if direction is clear.
+        """
+        tracker = self._get_or_create_tracker(trade.symbol)
+        tracker.add_trade(trade)
+
+        # Get current signal
+        signal = tracker.get_signal()
+
+        if signal.is_significant:
+            logger.info(
+                "DIRECTION_SIGNAL",
+                f"symbol={signal.symbol} dir={signal.direction.value} "
+                f"move={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
+                f"spot={signal.current_price:.2f} open={signal.candle_open:.2f}",
+            )
+
+            if self.on_signal:
+                self.on_signal(signal)
+
+    def get_signal(self, symbol: str) -> Optional[DirectionSignal]:
+        """Get current direction signal for a symbol"""
+        tracker = self.trackers.get(symbol.upper())
+        if tracker:
+            return tracker.get_signal()
+        return None
+
+    def get_price(self, symbol: str) -> Optional[float]:
+        """Get current price for a symbol"""
+        tracker = self.trackers.get(symbol.upper())
+        if tracker:
+            return tracker.current_price
+        return None
+
+    def get_candle_open(self, symbol: str) -> Optional[float]:
+        """Get candle open price for a symbol"""
+        tracker = self.trackers.get(symbol.upper())
+        if tracker and tracker.candle:
+            return tracker.candle.open_price
+        return None
+
+    def get_asset_signal(self, asset: str) -> Optional[DirectionSignal]:
+        """
+        Get direction signal for a Polymarket asset.
+        
+        Args:
+            asset: "btc" or "eth"
+            
+        Returns:
+            DirectionSignal if tracking, else None
+        """
+        symbol = self.asset_to_symbol.get(asset.lower())
+        if symbol:
+            return self.get_signal(symbol)
+        return None
+
+
+# Backwards compatibility alias
+MomentumSignal = DirectionSignal
+MomentumDirection = Direction
