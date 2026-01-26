@@ -113,6 +113,12 @@ class PolymarketWebSocket:
         """Handle incoming message"""
         try:
             data = json.loads(message)
+
+            # Handle non-dict messages (heartbeats send "0")
+            if not isinstance(data, dict):
+                logger.debug("HEARTBEAT_RECEIVED", f"value={data}")
+                return
+
             event_type = data.get("event_type")
 
             if event_type == "book":
