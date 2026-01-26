@@ -99,13 +99,17 @@ class ArbBot:
         )
 
         # Discover recent markets
-        logger.info("DISCOVER", f"Filtering for: {self.config.filters.market_types}")
+        logger.info(
+            "DISCOVER",
+            f"interval={self.config.lag_arb.candle_interval} assets={self.config.filters.market_types}",
+        )
         self.state_manager = fetch_recent_updown_markets(
             max_age_hours=self.config.filters.max_market_age_hours,
             fallback_age_hours=self.config.filters.fallback_age_hours,
             min_volume_24h=self.config.filters.min_volume_24h,
             market_types=self.config.filters.market_types,
             max_markets=self.config.polling.max_markets,
+            candle_interval=self.config.lag_arb.candle_interval,
         )
 
         logger.info("MARKETS_LOADED", f"count={len(self.state_manager.markets)}")
@@ -243,6 +247,7 @@ class ArbBot:
             min_volume_24h=self.config.filters.min_volume_24h,
             market_types=self.config.filters.market_types,
             max_markets=self.config.polling.max_markets,
+            candle_interval=self.config.lag_arb.candle_interval,
         )
 
         # Force refresh: clear everything and resubscribe

@@ -42,6 +42,8 @@ filters:
   max_market_age_hours: 1
   fallback_age_hours: 24
   min_volume_24h: 100
+  # Assets to track (bitcoin, ethereum, solana, xrp)
+  # The candle interval (1h, 15m, 5m) is set in lag_arb.candle_interval
   market_types:
-  - btc-updown-1h
-  - eth-updown-1h
+  - bitcoin
+  - ethereum
