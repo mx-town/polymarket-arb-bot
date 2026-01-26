@@ -25,6 +25,7 @@ testpaths = ["tests"]
 python_files = ["test_unit_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+pythonpath = ["."]
 
 [project.scripts]
 arb-bot = "src.main:main"
