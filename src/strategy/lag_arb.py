@@ -131,12 +131,12 @@ class LagArbStrategy(SignalDetector):
 
         self.lag_windows[signal.symbol] = window
 
-        logger.debug(
+        logger.info(
             "LAG_WINDOW_OPEN",
-            f"symbol={signal.symbol} expected_winner={expected_winner} "
-            f"move_from_open={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
-            f"spot={signal.current_price:.2f} candle_open={signal.candle_open:.2f} "
-            f"window_ms={self.config.max_lag_window_ms}",
+            f"symbol={signal.symbol} winner={expected_winner} "
+            f"momentum={signal.momentum*100:.3f}% "
+            f"spot={signal.current_price:.2f} open={signal.candle_open:.2f} "
+            f"window={self.config.max_lag_window_ms}ms",
         )
 
     # Backwards compatibility
@@ -160,6 +160,11 @@ class LagArbStrategy(SignalDetector):
 
         # Clean up expired window
         if window:
+            logger.info(
+                "LAG_WINDOW_EXPIRED",
+                f"symbol={symbol} winner={window.expected_winner} "
+                f"entry_made={window.entry_made}",
+            )
             del self.lag_windows[symbol]
         return None
 
@@ -193,6 +198,12 @@ class LagArbStrategy(SignalDetector):
 
         # Lag arb uses aggressive threshold (up to $1.00 for 0% fee 1H markets)
         if combined >= self.config.max_combined_price:
+            logger.info(
+                "LAG_ENTRY_SKIP",
+                f"market={market.slug} combined={combined:.4f} "
+                f"max={self.config.max_combined_price:.4f} "
+                f"winner={window.expected_winner} window_remaining={window.remaining_ms:.0f}ms",
+            )
             return None
 
         # Calculate profits
