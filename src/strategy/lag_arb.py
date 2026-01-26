@@ -1,26 +1,35 @@
 """
 Lag arbitrage strategy (Phase 2).
 
-Exploits the lag between Binance spot price moves and Polymarket
-order book repricing. When spot moves sharply, Polymarket prices
-lag by 1-5 seconds, creating brief arbitrage windows.
+KEY INSIGHT: Polymarket 1H markets resolve based on Binance 1H candle.
+- Reference price = candle OPEN (not close)
+- If close >= open → "Up" wins at resolution
+- If close < open → "Down" wins at resolution
 
 Strategy:
-1. Monitor Binance spot prices (BTC/ETH)
-2. Detect significant momentum (>0.1% in 10 seconds)
-3. When spot moves UP: Polymarket DOWN prices are stale (buy before reprice)
-4. When spot moves DOWN: Polymarket UP prices are stale (buy before reprice)
-5. Enter when combined_ask < $1.00 during predicted lag window
-6. Exit quickly on price normalization (don't wait for resolution)
+1. Fetch candle OPEN from Binance Klines API
+2. Compare current spot vs candle open
+3. If spot > open + threshold → "Up" is expected winner
+4. If spot < open - threshold → "Down" is expected winner
+5. If Polymarket hasn't repriced (combined_ask < $1.00), that's the arbitrage
+6. Buy BOTH sides during the lag window
+7. Exit on price normalization or hold to resolution
+
+Why this works:
+- Polymarket lags Binance by 1-5 seconds
+- When spot crosses above candle open, "Up" becomes likely winner
+- Market makers are slow to reprice
+- We buy BOTH sides during the lag for < $1.00
+- Even if wrong about direction, we profit if combined < $1.00
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict
 from dataclasses import dataclass
 
 from src.config import LagArbConfig, TradingConfig
 from src.market.state import MarketState
-from src.data.price_tracker import MomentumSignal, MomentumDirection
+from src.data.price_tracker import DirectionSignal, Direction
 from src.strategy.signals import (
     ArbOpportunity,
     ExitReason,
@@ -35,12 +44,18 @@ logger = get_logger("lag_arb")
 
 @dataclass
 class LagWindow:
-    """Tracks an active lag arbitrage window"""
+    """
+    Tracks an active lag arbitrage window.
+    
+    Created when spot price crosses above/below candle open,
+    indicating which side SHOULD win at resolution.
+    """
 
     symbol: str
-    direction: MomentumDirection
+    expected_winner: str  # "UP" or "DOWN"
+    direction: Direction
     start_time: datetime
-    signal: MomentumSignal
+    signal: DirectionSignal
     expected_duration_ms: int
     entry_made: bool = False
 
@@ -59,12 +74,15 @@ class LagWindow:
 
 class LagArbStrategy(SignalDetector):
     """
-    Lag arbitrage strategy using Binance momentum signals.
-
+    Lag arbitrage strategy using Binance candle comparison.
+    
+    Primary signal: spot vs candle_open → predicts resolution winner
+    Secondary signal: momentum → confirms not reversing
+    
     More aggressive than conservative strategy:
     - Enters during predicted lag windows
-    - Accepts lower profit margins
-    - Exits on price normalization (not just resolution)
+    - Accepts entries up to combined_ask = $1.00 (0% fees on 1H)
+    - Exits on price normalization (don't wait for resolution)
     """
 
     def __init__(
@@ -84,18 +102,23 @@ class LagArbStrategy(SignalDetector):
             "eth": "ETHUSDT",
         }
 
-    def on_momentum_signal(self, signal: MomentumSignal):
+    def on_direction_signal(self, signal: DirectionSignal):
         """
-        Handle momentum signal from price tracker.
-
-        Opens a lag window if signal is significant.
+        Handle direction signal from price tracker.
+        
+        Opens a lag window when spot crosses significantly above/below candle open.
         """
         if not signal.is_significant:
+            return
+
+        expected_winner = signal.expected_winner
+        if not expected_winner:
             return
 
         # Create or update lag window
         window = LagWindow(
             symbol=signal.symbol,
+            expected_winner=expected_winner,
             direction=signal.direction,
             start_time=datetime.now(),
             signal=signal,
@@ -106,9 +129,16 @@ class LagArbStrategy(SignalDetector):
 
         logger.info(
             "LAG_WINDOW_OPEN",
-            f"symbol={signal.symbol} dir={signal.direction.value} "
+            f"symbol={signal.symbol} expected_winner={expected_winner} "
+            f"move_from_open={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
+            f"spot={signal.current_price:.2f} candle_open={signal.candle_open:.2f} "
             f"window_ms={self.config.max_lag_window_ms}",
         )
+
+    # Backwards compatibility
+    def on_momentum_signal(self, signal: DirectionSignal):
+        """Alias for on_direction_signal (backwards compatibility)"""
+        self.on_direction_signal(signal)
 
     def _get_symbol_for_market(self, market: MarketState) -> Optional[str]:
         """Get Binance symbol for a market"""
@@ -132,11 +162,15 @@ class LagArbStrategy(SignalDetector):
     def check_entry(self, market: MarketState) -> Optional[Signal]:
         """
         Check if market has lag arbitrage entry opportunity.
-
+        
         Entry conditions:
-        1. Active lag window for this market's asset
-        2. combined_ask < max_combined_price (up to $1.00)
-        3. Profit margin exists (even if small during lag)
+        1. Active lag window (spot crossed above/below candle open)
+        2. combined_ask < max_combined_price (up to $1.00 for 0% fee markets)
+        3. Fresh book data (not stale)
+        4. Enough time to resolution
+        
+        We're buying BOTH sides, so direction doesn't affect sizing.
+        We profit as long as combined < $1.00 at resolution.
         """
         if not market.is_valid:
             return None
@@ -153,32 +187,31 @@ class LagArbStrategy(SignalDetector):
 
         combined = market.combined_ask
 
-        # Lag arb uses more aggressive threshold
+        # Lag arb uses aggressive threshold (up to $1.00 for 0% fee 1H markets)
         if combined >= self.config.max_combined_price:
             return None
 
-        # Calculate profits (accept lower margins during lag)
+        # Calculate profits
+        # For 1H markets: 0% fees
+        # For 15m markets: ~3% fees at 50/50, but we're not targeting those now
         gross_profit = 1.0 - combined
-        estimated_fees = combined * self.trading.fee_rate
+        estimated_fees = combined * self.trading.fee_rate  # 0 for 1H markets
         net_profit = gross_profit - estimated_fees
 
-        # During lag window, accept any positive net profit
+        # Accept any positive net profit during lag window
         if net_profit <= 0:
             return None
 
-        # Create opportunity with lag context
+        # Create opportunity
         opp = ArbOpportunity.from_market(market, self.trading.fee_rate)
         opp.confidence = window.signal.confidence
-
-        # Determine which side is stale based on momentum direction
-        # If spot moved UP, DOWN side is stale (buy it before it reprices up)
-        # If spot moved DOWN, UP side is stale (buy it before it reprices down)
-        stale_side = "DOWN" if window.direction == MomentumDirection.UP else "UP"
 
         logger.info(
             "LAG_ENTRY_SIGNAL",
             f"market={market.slug} combined={combined:.4f} "
-            f"net={net_profit:.4f} stale_side={stale_side} "
+            f"gross={gross_profit:.4f} net={net_profit:.4f} "
+            f"expected_winner={window.expected_winner} "
+            f"move_from_open={window.signal.move_from_open:.4f} "
             f"window_remaining_ms={window.remaining_ms:.0f}",
         )
 
@@ -199,11 +232,11 @@ class LagArbStrategy(SignalDetector):
     ) -> Optional[Signal]:
         """
         Check if position should exit.
-
+        
         Lag arb exits more aggressively:
-        1. Exit on price normalization (spread < threshold)
-        2. Exit if combined bid > entry (any profit)
-        3. Exit if holding too long (lag window concept)
+        1. Exit if combined_bid > entry_cost (any profit available)
+        2. Exit on price normalization (spread < threshold)
+        3. Otherwise hold to resolution (guaranteed profit if entry < $1.00)
         """
         if not market.is_valid:
             return None
@@ -213,12 +246,13 @@ class LagArbStrategy(SignalDetector):
 
         # Exit on any profit (more aggressive than conservative)
         if current_value > entry_cost:
-            profit_pct = (current_value - entry_cost) / entry_cost
+            profit = current_value - entry_cost
+            profit_pct = profit / entry_cost
 
             logger.info(
                 "LAG_EXIT_PROFIT",
                 f"market={market.slug} entry={entry_cost:.4f} "
-                f"current={current_value:.4f} profit={profit_pct:.4f}",
+                f"current={current_value:.4f} profit={profit:.4f} ({profit_pct:.2%})",
             )
 
             return Signal(
@@ -227,10 +261,9 @@ class LagArbStrategy(SignalDetector):
                 exit_reason=ExitReason.EARLY_EXIT,
             )
 
-        # Exit on price normalization
-        # If combined_bid is close to combined_ask, prices have normalized
+        # Exit on price normalization (spread tightened)
         spread = market.combined_ask - market.combined_bid
-        if spread < 0.005:  # Normalized when spread < 0.5%
+        if spread < 0.005:  # < 0.5% spread = normalized
             logger.info(
                 "LAG_EXIT_NORMALIZED",
                 f"market={market.slug} spread={spread:.4f}",
@@ -242,6 +275,7 @@ class LagArbStrategy(SignalDetector):
                 exit_reason=ExitReason.EARLY_EXIT,
             )
 
+        # Otherwise hold to resolution
         return None
 
     def get_active_windows(self) -> list[LagWindow]:

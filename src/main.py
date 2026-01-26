@@ -27,7 +27,7 @@ from src.execution.position import PositionManager
 from src.execution.risk import RiskManager
 from src.data.polymarket_ws import PolymarketWebSocket
 from src.data.binance_ws import BinanceWebSocket
-from src.data.price_tracker import PriceTracker, MomentumSignal
+from src.data.price_tracker import PriceTracker, DirectionSignal
 
 logger = get_logger("main")
 
@@ -68,9 +68,14 @@ class ArbBot:
         print(f"  Min net profit:  ${cfg.trading.min_net_profit} ({cfg.trading.min_net_profit*100:.2f}%)")
         print(f"  Max position:    ${cfg.trading.max_position_size}")
         print(f"  WebSocket:       {'enabled' if cfg.websocket.enabled else 'disabled'}")
-        print(f"  Binance feed:    {'enabled' if cfg.lag_arb.enabled else 'disabled'}")
-        print(f"  Poll interval:   {cfg.polling.interval}s")
-        print(f"  Est. fee rate:   {cfg.trading.fee_rate*100:.1f}%")
+        if cfg.strategy == "lag_arb":
+            print(f"  Binance feed:    enabled (candle-based)")
+            print(f"  Candle interval: {cfg.lag_arb.candle_interval}")
+            print(f"  Move threshold:  {cfg.lag_arb.spot_move_threshold_pct*100:.2f}% from open")
+            print(f"  Fee rate:        {cfg.lag_arb.fee_rate*100:.1f}% (1H markets)")
+        else:
+            print(f"  Poll interval:   {cfg.polling.interval}s")
+            print(f"  Est. fee rate:   {cfg.trading.fee_rate*100:.1f}%")
         print("=" * 60)
 
     def initialize(self):
@@ -139,10 +144,14 @@ class ArbBot:
         # Create price tracker
         self.price_tracker = PriceTracker(
             self.config.lag_arb,
-            on_signal=self._on_momentum_signal,
+            on_signal=self._on_direction_signal,
         )
 
-        # Connect to Binance
+        # Fetch initial candle data from Binance Klines API
+        logger.info("CANDLES", "Fetching candle open prices from Binance...")
+        self.price_tracker.initialize()
+
+        # Connect to Binance WebSocket for real-time trades
         self.binance_ws = BinanceWebSocket(
             symbols=["BTCUSDT", "ETHUSDT"],
             on_trade=self.price_tracker.on_trade,
@@ -161,7 +170,7 @@ class ArbBot:
         else:
             logger.warning("BINANCE_TIMEOUT", "Binance WebSocket connection timeout")
 
-        logger.info("STRATEGY", "Lag arbitrage strategy initialized")
+        logger.info("STRATEGY", "Lag arbitrage strategy initialized (candle-based)")
 
     def _init_polymarket_ws(self):
         """Initialize Polymarket WebSocket"""
@@ -183,16 +192,21 @@ class ArbBot:
         else:
             logger.warning("POLYMARKET_WS_TIMEOUT", "Polymarket WebSocket connection timeout")
 
-    def _on_momentum_signal(self, signal: MomentumSignal):
-        """Handle momentum signal from Binance price tracker"""
+    def _on_direction_signal(self, signal: DirectionSignal):
+        """
+        Handle direction signal from Binance price tracker.
+
+        Triggered when spot price crosses significantly above/below candle open,
+        indicating which side should win at resolution.
+        """
         if not self.running:
             return
 
         if not isinstance(self.strategy, LagArbStrategy):
             return
 
-        # Forward signal to lag arb strategy
-        self.strategy.on_momentum_signal(signal)
+        # Forward signal to lag arb strategy (opens lag window)
+        self.strategy.on_direction_signal(signal)
 
         # Check all markets for lag arb opportunities
         if signal.is_significant:

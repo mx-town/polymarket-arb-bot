@@ -23,14 +23,18 @@ conservative:
   min_time_to_resolution_sec: 300
   exit_on_pump_threshold: 0.10   # Exit if one side moves +10%
 
-# Phase 2: Lag arbitrage thresholds
+# Phase 2: Lag arbitrage (candle-based)
+# Uses Binance 1H candle open as reference price
+# If spot >= open → "Up" wins, else "Down" wins
 lag_arb:
   enabled: false
-  spot_momentum_window_sec: 10
-  spot_move_threshold_pct: 0.001  # 0.1%
-  max_combined_price: 1.00        # More aggressive during lag
-  expected_lag_ms: 2000
-  max_lag_window_ms: 5000
+  candle_interval: 1h             # Use 1H candles (0% fees)
+  spot_momentum_window_sec: 10    # Rolling window for momentum confirmation
+  spot_move_threshold_pct: 0.002  # 0.2% from candle open = clear direction
+  max_combined_price: 0.995       # Entry threshold
+  expected_lag_ms: 2000           # Polymarket typically lags 2 seconds
+  max_lag_window_ms: 5000         # Give up after 5 seconds
+  fee_rate: 0.0                   # 1H markets have 0% fees
 
 # Risk management
 risk:

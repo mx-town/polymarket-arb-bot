@@ -52,11 +52,13 @@ class ConservativeConfig:
 @dataclass
 class LagArbConfig:
     enabled: bool = False
-    spot_momentum_window_sec: float = 10.0
-    spot_move_threshold_pct: float = 0.001
-    max_combined_price: float = 1.00
-    expected_lag_ms: int = 2000
-    max_lag_window_ms: int = 5000
+    spot_momentum_window_sec: float = 10.0  # Rolling window for momentum confirmation
+    spot_move_threshold_pct: float = 0.002  # 0.2% from candle open = clear direction
+    max_combined_price: float = 0.995  # Entry threshold (0% fees on 1H markets)
+    expected_lag_ms: int = 2000  # Polymarket typically lags 2 seconds
+    max_lag_window_ms: int = 5000  # Give up after 5 seconds
+    candle_interval: str = "1h"  # Use 1H candles (0% fees)
+    fee_rate: float = 0.0  # 1H markets have 0% fees
 
 
 @dataclass
