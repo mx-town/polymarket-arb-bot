@@ -59,6 +59,10 @@ class LagArbConfig:
     max_lag_window_ms: int = 5000  # Give up after 5 seconds
     candle_interval: str = "1h"  # Use 1H candles (0% fees)
     fee_rate: float = 0.0  # 1H markets have 0% fees
+    # Momentum-based trigger parameters
+    momentum_trigger_threshold_pct: float = 0.001  # 0.1% momentum = trigger signal
+    pump_exit_threshold_pct: float = 0.03  # 3% single-side pump = exit
+    max_hold_time_sec: int = 300  # 5 min max hold before force exit
 
 
 @dataclass
@@ -197,6 +201,11 @@ def build_config(args: Optional[argparse.Namespace] = None) -> BotConfig:
             max_combined_price=la.get("max_combined_price", config.lag_arb.max_combined_price),
             expected_lag_ms=la.get("expected_lag_ms", config.lag_arb.expected_lag_ms),
             max_lag_window_ms=la.get("max_lag_window_ms", config.lag_arb.max_lag_window_ms),
+            candle_interval=la.get("candle_interval", config.lag_arb.candle_interval),
+            fee_rate=la.get("fee_rate", config.lag_arb.fee_rate),
+            momentum_trigger_threshold_pct=la.get("momentum_trigger_threshold_pct", config.lag_arb.momentum_trigger_threshold_pct),
+            pump_exit_threshold_pct=la.get("pump_exit_threshold_pct", config.lag_arb.pump_exit_threshold_pct),
+            max_hold_time_sec=la.get("max_hold_time_sec", config.lag_arb.max_hold_time_sec),
         )
 
     if "risk" in yaml_config:

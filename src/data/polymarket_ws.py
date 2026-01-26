@@ -109,9 +109,18 @@ class PolymarketWebSocket:
                 logger.error("PING_ERROR", str(e))
                 break
 
-    def _on_message(self, ws, message: str):
+    def _on_message(self, ws, message):
         """Handle incoming message"""
         try:
+            # Handle binary messages
+            if isinstance(message, bytes):
+                logger.debug("BINARY_MSG_RECEIVED", f"len={len(message)}")
+                return
+
+            # Handle empty messages (pong responses can be empty)
+            if not message or not message.strip():
+                return
+
             data = json.loads(message)
 
             # Handle non-dict messages (heartbeats send "0")
@@ -132,6 +141,9 @@ class PolymarketWebSocket:
 
         except json.JSONDecodeError as e:
             logger.error("PARSE_ERROR", f"error={e}")
+        except Exception as e:
+            # Log full message structure for debugging
+            logger.error("MESSAGE_HANDLER_ERROR", f"type={type(e).__name__} error={e} keys={list(data.keys()) if isinstance(data, dict) else 'N/A'} msg_preview={str(message)[:200]}")
 
     def _handle_book(self, data: dict):
         """
@@ -152,6 +164,19 @@ class PolymarketWebSocket:
 
         bids = data.get("bids", [])
         asks = data.get("asks", [])
+
+        # Ensure bids/asks are lists before accessing by index
+        if not isinstance(bids, list) or not isinstance(asks, list):
+            logger.debug("BOOK_INVALID_FORMAT", f"asset={asset_id} bids_type={type(bids).__name__} asks_type={type(asks).__name__}")
+            return
+
+        # Validate nested structure: bids[0] and asks[0] should be lists like ["price", "size"]
+        if bids and (not isinstance(bids[0], (list, tuple)) or len(bids[0]) < 2):
+            logger.debug("BOOK_INVALID_BID_FORMAT", f"asset={asset_id} bid_entry_type={type(bids[0]).__name__}")
+            return
+        if asks and (not isinstance(asks[0], (list, tuple)) or len(asks[0]) < 2):
+            logger.debug("BOOK_INVALID_ASK_FORMAT", f"asset={asset_id} ask_entry_type={type(asks[0]).__name__}")
+            return
 
         best_bid = float(bids[0][0]) if bids else 0.0
         best_ask = float(asks[0][0]) if asks else 0.0
@@ -188,10 +213,14 @@ class PolymarketWebSocket:
             return
 
         changes = data.get("price_changes", [])
-        if not changes:
+        if not changes or not isinstance(changes, list):
             return
 
         change = changes[0]
+        if not isinstance(change, dict):
+            logger.debug("PRICE_CHANGE_INVALID", f"asset={asset_id} change_type={type(change).__name__}")
+            return
+
         best_bid = float(change.get("best_bid", 0))
         best_ask = float(change.get("best_ask", 0))
 
