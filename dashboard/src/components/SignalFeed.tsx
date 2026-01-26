@@ -1,10 +1,65 @@
-import type { SignalEntry } from '../api/client';
+import type { TradingEvent, EventType } from '../api/client';
 
 interface Props {
-  signals: SignalEntry[];
+  events: TradingEvent[];
 }
 
-export function SignalFeed({ signals }: Props) {
+// Event display configuration
+const EVENT_CONFIG: Record<
+  EventType,
+  { icon: string; color: string; bgColor: string; label: string }
+> = {
+  DIRECTION: {
+    icon: '\u26A1', // lightning
+    color: 'var(--accent-amber)',
+    bgColor: 'var(--accent-amber-dim)',
+    label: 'Direction',
+  },
+  POSITION_OPENED: {
+    icon: '\u25CE', // target
+    color: 'var(--accent-green)',
+    bgColor: 'var(--accent-green-dim)',
+    label: 'Opened',
+  },
+  POSITION_CLOSED: {
+    icon: '\u2713', // checkmark
+    color: 'var(--accent-blue)',
+    bgColor: 'var(--accent-blue-dim)',
+    label: 'Closed',
+  },
+  LAG_WINDOW_OPEN: {
+    icon: '\u23F1', // timer
+    color: 'var(--accent-amber)',
+    bgColor: 'var(--accent-amber-dim)',
+    label: 'Window',
+  },
+  LAG_WINDOW_EXPIRED: {
+    icon: '\u23F0', // alarm
+    color: 'var(--text-muted)',
+    bgColor: 'var(--bg-elevated)',
+    label: 'Expired',
+  },
+  ENTRY_SKIP: {
+    icon: '\u2298', // circle-slash
+    color: 'var(--text-muted)',
+    bgColor: 'var(--bg-elevated)',
+    label: 'Skip',
+  },
+  BLOCKED: {
+    icon: '\u26D4', // prohibition
+    color: 'var(--accent-red)',
+    bgColor: 'var(--accent-red-dim)',
+    label: 'Blocked',
+  },
+  ENTRY_FAILED: {
+    icon: '\u2717', // x-mark
+    color: 'var(--accent-red)',
+    bgColor: 'var(--accent-red-dim)',
+    label: 'Failed',
+  },
+};
+
+export function SignalFeed({ events }: Props) {
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp);
     return date.toLocaleTimeString('en-US', {
@@ -13,6 +68,202 @@ export function SignalFeed({ signals }: Props) {
       minute: '2-digit',
       second: '2-digit',
     });
+  };
+
+  const getEventConfig = (type: string) => {
+    return EVENT_CONFIG[type as EventType] || EVENT_CONFIG.DIRECTION;
+  };
+
+  const renderEventDetails = (event: TradingEvent) => {
+    const type = event.type as EventType;
+
+    switch (type) {
+      case 'DIRECTION':
+        return (
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Mom: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--accent-amber)',
+                }}
+              >
+                {event.momentum ? `${(event.momentum * 100).toFixed(3)}%` : '\u2014'}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Winner: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color:
+                    event.expected_winner === 'UP' ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}
+              >
+                {event.expected_winner || '\u2014'}
+              </span>
+            </span>
+          </div>
+        );
+
+      case 'POSITION_OPENED':
+        return (
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Cost: </span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                ${event.cost?.toFixed(4) || '\u2014'}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Profit: </span>
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-green)' }}>
+                ${event.expected_profit?.toFixed(4) || '\u2014'}
+              </span>
+            </span>
+          </div>
+        );
+
+      case 'POSITION_CLOSED':
+        return (
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>P&L: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color: (event.pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}
+              >
+                ${event.pnl?.toFixed(4) || '\u2014'}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Reason: </span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                {event.exit_reason || '\u2014'}
+              </span>
+            </span>
+          </div>
+        );
+
+      case 'LAG_WINDOW_OPEN':
+        return (
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Winner: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color:
+                    event.expected_winner === 'UP' ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}
+              >
+                {event.expected_winner || '\u2014'}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Window: </span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                {event.window_duration_ms ? `${event.window_duration_ms}ms` : '\u2014'}
+              </span>
+            </span>
+          </div>
+        );
+
+      case 'LAG_WINDOW_EXPIRED':
+        return (
+          <div style={{ color: 'var(--text-secondary)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Entry: </span>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                color: event.entry_made ? 'var(--accent-green)' : 'var(--text-muted)',
+              }}
+            >
+              {event.entry_made ? 'Yes' : 'No'}
+            </span>
+          </div>
+        );
+
+      case 'ENTRY_SKIP':
+        return (
+          <div style={{ color: 'var(--text-secondary)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Reason: </span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{event.reason || '\u2014'}</span>
+          </div>
+        );
+
+      case 'BLOCKED':
+        return (
+          <div style={{ color: 'var(--accent-red)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Reason: </span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{event.reason || '\u2014'}</span>
+          </div>
+        );
+
+      case 'ENTRY_FAILED':
+        return (
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.75rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Up: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color: event.up_success ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}
+              >
+                {event.up_success ? 'OK' : 'Fail'}
+              </span>
+            </span>
+            <span>
+              <span style={{ color: 'var(--text-muted)' }}>Down: </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  color: event.down_success ? 'var(--accent-green)' : 'var(--accent-red)',
+                }}
+              >
+                {event.down_success ? 'OK' : 'Fail'}
+              </span>
+            </span>
+          </div>
+        );
+
+      default:
+        return null;
+    }
   };
 
   return (
@@ -45,7 +296,7 @@ export function SignalFeed({ signals }: Props) {
             color: 'var(--text-secondary)',
           }}
         >
-          Signal Feed
+          Event Feed
         </span>
         <span
           style={{
@@ -55,12 +306,12 @@ export function SignalFeed({ signals }: Props) {
             fontFamily: 'var(--font-mono)',
           }}
         >
-          Last {signals.length}
+          Last {events.length}
         </span>
       </div>
 
-      {/* Signals list */}
-      {signals.length === 0 ? (
+      {/* Events list */}
+      {events.length === 0 ? (
         <div
           style={{
             padding: '1.5rem 1rem',
@@ -69,146 +320,99 @@ export function SignalFeed({ signals }: Props) {
             fontSize: '0.75rem',
           }}
         >
-          <div style={{ marginBottom: '0.25rem' }}>No signals yet</div>
-          <div style={{ fontSize: '0.6875rem' }}>Waiting for price movements...</div>
+          <div style={{ marginBottom: '0.25rem' }}>No events yet</div>
+          <div style={{ fontSize: '0.6875rem' }}>Waiting for trading activity...</div>
         </div>
       ) : (
         <div
           style={{
-            maxHeight: '250px',
+            maxHeight: '300px',
             overflowY: 'auto',
           }}
         >
-          {signals.map((signal, idx) => (
-            <div
-              key={`${signal.timestamp}-${idx}`}
-              style={{
-                padding: '0.5rem 1rem',
-                borderBottom: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.75rem',
-                fontSize: '0.6875rem',
-              }}
-            >
-              {/* Direction indicator */}
+          {events.map((event, idx) => {
+            const config = getEventConfig(event.type);
+            return (
               <div
+                key={`${event.timestamp}-${idx}`}
                 style={{
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: 'var(--radius-sm)',
-                  background:
-                    signal.direction === 'UP'
-                      ? 'var(--accent-green-dim)'
-                      : signal.direction === 'DOWN'
-                        ? 'var(--accent-red-dim)'
-                        : 'var(--bg-elevated)',
+                  padding: '0.5rem 1rem',
+                  borderBottom: '1px solid var(--border-subtle)',
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color:
-                    signal.direction === 'UP'
-                      ? 'var(--accent-green)'
-                      : signal.direction === 'DOWN'
-                        ? 'var(--accent-red)'
-                        : 'var(--text-muted)',
-                  fontWeight: 700,
-                  fontSize: '0.625rem',
-                  flexShrink: 0,
+                  alignItems: 'flex-start',
+                  gap: '0.75rem',
+                  fontSize: '0.6875rem',
                 }}
               >
-                {signal.direction === 'UP'
-                  ? '&#x2191;'
-                  : signal.direction === 'DOWN'
-                    ? '&#x2193;'
-                    : '?'}
-              </div>
-
-              {/* Signal details */}
-              <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Event type indicator */}
                 <div
                   style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: config.bgColor,
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.5rem',
-                    marginBottom: '0.25rem',
+                    justifyContent: 'center',
+                    color: config.color,
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    flexShrink: 0,
                   }}
                 >
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontWeight: 600,
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    {signal.symbol}
-                  </span>
-                  <span
-                    style={{
-                      padding: '0.0625rem 0.375rem',
-                      borderRadius: 'var(--radius-sm)',
-                      background:
-                        signal.expected_winner === 'UP'
-                          ? 'var(--accent-green-dim)'
-                          : 'var(--accent-red-dim)',
-                      color:
-                        signal.expected_winner === 'UP'
-                          ? 'var(--accent-green)'
-                          : 'var(--accent-red)',
-                      fontSize: '0.5625rem',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {signal.expected_winner}
-                  </span>
+                  {config.icon}
                 </div>
 
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '0.75rem',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  <span>
-                    <span style={{ color: 'var(--text-muted)' }}>Mom: </span>
+                {/* Event details */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      marginBottom: '0.25rem',
+                    }}
+                  >
                     <span
                       style={{
                         fontFamily: 'var(--font-mono)',
-                        color: 'var(--accent-amber)',
+                        fontWeight: 600,
+                        color: 'var(--text-primary)',
                       }}
                     >
-                      {signal.momentum ? `${(signal.momentum * 100).toFixed(3)}%` : '—'}
+                      {event.symbol}
                     </span>
-                  </span>
-                  <span>
-                    <span style={{ color: 'var(--text-muted)' }}>Spot: </span>
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>
-                      ${signal.spot_price?.toFixed(2) || '—'}
+                    <span
+                      style={{
+                        padding: '0.0625rem 0.375rem',
+                        borderRadius: 'var(--radius-sm)',
+                        background: config.bgColor,
+                        color: config.color,
+                        fontSize: '0.5625rem',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {config.label}
                     </span>
-                  </span>
-                  <span>
-                    <span style={{ color: 'var(--text-muted)' }}>Conf: </span>
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>
-                      {signal.confidence ? `${(signal.confidence * 100).toFixed(0)}%` : '—'}
-                    </span>
-                  </span>
+                  </div>
+
+                  {renderEventDetails(event)}
+                </div>
+
+                {/* Timestamp */}
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.625rem',
+                    flexShrink: 0,
+                  }}
+                >
+                  {formatTime(event.timestamp)}
                 </div>
               </div>
-
-              {/* Timestamp */}
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-muted)',
-                  fontSize: '0.625rem',
-                  flexShrink: 0,
-                }}
-              >
-                {formatTime(signal.timestamp)}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

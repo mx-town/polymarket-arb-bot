@@ -4,6 +4,67 @@
 
 const API_BASE = '/api';
 
+// Event types for unified event stream
+export type EventType =
+  | 'DIRECTION'
+  | 'POSITION_OPENED'
+  | 'POSITION_CLOSED'
+  | 'LAG_WINDOW_OPEN'
+  | 'LAG_WINDOW_EXPIRED'
+  | 'ENTRY_SKIP'
+  | 'BLOCKED'
+  | 'ENTRY_FAILED';
+
+export interface TradingEvent {
+  type: EventType;
+  symbol: string;
+  timestamp: string;
+  // DIRECTION event details
+  direction?: string;
+  momentum?: number;
+  spot_price?: number;
+  candle_open?: number;
+  expected_winner?: string;
+  confidence?: number;
+  // POSITION_OPENED event details
+  cost?: number;
+  expected_profit?: number;
+  up_price?: number;
+  down_price?: number;
+  // POSITION_CLOSED event details
+  pnl?: number;
+  exit_reason?: string;
+  hold_duration_sec?: number;
+  // LAG_WINDOW_OPEN event details
+  window_duration_ms?: number;
+  // LAG_WINDOW_EXPIRED event details
+  entry_made?: boolean;
+  // ENTRY_SKIP event details
+  reason?: string;
+  combined?: number;
+  max_combined?: number;
+  window_remaining_ms?: number;
+  // BLOCKED / ENTRY_FAILED details
+  market_id?: string;
+  up_success?: boolean;
+  down_success?: boolean;
+}
+
+export interface PnlSnapshot {
+  timestamp: string;
+  total_pnl: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+}
+
+export interface ClosedTrade {
+  timestamp: string;
+  market_slug: string;
+  pnl: number;
+  exit_reason: string;
+  hold_duration_sec: number;
+}
+
 export interface BotStatus {
   running: boolean;
   pid: number | null;
@@ -82,12 +143,18 @@ export interface BotMetrics {
   current_exposure?: number;
   ws_message_count?: number;
   error?: string;
+  // Bot status (single source of truth)
+  pid?: number;
   bot_running?: boolean;
   // Dashboard visibility data
   active_markets?: ActiveMarket[];
   active_windows?: LagWindow[];
   recent_signals?: SignalEntry[];
   config_summary?: ConfigSummary;
+  // Unified event stream and history
+  events?: TradingEvent[];
+  pnl_history?: PnlSnapshot[];
+  trades_history?: ClosedTrade[];
 }
 
 export interface BotConfig {
@@ -183,6 +250,10 @@ export async function updateConfig(config: Partial<BotConfig>): Promise<BotConfi
 
 export async function restartBot(): Promise<{ status: string; message: string }> {
   return fetchJson(`${API_BASE}/restart`, { method: 'POST' });
+}
+
+export async function refreshMarkets(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/refresh-markets`, { method: 'POST' });
 }
 
 export function createMetricsWebSocket(onMessage: (metrics: BotMetrics) => void): WebSocket {

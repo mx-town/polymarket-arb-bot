@@ -79,3 +79,21 @@ async def restart_bot() -> dict:
         return {"status": "ok", "message": f"SIGTERM sent to PID {pid}"}
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to send signal: {e}")
+
+
+@router.post("/refresh-markets")
+async def refresh_markets() -> dict:
+    """Force refresh markets. Sends SIGUSR1 to bot to trigger market refresh."""
+    pid = get_pid()
+
+    if pid is None:
+        raise HTTPException(status_code=404, detail="Bot PID not found")
+
+    if not is_process_running(pid):
+        raise HTTPException(status_code=404, detail="Bot process not running")
+
+    try:
+        os.kill(pid, signal.SIGUSR1)
+        return {"status": "ok", "message": f"Refresh signal sent to PID {pid}"}
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send signal: {e}")

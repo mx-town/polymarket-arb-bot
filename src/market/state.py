@@ -135,6 +135,22 @@ class MarketStateManager:
         """Get market by ID"""
         return self.markets.get(market_id)
 
+    def remove_market(self, market_id: str) -> bool:
+        """Remove a market and its token mappings. Returns True if removed."""
+        market = self.markets.get(market_id)
+        if not market:
+            return False
+
+        # Remove token mappings
+        self._token_to_market.pop(market.up_token_id, None)
+        self._token_to_market.pop(market.down_token_id, None)
+        self._token_is_up.pop(market.up_token_id, None)
+        self._token_is_up.pop(market.down_token_id, None)
+
+        # Remove market
+        del self.markets[market_id]
+        return True
+
     def get_market_by_token(self, token_id: str) -> MarketState | None:
         """Get market by token ID"""
         market_id = self._token_to_market.get(token_id)

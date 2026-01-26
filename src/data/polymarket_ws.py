@@ -224,9 +224,10 @@ class PolymarketWebSocket:
 
         {
             "event_type": "price_change",
-            "asset_id": "TOKEN_ID",
+            "market": "CONDITION_ID",
             "price_changes": [
                 {
+                    "asset_id": "TOKEN_ID",
                     "best_bid": "0.52",
                     "best_ask": "0.54",
                     "last_trade_price": "0.53"
@@ -234,30 +235,27 @@ class PolymarketWebSocket:
             ]
         }
         """
-        asset_id = data.get("asset_id")
-        if not asset_id:
-            return
-
         changes = data.get("price_changes", [])
         if not changes or not isinstance(changes, list):
             return
 
-        change = changes[0]
-        if not isinstance(change, dict):
-            logger.debug(
-                "PRICE_CHANGE_INVALID", f"asset={asset_id} change_type={type(change).__name__}"
-            )
-            return
+        for change in changes:
+            if not isinstance(change, dict):
+                continue
 
-        best_bid = float(change.get("best_bid", 0))
-        best_ask = float(change.get("best_ask", 0))
+            asset_id = change.get("asset_id")
+            if not asset_id:
+                continue
 
-        if best_bid > 0 and best_ask > 0:
-            self.state_manager.update_from_book(asset_id, best_bid, best_ask)
+            best_bid = float(change.get("best_bid", 0))
+            best_ask = float(change.get("best_ask", 0))
 
-            market = self.state_manager.get_market_by_token(asset_id)
-            if market and self.on_update:
-                self.on_update(market.market_id)
+            if best_bid > 0 and best_ask > 0:
+                self.state_manager.update_from_book(asset_id, best_bid, best_ask)
+
+                market = self.state_manager.get_market_by_token(asset_id)
+                if market and self.on_update:
+                    self.on_update(market.market_id)
 
     def _on_error(self, ws, error):
         """Handle WebSocket error"""
