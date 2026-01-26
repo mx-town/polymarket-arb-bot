@@ -8,10 +8,10 @@ export function EntryConditionsSubpanel({ config, onChange }: SubpanelProps) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
         <InlineValue
           label="Max Combined Price"
-          value={isLagArb ? config.lag_arb.max_combined_price : config.conservative.max_combined_price}
-          onChange={(v) =>
-            onChange(isLagArb ? 'lag_arb' : 'conservative', 'max_combined_price', v)
+          value={
+            isLagArb ? config.lag_arb.max_combined_price : config.conservative.max_combined_price
           }
+          onChange={(v) => onChange(isLagArb ? 'lag_arb' : 'conservative', 'max_combined_price', v)}
           accentColor={SECTION_COLORS.entry}
         />
         <InlineValue
