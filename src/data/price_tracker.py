@@ -374,10 +374,10 @@ class PriceTracker:
         signal = tracker.get_signal()
 
         if signal.is_significant:
-            logger.debug(
+            logger.info(
                 "DIRECTION_SIGNAL",
                 f"symbol={signal.symbol} dir={signal.direction.value} "
-                f"move={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
+                f"momentum={signal.momentum*100:.3f}% "
                 f"spot={signal.current_price:.2f} open={signal.candle_open:.2f}",
             )
 
