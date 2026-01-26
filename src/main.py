@@ -8,6 +8,7 @@ Strategies:
 - lag_arb: Predict Polymarket lag using Binance spot momentum
 """
 
+import os
 import time
 import signal
 import sys
@@ -16,7 +17,7 @@ from typing import Optional, Union
 
 from src.config import build_config, BotConfig
 from src.utils.logging import setup_logging, get_logger
-from src.utils.metrics import BotMetrics
+from src.utils.metrics import BotMetrics, write_pid, remove_pid
 from src.market.discovery import fetch_updown_markets, fetch_all_markets, fetch_recent_updown_markets
 from src.market.state import MarketStateManager, MarketState
 from src.market.filters import get_tradeable_markets
@@ -119,6 +120,13 @@ class ArbBot:
             self._start_market_refresh_thread()
 
         self.metrics.start()
+
+        # Write PID file for API server
+        if write_pid():
+            logger.info("PID_WRITTEN", f"pid={os.getpid()}")
+        else:
+            logger.warning("PID_WRITE_FAILED", "Could not write PID file")
+
         logger.info("INIT_COMPLETE", "Bot initialized")
 
     def _init_conservative(self):
@@ -379,6 +387,9 @@ class ArbBot:
             while self.running:
                 time.sleep(1)
 
+                # Export metrics to file for API server
+                self.metrics.export_to_file()
+
                 # For lag arb, also check for expired windows and exits
                 if isinstance(self.strategy, LagArbStrategy):
                     self._check_position_exits()
@@ -404,6 +415,9 @@ class ArbBot:
     def shutdown(self):
         """Clean shutdown"""
         self.running = False
+
+        # Remove PID file
+        remove_pid()
 
         if self.polymarket_ws:
             self.polymarket_ws.disconnect()

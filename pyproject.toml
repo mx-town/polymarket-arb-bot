@@ -9,8 +9,11 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "websocket-client",
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
 arb-bot = "src.main:main"
 arb-bot-legacy = "src.arb_bot:main"
+arb-api = "src.api.server:main"

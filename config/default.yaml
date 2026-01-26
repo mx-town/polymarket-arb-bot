@@ -1,60 +1,45 @@
-# Polymarket Arbitrage Bot Configuration
-
 trading:
   dry_run: true
-  min_spread: 0.02          # Minimum gross profit to consider
-  min_net_profit: 0.005     # Minimum net profit after fees
-  max_position_size: 100.0  # Max USDC per trade
-  fee_rate: 0.02            # ~2% round-trip fees
-
+  min_spread: 0.02
+  min_net_profit: 0.005
+  max_position_size: 100.0
+  fee_rate: 0.02
 polling:
-  interval: 5.0                  # Seconds between market scans
-  batch_size: 50                 # Order books per API call
-  max_markets: 0                 # 0 = all markets
-  market_refresh_interval: 300   # Refresh markets every 5 minutes
-
+  interval: 5.0
+  batch_size: 50
+  max_markets: 0
+  market_refresh_interval: 300
 websocket:
-  ping_interval: 5.0        # Polymarket recommends 5s
+  ping_interval: 5.0
   reconnect_delay: 5.0
-
-# Phase 1: Conservative arbitrage thresholds
 conservative:
-  max_combined_price: 0.99       # Only enter if Up_ask + Down_ask < this
+  max_combined_price: 0.99
   min_time_to_resolution_sec: 300
-  exit_on_pump_threshold: 0.10   # Exit if one side moves +10%
-
-# Phase 2: Lag arbitrage (momentum-based trigger)
-# Uses momentum as primary trigger, candle move as confirmation
-# If spot momentum > threshold → direction signal, enter during lag window
+  exit_on_pump_threshold: 0.1
 lag_arb:
   enabled: true
-  candle_interval: 1h             # Use 1H candles (0% fees)
-  spot_momentum_window_sec: 10    # Rolling window for momentum calculation
-  spot_move_threshold_pct: 0.002  # 0.2% from candle open (for confirmation)
-  max_combined_price: 0.995       # Entry threshold
-  expected_lag_ms: 2000           # Polymarket typically lags 2 seconds
-  max_lag_window_ms: 5000         # Give up after 5 seconds
-  fee_rate: 0.0                   # 1H markets have 0% fees
-  # Momentum-based trigger parameters
-  momentum_trigger_threshold_pct: 0.001  # 0.1% momentum = trigger signal
-  pump_exit_threshold_pct: 0.03          # 3% single-side pump = exit
-  max_hold_time_sec: 300                 # 5 min max hold before force exit
-
-# Risk management
+  candle_interval: 1h
+  spot_momentum_window_sec: 10
+  spot_move_threshold_pct: 0.002
+  max_combined_price: 0.995
+  expected_lag_ms: 2000
+  max_lag_window_ms: 5000
+  fee_rate: 0.0
+  momentum_trigger_threshold_pct: 0.001
+  pump_exit_threshold_pct: 0.03
+  max_hold_time_sec: 300
 risk:
   max_consecutive_losses: 3
   max_daily_loss_usd: 100.0
   cooldown_after_loss_sec: 300
   max_total_exposure: 1000.0
-
-# Market filters
 filters:
   min_liquidity_usd: 1000.0
   min_book_depth: 500.0
   max_spread_pct: 0.05
-  max_market_age_hours: 1.0     # Prefer markets created within 1 hour
-  fallback_age_hours: 24.0      # Fallback to 24h if no recent markets
-  min_volume_24h: 100.0         # Minimum volume to ensure activity
+  max_market_age_hours: 1.0
+  fallback_age_hours: 24.0
+  min_volume_24h: 100.0
   market_types:
-    - btc-updown
-    - eth-updown
+  - btc-updown
+  - eth-updown

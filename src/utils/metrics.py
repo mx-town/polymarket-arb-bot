@@ -2,9 +2,16 @@
 Performance metrics tracking for Polymarket Arbitrage Bot.
 """
 
+import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+# Default paths for IPC
+DEFAULT_METRICS_PATH = "/tmp/polymarket_metrics.json"
+DEFAULT_PID_PATH = "/tmp/polymarket_bot.pid"
 
 
 @dataclass
@@ -124,3 +131,55 @@ class BotMetrics:
             "ws_reconnects": self.ws_reconnects,
             "avg_latency_ms": self.avg_message_latency_ms,
         }
+
+    def export_to_file(self, path: str = DEFAULT_METRICS_PATH) -> bool:
+        """Export metrics to JSON file for IPC with API server"""
+        try:
+            data = self.summary()
+            data["timestamp"] = datetime.now().isoformat()
+            data["start_time"] = self.start_time.isoformat() if self.start_time else None
+            # Add additional fields for dashboard
+            data["markets_fetched"] = self.markets_fetched
+            data["trades_attempted"] = self.trades_attempted
+            data["trades_partial"] = self.trades_partial
+            data["realized_pnl"] = self.realized_pnl
+            data["unrealized_pnl"] = self.unrealized_pnl
+            data["current_exposure"] = self.current_exposure
+            data["ws_message_count"] = self.ws_message_count
+
+            # Atomic write using temp file
+            temp_path = f"{path}.tmp"
+            with open(temp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, path)
+            return True
+        except Exception:
+            return False
+
+
+def write_pid(path: str = DEFAULT_PID_PATH) -> bool:
+    """Write current process PID to file"""
+    try:
+        pid = os.getpid()
+        Path(path).write_text(str(pid))
+        return True
+    except Exception:
+        return False
+
+
+def remove_pid(path: str = DEFAULT_PID_PATH) -> bool:
+    """Remove PID file"""
+    try:
+        Path(path).unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def read_pid(path: str = DEFAULT_PID_PATH) -> Optional[int]:
+    """Read PID from file"""
+    try:
+        content = Path(path).read_text().strip()
+        return int(content)
+    except Exception:
+        return None
