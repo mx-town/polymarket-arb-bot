@@ -2,16 +2,16 @@ trading:
   dry_run: true
   min_spread: 0.02
   min_net_profit: 0.005
-  max_position_size: 100.0
+  max_position_size: 100
   fee_rate: 0.02
 polling:
-  interval: 5.0
+  interval: 5
   batch_size: 50
   max_markets: 0
   market_refresh_interval: 300
 websocket:
-  ping_interval: 5.0
-  reconnect_delay: 5.0
+  ping_interval: 5
+  reconnect_delay: 5
 conservative:
   max_combined_price: 0.99
   min_time_to_resolution_sec: 300
@@ -24,22 +24,22 @@ lag_arb:
   max_combined_price: 0.995
   expected_lag_ms: 2000
   max_lag_window_ms: 5000
-  fee_rate: 0.0
+  fee_rate: 0
   momentum_trigger_threshold_pct: 0.001
   pump_exit_threshold_pct: 0.03
   max_hold_time_sec: 300
 risk:
   max_consecutive_losses: 3
-  max_daily_loss_usd: 100.0
+  max_daily_loss_usd: 100
   cooldown_after_loss_sec: 300
-  max_total_exposure: 1000.0
+  max_total_exposure: 1000
 filters:
-  min_liquidity_usd: 1000.0
-  min_book_depth: 500.0
+  min_liquidity_usd: 1000
+  min_book_depth: 500
   max_spread_pct: 0.05
-  max_market_age_hours: 1.0
-  fallback_age_hours: 24.0
-  min_volume_24h: 100.0
+  max_market_age_hours: 1
+  fallback_age_hours: 24
+  min_volume_24h: 100
   market_types:
   - btc-updown
   - eth-updown
