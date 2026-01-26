@@ -23,7 +23,7 @@ from src.execution.risk import RiskManager
 from src.market.discovery import (
     fetch_recent_updown_markets,
 )
-from src.market.state import MarketState, MarketStateManager
+from src.market.state import MarketState, MarketStateManager, MarketStatus
 from src.strategy.conservative import ConservativeStrategy
 from src.strategy.lag_arb import LagArbStrategy
 from src.strategy.signals import ArbOpportunity
@@ -60,9 +60,8 @@ class ArbBot:
         # Strategy (set based on config)
         self.strategy: ConservativeStrategy | LagArbStrategy | None = None
 
-        # Recent signals buffer for dashboard visibility (max 50)
-        self._recent_signals: list = []
-        self._max_signals = 50
+        # P&L snapshot interval tracking
+        self._last_pnl_snapshot = 0.0
 
     def _print_banner(self):
         """Print startup banner"""
@@ -144,10 +143,11 @@ class ArbBot:
 
     def _init_lag_arb(self):
         """Initialize lag arbitrage strategy with Binance feed"""
-        # Create lag arb strategy
+        # Create lag arb strategy with event callback
         self.strategy = LagArbStrategy(
             self.config.trading,
             self.config.lag_arb,
+            on_event=self._on_strategy_event,
         )
 
         # Create price tracker
@@ -226,8 +226,17 @@ class ArbBot:
             except Exception as e:
                 logger.error("MARKET_REFRESH_ERROR", str(e))
 
-    def _refresh_markets(self):
-        """Fetch new markets and update subscriptions"""
+    def _refresh_markets(self, force: bool = False):
+        """Fetch new markets and update subscriptions.
+
+        Args:
+            force: If True, clear all markets and resubscribe from scratch.
+        """
+        # Remove expired/resolved markets first
+        removed_count = self._remove_stale_markets()
+        if removed_count > 0:
+            logger.info("MARKETS_REMOVED", f"count={removed_count}")
+
         new_manager = fetch_recent_updown_markets(
             max_age_hours=self.config.filters.max_market_age_hours,
             fallback_age_hours=self.config.filters.fallback_age_hours,
@@ -235,6 +244,14 @@ class ArbBot:
             market_types=self.config.filters.market_types,
             max_markets=self.config.polling.max_markets,
         )
+
+        # Force refresh: clear everything and resubscribe
+        if force:
+            old_count = len(self.state_manager.markets)
+            # Clear all existing markets
+            for market_id in list(self.state_manager.markets.keys()):
+                self.state_manager.remove_market(market_id)
+            logger.info("FORCE_REFRESH", f"cleared={old_count} markets")
 
         # Find new markets not in current state
         new_tokens = []
@@ -249,6 +266,45 @@ class ArbBot:
             self.polymarket_ws.add_tokens(new_tokens)
             logger.info("SUBSCRIBED_NEW", f"tokens={len(new_tokens)}")
 
+    def _remove_stale_markets(self) -> int:
+        """Remove markets that are resolved or past their resolution time.
+
+        Returns the count of removed markets.
+        """
+        from datetime import datetime
+
+        now = datetime.now()
+        to_remove = []
+
+        for market_id, market in self.state_manager.markets.items():
+            # Skip if we have an open position
+            if self.position_manager and self.position_manager.has_position(market_id):
+                continue
+
+            # Remove if resolved
+            if market.status == MarketStatus.RESOLVED:
+                to_remove.append((market_id, "resolved"))
+                continue
+
+            # Remove if past resolution time (with 60s buffer)
+            if market.resolution_time:
+                if now > market.resolution_time:
+                    to_remove.append((market_id, "expired"))
+                    continue
+
+        for market_id, reason in to_remove:
+            market = self.state_manager.get_market(market_id)
+            if market:
+                logger.info("MARKET_REMOVED", f"slug={market.slug} reason={reason}")
+            self.state_manager.remove_market(market_id)
+
+        return len(to_remove)
+
+    def force_refresh_markets(self):
+        """Public method to force refresh all markets. Called from API."""
+        logger.info("FORCE_REFRESH_REQUESTED", "Refreshing all markets...")
+        self._refresh_markets(force=True)
+
     def _on_direction_signal(self, signal: DirectionSignal):
         """
         Handle direction signal from Binance price tracker.
@@ -262,9 +318,9 @@ class ArbBot:
         if not isinstance(self.strategy, LagArbStrategy):
             return
 
-        # Record signal for dashboard visibility
+        # Record signal for dashboard visibility using unified event stream
         if signal.is_significant:
-            self._record_signal(
+            self.metrics.record_event(
                 "DIRECTION",
                 signal.symbol,
                 {
@@ -283,6 +339,10 @@ class ArbBot:
         # Check all markets for lag arb opportunities
         if signal.is_significant:
             self._check_lag_arb_opportunities()
+
+    def _on_strategy_event(self, event_type: str, symbol: str, details: dict):
+        """Handle events emitted by the strategy (LAG_WINDOW_OPEN, LAG_WINDOW_EXPIRED, ENTRY_SKIP)"""
+        self.metrics.record_event(event_type, symbol, details)
 
     def _check_lag_arb_opportunities(self):
         """Check all markets for lag arb entry opportunities"""
@@ -327,6 +387,11 @@ class ArbBot:
         can_trade, reason = self.risk_manager.check_can_trade()
         if not can_trade:
             logger.warning("BLOCKED", f"reason={reason}")
+            self.metrics.record_event(
+                "BLOCKED",
+                opp.slug,
+                {"reason": reason, "market_id": opp.market_id},
+            )
             return
 
         can_expose, reason = self.risk_manager.check_exposure_limit(
@@ -335,6 +400,11 @@ class ArbBot:
         )
         if not can_expose:
             logger.warning("EXPOSURE_LIMIT", f"reason={reason}")
+            self.metrics.record_event(
+                "BLOCKED",
+                opp.slug,
+                {"reason": f"exposure_limit: {reason}", "market_id": opp.market_id},
+            )
             return
 
         # Execute
@@ -357,9 +427,29 @@ class ArbBot:
                 "POSITION_OPENED",
                 f"market={opp.slug} cost=${opp.total_cost:.4f} net_profit=${opp.net_profit:.4f}",
             )
+            self.metrics.record_event(
+                "POSITION_OPENED",
+                opp.slug,
+                {
+                    "market_id": opp.market_id,
+                    "cost": opp.total_cost,
+                    "expected_profit": opp.net_profit,
+                    "up_price": opp.up_price,
+                    "down_price": opp.down_price,
+                },
+            )
         else:
             self.metrics.record_opportunity(taken=False)
             logger.warning("ENTRY_FAILED", f"market={opp.slug}")
+            self.metrics.record_event(
+                "ENTRY_FAILED",
+                opp.slug,
+                {
+                    "market_id": opp.market_id,
+                    "up_success": up_result.success,
+                    "down_success": down_result.success,
+                },
+            )
 
     def _execute_exit(self, market: MarketState, position, reason: str):
         """Execute exit trade"""
@@ -380,27 +470,33 @@ class ArbBot:
             )
             if closed:
                 pnl = closed.realized_pnl
+                hold_duration = (
+                    closed.closed_at - closed.opened_at
+                ).total_seconds() if closed.closed_at and closed.opened_at else 0.0
                 self.risk_manager.record_trade_result(pnl)
                 self.metrics.record_trade(success=True, pnl=pnl)
                 logger.info(
                     "POSITION_CLOSED",
                     f"market={market.slug} pnl=${pnl:.4f} reason={reason}",
                 )
-
-    def _record_signal(self, signal_type: str, symbol: str, details: dict):
-        """Record a signal for dashboard visibility"""
-        from datetime import datetime
-
-        signal_entry = {
-            "type": signal_type,
-            "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
-            **details,
-        }
-        self._recent_signals.insert(0, signal_entry)
-        # Keep only the most recent signals
-        if len(self._recent_signals) > self._max_signals:
-            self._recent_signals = self._recent_signals[: self._max_signals]
+                # Record to unified event stream
+                self.metrics.record_event(
+                    "POSITION_CLOSED",
+                    market.slug,
+                    {
+                        "market_id": market.market_id,
+                        "pnl": pnl,
+                        "exit_reason": reason,
+                        "hold_duration_sec": hold_duration,
+                    },
+                )
+                # Record to trades history for bar chart
+                self.metrics.record_closed_trade(
+                    market_slug=market.slug,
+                    pnl=pnl,
+                    exit_reason=reason,
+                    hold_duration_sec=hold_duration,
+                )
 
     def _get_dashboard_data(self) -> dict:
         """Collect data for dashboard visibility"""
@@ -419,8 +515,8 @@ class ArbBot:
                         "down_best_ask": market.down_best_ask,
                         "down_best_bid": market.down_best_bid,
                         "is_valid": market.is_valid,
-                        "last_updated": market.last_updated.isoformat()
-                        if market.last_updated
+                        "last_updated": market.last_update.isoformat()
+                        if market.last_update
                         else None,
                     }
                 )
@@ -457,7 +553,6 @@ class ArbBot:
         return {
             "active_markets": active_markets,
             "active_windows": active_windows,
-            "recent_signals": self._recent_signals,
             "config_summary": config_summary,
         }
 
@@ -472,8 +567,13 @@ class ArbBot:
             logger.info("SHUTDOWN", "Received shutdown signal")
             self.running = False
 
+        def handle_refresh(signum, frame):
+            logger.info("REFRESH_SIGNAL", "Received SIGUSR1, refreshing markets...")
+            self.force_refresh_markets()
+
         signal.signal(signal.SIGINT, handle_shutdown)
         signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGUSR1, handle_refresh)
 
         try:
             # WebSocket mode: events trigger trades
@@ -481,12 +581,17 @@ class ArbBot:
             while self.running:
                 time.sleep(1)
 
+                # Record P&L snapshot every 10 seconds
+                current_time = time.time()
+                if current_time - self._last_pnl_snapshot >= 10.0:
+                    self.metrics.record_pnl_snapshot()
+                    self._last_pnl_snapshot = current_time
+
                 # Export metrics to file for API server (with dashboard visibility data)
                 dashboard_data = self._get_dashboard_data()
                 self.metrics.export_to_file(
                     active_markets=dashboard_data["active_markets"],
                     active_windows=dashboard_data["active_windows"],
-                    recent_signals=dashboard_data["recent_signals"],
                     config_summary=dashboard_data["config_summary"],
                 )
 

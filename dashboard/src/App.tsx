@@ -5,16 +5,27 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { MarketsPanel } from './components/MarketsPanel';
 import { LagWindowsPanel } from './components/LagWindowsPanel';
 import { SignalFeed } from './components/SignalFeed';
+import { PnlChart } from './components/PnlChart';
+import { ActivityChart } from './components/ActivityChart';
 import './App.css';
 
 function App() {
-  const { metrics, connected } = useMetrics();
+  const { metrics, connected, refresh } = useMetrics();
 
   // Extract visibility data from metrics
   const activeMarkets = metrics?.active_markets || [];
   const activeWindows = metrics?.active_windows || [];
-  const recentSignals = metrics?.recent_signals || [];
   const configSummary = metrics?.config_summary;
+
+  // Extract unified event stream and history data
+  const events = metrics?.events || [];
+  const pnlHistory = metrics?.pnl_history || [];
+  const tradesHistory = metrics?.trades_history || [];
+
+  // Derive bot status from metrics (single source of truth)
+  const botRunning = metrics?.bot_running ?? false;
+  const botPid = metrics?.pid ?? null;
+  const botUptime = metrics?.uptime_sec ?? 0;
 
   return (
     <div
@@ -133,16 +144,18 @@ function App() {
           maxWidth: '1800px',
         }}
       >
-        {/* Left Column - Markets & Metrics */}
+        {/* Left Column - Markets, Metrics & P&L Chart */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <MarketsPanel markets={activeMarkets} />
           <MetricsDisplay metrics={metrics} connected={connected} />
+          <PnlChart data={pnlHistory} />
         </div>
 
-        {/* Center Column - Lag Windows & Signal Feed */}
+        {/* Center Column - Lag Windows, Event Feed & Activity Chart */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <LagWindowsPanel windows={activeWindows} config={configSummary} />
-          <SignalFeed signals={recentSignals} />
+          <SignalFeed events={events} />
+          <ActivityChart trades={tradesHistory} />
         </div>
 
         {/* Right Column - Control & Config */}
@@ -153,7 +166,12 @@ function App() {
             gap: '1rem',
           }}
         >
-          <ControlPanel />
+          <ControlPanel
+            running={botRunning}
+            pid={botPid}
+            uptimeSec={botUptime}
+            onRefresh={refresh}
+          />
           <ConfigPanel />
 
           {/* Quick Info */}

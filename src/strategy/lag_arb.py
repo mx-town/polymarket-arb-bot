@@ -29,6 +29,7 @@ Why this works:
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
 
 from src.config import LagArbConfig, TradingConfig
 from src.data.price_tracker import Direction, DirectionSignal
@@ -41,6 +42,9 @@ from src.strategy.signals import (
     SignalType,
 )
 from src.utils.logging import get_logger
+
+# Type alias for event callback
+EventCallback = Callable[[str, str, dict], None]
 
 logger = get_logger("lag_arb")
 
@@ -92,9 +96,11 @@ class LagArbStrategy(SignalDetector):
         self,
         trading_config: TradingConfig,
         lag_config: LagArbConfig,
+        on_event: EventCallback | None = None,
     ):
         self.trading = trading_config
         self.config = lag_config
+        self.on_event = on_event
 
         # Active lag windows by symbol
         self.lag_windows: dict[str, LagWindow] = {}
@@ -104,6 +110,11 @@ class LagArbStrategy(SignalDetector):
             "btc": "BTCUSDT",
             "eth": "ETHUSDT",
         }
+
+    def _emit_event(self, event_type: str, symbol: str, details: dict):
+        """Emit an event through the callback if registered"""
+        if self.on_event:
+            self.on_event(event_type, symbol, details)
 
     def on_direction_signal(self, signal: DirectionSignal):
         """
@@ -138,6 +149,19 @@ class LagArbStrategy(SignalDetector):
             f"window={self.config.max_lag_window_ms}ms",
         )
 
+        # Emit event for dashboard
+        self._emit_event(
+            "LAG_WINDOW_OPEN",
+            signal.symbol,
+            {
+                "expected_winner": expected_winner,
+                "momentum": signal.momentum,
+                "spot_price": signal.current_price,
+                "candle_open": signal.candle_open,
+                "window_duration_ms": self.config.max_lag_window_ms,
+            },
+        )
+
     # Backwards compatibility
     def on_momentum_signal(self, signal: DirectionSignal):
         """Alias for on_direction_signal (backwards compatibility)"""
@@ -162,6 +186,15 @@ class LagArbStrategy(SignalDetector):
             logger.info(
                 "LAG_WINDOW_EXPIRED",
                 f"symbol={symbol} winner={window.expected_winner} entry_made={window.entry_made}",
+            )
+            # Emit event for dashboard
+            self._emit_event(
+                "LAG_WINDOW_EXPIRED",
+                symbol,
+                {
+                    "expected_winner": window.expected_winner,
+                    "entry_made": window.entry_made,
+                },
             )
             del self.lag_windows[symbol]
         return None
@@ -201,6 +234,18 @@ class LagArbStrategy(SignalDetector):
                 f"market={market.slug} combined={combined:.4f} "
                 f"max={self.config.max_combined_price:.4f} "
                 f"winner={window.expected_winner} window_remaining={window.remaining_ms:.0f}ms",
+            )
+            # Emit event for dashboard
+            self._emit_event(
+                "ENTRY_SKIP",
+                market.slug,
+                {
+                    "reason": "combined_price_too_high",
+                    "combined": combined,
+                    "max_combined": self.config.max_combined_price,
+                    "expected_winner": window.expected_winner,
+                    "window_remaining_ms": window.remaining_ms,
+                },
             )
             return None
 

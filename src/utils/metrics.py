@@ -4,13 +4,82 @@ Performance metrics tracking for Polymarket Arbitrage Bot.
 
 import json
 import os
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 # Default paths for IPC
 DEFAULT_METRICS_PATH = "/tmp/polymarket_metrics.json"
 DEFAULT_PID_PATH = "/tmp/polymarket_bot.pid"
+
+# Event types for unified event stream
+EVENT_TYPES = [
+    "DIRECTION",
+    "POSITION_OPENED",
+    "POSITION_CLOSED",
+    "LAG_WINDOW_OPEN",
+    "LAG_WINDOW_EXPIRED",
+    "ENTRY_SKIP",
+    "BLOCKED",
+    "ENTRY_FAILED",
+]
+
+
+@dataclass
+class TradingEvent:
+    """A single trading event for the unified event stream"""
+
+    event_type: str
+    symbol: str
+    timestamp: str
+    details: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.event_type,
+            "symbol": self.symbol,
+            "timestamp": self.timestamp,
+            **self.details,
+        }
+
+
+@dataclass
+class PnlSnapshot:
+    """P&L snapshot for time-series chart"""
+
+    timestamp: str
+    total_pnl: float
+    realized_pnl: float
+    unrealized_pnl: float
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "total_pnl": self.total_pnl,
+            "realized_pnl": self.realized_pnl,
+            "unrealized_pnl": self.unrealized_pnl,
+        }
+
+
+@dataclass
+class ClosedTrade:
+    """Record of a closed trade for bar chart visualization"""
+
+    timestamp: str
+    market_slug: str
+    pnl: float
+    exit_reason: str
+    hold_duration_sec: float
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "market_slug": self.market_slug,
+            "pnl": self.pnl,
+            "exit_reason": self.exit_reason,
+            "hold_duration_sec": self.hold_duration_sec,
+        }
 
 
 @dataclass
@@ -51,6 +120,11 @@ class BotMetrics:
     ws_message_count: int = 0
     avg_message_latency_ms: float = 0.0
     ws_reconnects: int = 0
+
+    # Event buffers (initialized in __post_init__)
+    _events: deque = field(default_factory=lambda: deque(maxlen=100))
+    _pnl_history: deque = field(default_factory=lambda: deque(maxlen=500))
+    _trades_history: list = field(default_factory=list)
 
     def start(self):
         """Mark bot start time"""
@@ -98,6 +172,60 @@ class BotMetrics:
         """Reset daily metrics"""
         self.daily_pnl = 0.0
 
+    def record_event(
+        self,
+        event_type: str,
+        symbol: str,
+        details: dict | None = None,
+    ):
+        """Record a trading event to the unified event stream"""
+        event = TradingEvent(
+            event_type=event_type,
+            symbol=symbol,
+            timestamp=datetime.now().isoformat(),
+            details=details or {},
+        )
+        self._events.appendleft(event)
+
+    def record_pnl_snapshot(self):
+        """Record current P&L state for time-series chart"""
+        snapshot = PnlSnapshot(
+            timestamp=datetime.now().isoformat(),
+            total_pnl=self.total_pnl,
+            realized_pnl=self.realized_pnl,
+            unrealized_pnl=self.unrealized_pnl,
+        )
+        self._pnl_history.append(snapshot)
+
+    def record_closed_trade(
+        self,
+        market_slug: str,
+        pnl: float,
+        exit_reason: str,
+        hold_duration_sec: float,
+    ):
+        """Record a closed trade for bar chart visualization"""
+        trade = ClosedTrade(
+            timestamp=datetime.now().isoformat(),
+            market_slug=market_slug,
+            pnl=pnl,
+            exit_reason=exit_reason,
+            hold_duration_sec=hold_duration_sec,
+        )
+        self._trades_history.append(trade)
+
+    def get_events(self) -> list[dict]:
+        """Get events as list of dicts for export"""
+        return [e.to_dict() for e in self._events]
+
+    def get_pnl_history(self) -> list[dict]:
+        """Get P&L history as list of dicts for export"""
+        return [s.to_dict() for s in self._pnl_history]
+
+    def get_trades_history(self) -> list[dict]:
+        """Get trades history as list of dicts for export"""
+        return [t.to_dict() for t in self._trades_history]
+
     @property
     def win_rate(self) -> float:
         """Calculate win rate"""
@@ -135,7 +263,6 @@ class BotMetrics:
         path: str = DEFAULT_METRICS_PATH,
         active_markets: list | None = None,
         active_windows: list | None = None,
-        recent_signals: list | None = None,
         config_summary: dict | None = None,
     ) -> bool:
         """Export metrics to JSON file for IPC with API server"""
@@ -143,6 +270,11 @@ class BotMetrics:
             data = self.summary()
             data["timestamp"] = datetime.now().isoformat()
             data["start_time"] = self.start_time.isoformat() if self.start_time else None
+
+            # Bot status (single source of truth for ControlPanel)
+            data["pid"] = os.getpid()
+            data["bot_running"] = True  # If we're exporting, bot is running
+
             # Add additional fields for dashboard
             data["markets_fetched"] = self.markets_fetched
             data["trades_attempted"] = self.trades_attempted
@@ -155,8 +287,12 @@ class BotMetrics:
             # Live visibility data for dashboard
             data["active_markets"] = active_markets or []
             data["active_windows"] = active_windows or []
-            data["recent_signals"] = recent_signals or []
             data["config_summary"] = config_summary or {}
+
+            # Unified event stream for dashboard
+            data["events"] = self.get_events()
+            data["pnl_history"] = self.get_pnl_history()
+            data["trades_history"] = self.get_trades_history()
 
             # Atomic write using temp file
             temp_path = f"{path}.tmp"
