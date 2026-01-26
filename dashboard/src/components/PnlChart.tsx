@@ -91,9 +91,7 @@ export function PnlChart({ data }: Props) {
           }}
         >
           <div style={{ marginBottom: '0.25rem' }}>Collecting data...</div>
-          <div style={{ fontSize: '0.6875rem' }}>
-            Chart will appear after ~30 seconds of data
-          </div>
+          <div style={{ fontSize: '0.6875rem' }}>Chart will appear after ~30 seconds of data</div>
         </div>
       ) : (
         <div style={{ padding: '0.75rem', height: '180px' }}>

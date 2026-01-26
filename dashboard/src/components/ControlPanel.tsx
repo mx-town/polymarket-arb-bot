@@ -37,7 +37,10 @@ export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
       // Trigger data refresh
       setTimeout(() => onRefresh?.(), 1000);
     } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : 'Failed to refresh markets', type: 'error' });
+      setMessage({
+        text: e instanceof Error ? e.message : 'Failed to refresh markets',
+        type: 'error',
+      });
     } finally {
       setRefreshing(false);
     }

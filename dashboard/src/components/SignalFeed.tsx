@@ -151,8 +151,7 @@ export function SignalFeed({ events }: Props) {
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  color:
-                    (event.pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                  color: (event.pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
                 }}
               >
                 ${event.pnl?.toFixed(4) || '\u2014'}
@@ -160,7 +159,9 @@ export function SignalFeed({ events }: Props) {
             </span>
             <span>
               <span style={{ color: 'var(--text-muted)' }}>Reason: </span>
-              <span style={{ fontFamily: 'var(--font-mono)' }}>{event.exit_reason || '\u2014'}</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                {event.exit_reason || '\u2014'}
+              </span>
             </span>
           </div>
         );

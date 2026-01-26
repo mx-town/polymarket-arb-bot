@@ -287,10 +287,9 @@ class ArbBot:
                 continue
 
             # Remove if past resolution time (with 60s buffer)
-            if market.resolution_time:
-                if now > market.resolution_time:
-                    to_remove.append((market_id, "expired"))
-                    continue
+            if market.resolution_time and now > market.resolution_time:
+                to_remove.append((market_id, "expired"))
+                continue
 
         for market_id, reason in to_remove:
             market = self.state_manager.get_market(market_id)
@@ -471,8 +470,10 @@ class ArbBot:
             if closed:
                 pnl = closed.realized_pnl
                 hold_duration = (
-                    closed.closed_at - closed.opened_at
-                ).total_seconds() if closed.closed_at and closed.opened_at else 0.0
+                    (closed.closed_at - closed.opened_at).total_seconds()
+                    if closed.closed_at and closed.opened_at
+                    else 0.0
+                )
                 self.risk_manager.record_trade_result(pnl)
                 self.metrics.record_trade(success=True, pnl=pnl)
                 logger.info(

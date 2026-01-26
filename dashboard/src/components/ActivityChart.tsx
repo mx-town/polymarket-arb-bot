@@ -88,9 +88,7 @@ export function ActivityChart({ trades }: Props) {
           }}
         >
           <div style={{ marginBottom: '0.25rem' }}>No closed trades yet</div>
-          <div style={{ fontSize: '0.6875rem' }}>
-            Bars will appear after positions are closed
-          </div>
+          <div style={{ fontSize: '0.6875rem' }}>Bars will appear after positions are closed</div>
         </div>
       ) : (
         <div style={{ padding: '0.75rem', height: '180px' }}>

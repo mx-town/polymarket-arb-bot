@@ -4,12 +4,12 @@ import { getConfig, updateConfig } from '../api/client';
 
 // Section accent colors for visual differentiation
 const SECTION_COLORS = {
-  entry: '#4a9eff',      // Blue - entry decisions
-  position: '#00d4aa',   // Green - money/sizing
-  timing: '#ffaa00',     // Amber - time-based
-  risk: '#ff4757',       // Red - risk/danger
-  momentum: '#b366ff',   // Purple - momentum/triggers
-  filters: '#8888a0',    // Gray - filtering
+  entry: '#4a9eff', // Blue - entry decisions
+  position: '#00d4aa', // Green - money/sizing
+  timing: '#ffaa00', // Amber - time-based
+  risk: '#ff4757', // Red - risk/danger
+  momentum: '#b366ff', // Purple - momentum/triggers
+  filters: '#8888a0', // Gray - filtering
 } as const;
 
 // Time window options
@@ -75,13 +75,7 @@ function Toggle({
 }
 
 // Time window selector - segmented control style
-function TimeWindowSelector({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
+function TimeWindowSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <span
@@ -116,14 +110,8 @@ function TimeWindowSelector({
               fontFamily: 'var(--font-mono)',
               fontWeight: 600,
               border: 'none',
-              background:
-                value === window.value
-                  ? 'var(--accent-amber)'
-                  : 'transparent',
-              color:
-                value === window.value
-                  ? '#0a0a0f'
-                  : 'var(--text-muted)',
+              background: value === window.value ? 'var(--accent-amber)' : 'transparent',
+              color: value === window.value ? '#0a0a0f' : 'var(--text-muted)',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
             }}
@@ -165,7 +153,14 @@ function InlineValue({
 
   if (editing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0.25rem 0',
+        }}
+      >
         <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', minWidth: '70px' }}>
           {label}
         </span>
@@ -184,7 +179,9 @@ function InlineValue({
               textAlign: 'right',
             }}
           />
-          <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', minWidth: '16px' }}>{suffix}</span>
+          <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', minWidth: '16px' }}>
+            {suffix}
+          </span>
         </div>
       </div>
     );
@@ -208,9 +205,7 @@ function InlineValue({
       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-elevated)')}
       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
     >
-      <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
-        {label}
-      </span>
+      <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>{label}</span>
       <span
         style={{
           fontFamily: 'var(--font-mono)',
@@ -606,7 +601,11 @@ export function ConfigPanel() {
         </CollapsibleSection>
 
         {/* Momentum Triggers */}
-        <CollapsibleSection title="Momentum Triggers" accentColor={SECTION_COLORS.momentum} defaultOpen={false}>
+        <CollapsibleSection
+          title="Momentum Triggers"
+          accentColor={SECTION_COLORS.momentum}
+          defaultOpen={false}
+        >
           <InlineValue
             label="Trigger Threshold"
             value={config.lag_arb.momentum_trigger_threshold_pct}
@@ -631,7 +630,11 @@ export function ConfigPanel() {
         </CollapsibleSection>
 
         {/* Market Filters */}
-        <CollapsibleSection title="Market Filters" accentColor={SECTION_COLORS.filters} defaultOpen={false}>
+        <CollapsibleSection
+          title="Market Filters"
+          accentColor={SECTION_COLORS.filters}
+          defaultOpen={false}
+        >
           <InlineValue
             label="Min Volume (24h)"
             value={config.filters.min_volume_24h}

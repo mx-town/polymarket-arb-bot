@@ -27,9 +27,9 @@ Why this works:
 - Even if wrong about direction, profit if combined < $1.00
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from src.config import LagArbConfig, TradingConfig
 from src.data.price_tracker import Direction, DirectionSignal
