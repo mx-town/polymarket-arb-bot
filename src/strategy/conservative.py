@@ -8,8 +8,6 @@ Strategy:
 4. Guaranteed profit if entry < $1.00
 """
 
-from typing import Optional
-
 from src.config import ConservativeConfig, TradingConfig
 from src.market.state import MarketState
 from src.strategy.signals import (
@@ -37,7 +35,7 @@ class ConservativeStrategy(SignalDetector):
         self.trading = trading_config
         self.config = strategy_config
 
-    def check_entry(self, market: MarketState) -> Optional[Signal]:
+    def check_entry(self, market: MarketState) -> Signal | None:
         """
         Check if market has entry opportunity.
 
@@ -95,7 +93,7 @@ class ConservativeStrategy(SignalDetector):
         market: MarketState,
         entry_up_price: float,
         entry_down_price: float,
-    ) -> Optional[Signal]:
+    ) -> Signal | None:
         """
         Check if position should exit.
 

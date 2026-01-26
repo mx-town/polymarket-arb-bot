@@ -2,9 +2,15 @@
 Performance metrics tracking for Polymarket Arbitrage Bot.
 """
 
-from dataclasses import dataclass, field
+import json
+import os
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+
+# Default paths for IPC
+DEFAULT_METRICS_PATH = "/tmp/polymarket_metrics.json"
+DEFAULT_PID_PATH = "/tmp/polymarket_bot.pid"
 
 
 @dataclass
@@ -13,8 +19,8 @@ class BotMetrics:
 
     # Cycle stats
     cycles: int = 0
-    start_time: Optional[datetime] = None
-    last_cycle_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    last_cycle_time: datetime | None = None
 
     # Market stats
     markets_fetched: int = 0
@@ -85,9 +91,8 @@ class BotMetrics:
         self.ws_message_count += 1
         # Running average
         self.avg_message_latency_ms = (
-            (self.avg_message_latency_ms * (self.ws_message_count - 1) + latency_ms)
-            / self.ws_message_count
-        )
+            self.avg_message_latency_ms * (self.ws_message_count - 1) + latency_ms
+        ) / self.ws_message_count
 
     def reset_daily(self):
         """Reset daily metrics"""
@@ -124,3 +129,68 @@ class BotMetrics:
             "ws_reconnects": self.ws_reconnects,
             "avg_latency_ms": self.avg_message_latency_ms,
         }
+
+    def export_to_file(
+        self,
+        path: str = DEFAULT_METRICS_PATH,
+        active_markets: list | None = None,
+        active_windows: list | None = None,
+        recent_signals: list | None = None,
+        config_summary: dict | None = None,
+    ) -> bool:
+        """Export metrics to JSON file for IPC with API server"""
+        try:
+            data = self.summary()
+            data["timestamp"] = datetime.now().isoformat()
+            data["start_time"] = self.start_time.isoformat() if self.start_time else None
+            # Add additional fields for dashboard
+            data["markets_fetched"] = self.markets_fetched
+            data["trades_attempted"] = self.trades_attempted
+            data["trades_partial"] = self.trades_partial
+            data["realized_pnl"] = self.realized_pnl
+            data["unrealized_pnl"] = self.unrealized_pnl
+            data["current_exposure"] = self.current_exposure
+            data["ws_message_count"] = self.ws_message_count
+
+            # Live visibility data for dashboard
+            data["active_markets"] = active_markets or []
+            data["active_windows"] = active_windows or []
+            data["recent_signals"] = recent_signals or []
+            data["config_summary"] = config_summary or {}
+
+            # Atomic write using temp file
+            temp_path = f"{path}.tmp"
+            with open(temp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, path)
+            return True
+        except Exception:
+            return False
+
+
+def write_pid(path: str = DEFAULT_PID_PATH) -> bool:
+    """Write current process PID to file"""
+    try:
+        pid = os.getpid()
+        Path(path).write_text(str(pid))
+        return True
+    except Exception:
+        return False
+
+
+def remove_pid(path: str = DEFAULT_PID_PATH) -> bool:
+    """Remove PID file"""
+    try:
+        Path(path).unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def read_pid(path: str = DEFAULT_PID_PATH) -> int | None:
+    """Read PID from file"""
+    try:
+        content = Path(path).read_text().strip()
+        return int(content)
+    except Exception:
+        return None

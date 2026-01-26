@@ -2,10 +2,9 @@
 Position tracking for Polymarket Arbitrage Bot.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict
 
 
 class PositionStatus(Enum):
@@ -32,10 +31,10 @@ class Position:
     status: PositionStatus = PositionStatus.PENDING
 
     # Exit details (filled on close)
-    exit_time: Optional[datetime] = None
+    exit_time: datetime | None = None
     up_exit_price: float = 0.0
     down_exit_price: float = 0.0
-    exit_reason: Optional[str] = None
+    exit_reason: str | None = None
 
     @property
     def total_cost(self) -> float:
@@ -83,11 +82,13 @@ class Position:
         """Realized P&L (only valid when closed)"""
         if self.status != PositionStatus.CLOSED:
             return 0.0
-        exit_value = (self.up_shares * self.up_exit_price) + (self.down_shares * self.down_exit_price)
+        exit_value = (self.up_shares * self.up_exit_price) + (
+            self.down_shares * self.down_exit_price
+        )
         return exit_value - self.total_cost
 
     @property
-    def hold_duration_seconds(self) -> Optional[float]:
+    def hold_duration_seconds(self) -> float | None:
         """Duration position was held"""
         if not self.exit_time:
             return (datetime.now() - self.entry_time).total_seconds()
@@ -98,14 +99,14 @@ class PositionManager:
     """Manages all open positions"""
 
     def __init__(self):
-        self.positions: Dict[str, Position] = {}  # market_id -> Position
+        self.positions: dict[str, Position] = {}  # market_id -> Position
         self.closed_positions: list[Position] = []
 
     def has_position(self, market_id: str) -> bool:
         """Check if we have an open position in a market"""
         return market_id in self.positions
 
-    def get_position(self, market_id: str) -> Optional[Position]:
+    def get_position(self, market_id: str) -> Position | None:
         """Get position for a market"""
         return self.positions.get(market_id)
 
@@ -138,7 +139,7 @@ class PositionManager:
         up_exit_price: float,
         down_exit_price: float,
         reason: str,
-    ) -> Optional[Position]:
+    ) -> Position | None:
         """Close a position"""
         position = self.positions.pop(market_id, None)
         if position:
@@ -158,7 +159,7 @@ class PositionManager:
         """Total realized P&L from closed positions"""
         return sum(p.realized_pnl for p in self.closed_positions)
 
-    def total_unrealized_pnl(self, market_prices: Dict[str, tuple[float, float]]) -> float:
+    def total_unrealized_pnl(self, market_prices: dict[str, tuple[float, float]]) -> float:
         """
         Total unrealized P&L.
 

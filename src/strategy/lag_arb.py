@@ -27,13 +27,12 @@ Why this works:
 - Even if wrong about direction, profit if combined < $1.00
 """
 
-from datetime import datetime
-from typing import Optional, Dict
 from dataclasses import dataclass
+from datetime import datetime
 
 from src.config import LagArbConfig, TradingConfig
+from src.data.price_tracker import Direction, DirectionSignal
 from src.market.state import MarketState
-from src.data.price_tracker import DirectionSignal, Direction
 from src.strategy.signals import (
     ArbOpportunity,
     ExitReason,
@@ -50,7 +49,7 @@ logger = get_logger("lag_arb")
 class LagWindow:
     """
     Tracks an active lag arbitrage window.
-    
+
     Created when spot price crosses above/below candle open,
     indicating which side SHOULD win at resolution.
     """
@@ -79,10 +78,10 @@ class LagWindow:
 class LagArbStrategy(SignalDetector):
     """
     Lag arbitrage strategy using Binance candle comparison.
-    
+
     Primary signal: spot vs candle_open → predicts resolution winner
     Secondary signal: momentum → confirms not reversing
-    
+
     More aggressive than conservative strategy:
     - Enters during predicted lag windows
     - Accepts entries up to combined_ask = $1.00 (0% fees on 1H)
@@ -98,7 +97,7 @@ class LagArbStrategy(SignalDetector):
         self.config = lag_config
 
         # Active lag windows by symbol
-        self.lag_windows: Dict[str, LagWindow] = {}
+        self.lag_windows: dict[str, LagWindow] = {}
 
         # Map market slugs to Binance symbols
         self.market_to_symbol = {
@@ -109,7 +108,7 @@ class LagArbStrategy(SignalDetector):
     def on_direction_signal(self, signal: DirectionSignal):
         """
         Handle direction signal from price tracker.
-        
+
         Opens a lag window when spot crosses significantly above/below candle open.
         """
         if not signal.is_significant:
@@ -131,12 +130,12 @@ class LagArbStrategy(SignalDetector):
 
         self.lag_windows[signal.symbol] = window
 
-        logger.debug(
+        logger.info(
             "LAG_WINDOW_OPEN",
-            f"symbol={signal.symbol} expected_winner={expected_winner} "
-            f"move_from_open={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
-            f"spot={signal.current_price:.2f} candle_open={signal.candle_open:.2f} "
-            f"window_ms={self.config.max_lag_window_ms}",
+            f"symbol={signal.symbol} winner={expected_winner} "
+            f"momentum={signal.momentum * 100:.3f}% "
+            f"spot={signal.current_price:.2f} open={signal.candle_open:.2f} "
+            f"window={self.config.max_lag_window_ms}ms",
         )
 
     # Backwards compatibility
@@ -144,7 +143,7 @@ class LagArbStrategy(SignalDetector):
         """Alias for on_direction_signal (backwards compatibility)"""
         self.on_direction_signal(signal)
 
-    def _get_symbol_for_market(self, market: MarketState) -> Optional[str]:
+    def _get_symbol_for_market(self, market: MarketState) -> str | None:
         """Get Binance symbol for a market"""
         slug = market.slug.lower()
         for asset, symbol in self.market_to_symbol.items():
@@ -152,7 +151,7 @@ class LagArbStrategy(SignalDetector):
                 return symbol
         return None
 
-    def _get_active_window(self, symbol: str) -> Optional[LagWindow]:
+    def _get_active_window(self, symbol: str) -> LagWindow | None:
         """Get active (non-expired) lag window for symbol"""
         window = self.lag_windows.get(symbol)
         if window and not window.is_expired:
@@ -160,19 +159,23 @@ class LagArbStrategy(SignalDetector):
 
         # Clean up expired window
         if window:
+            logger.info(
+                "LAG_WINDOW_EXPIRED",
+                f"symbol={symbol} winner={window.expected_winner} entry_made={window.entry_made}",
+            )
             del self.lag_windows[symbol]
         return None
 
-    def check_entry(self, market: MarketState) -> Optional[Signal]:
+    def check_entry(self, market: MarketState) -> Signal | None:
         """
         Check if market has lag arbitrage entry opportunity.
-        
+
         Entry conditions:
         1. Active lag window (spot crossed above/below candle open)
         2. combined_ask < max_combined_price (up to $1.00 for 0% fee markets)
         3. Fresh book data (not stale)
         4. Enough time to resolution
-        
+
         We're buying BOTH sides, so direction doesn't affect sizing.
         We profit as long as combined < $1.00 at resolution.
         """
@@ -193,6 +196,12 @@ class LagArbStrategy(SignalDetector):
 
         # Lag arb uses aggressive threshold (up to $1.00 for 0% fee 1H markets)
         if combined >= self.config.max_combined_price:
+            logger.info(
+                "LAG_ENTRY_SKIP",
+                f"market={market.slug} combined={combined:.4f} "
+                f"max={self.config.max_combined_price:.4f} "
+                f"winner={window.expected_winner} window_remaining={window.remaining_ms:.0f}ms",
+            )
             return None
 
         # Calculate profits
@@ -233,8 +242,8 @@ class LagArbStrategy(SignalDetector):
         market: MarketState,
         entry_up_price: float,
         entry_down_price: float,
-        entry_time: Optional[datetime] = None,
-    ) -> Optional[Signal]:
+        entry_time: datetime | None = None,
+    ) -> Signal | None:
         """
         Check if position should exit.
 

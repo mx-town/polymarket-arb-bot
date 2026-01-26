@@ -4,9 +4,8 @@ Market state management for Polymarket Arbitrage Bot.
 Tracks real-time state of Up/Down markets from WebSocket updates.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict
 from enum import Enum
 
 
@@ -30,7 +29,7 @@ class MarketState:
     down_token_id: str
 
     # Timing
-    resolution_time: Optional[datetime] = None
+    resolution_time: datetime | None = None
     status: MarketStatus = MarketStatus.ACTIVE
 
     # Real-time prices (from WebSocket)
@@ -45,9 +44,9 @@ class MarketState:
     down_ask_size: float = 0.0
 
     # Timestamps
-    last_update: Optional[datetime] = None
-    last_up_update: Optional[datetime] = None
-    last_down_update: Optional[datetime] = None
+    last_update: datetime | None = None
+    last_up_update: datetime | None = None
+    last_down_update: datetime | None = None
 
     @property
     def combined_ask(self) -> float:
@@ -79,7 +78,7 @@ class MarketState:
         return (self.down_best_ask - self.down_best_bid) / self.down_best_bid
 
     @property
-    def time_to_resolution(self) -> Optional[float]:
+    def time_to_resolution(self) -> float | None:
         """Seconds until resolution"""
         if not self.resolution_time:
             return None
@@ -104,7 +103,9 @@ class MarketState:
         self.last_up_update = datetime.now()
         self.last_update = self.last_up_update
 
-    def update_down(self, best_bid: float, best_ask: float, bid_size: float = 0, ask_size: float = 0):
+    def update_down(
+        self, best_bid: float, best_ask: float, bid_size: float = 0, ask_size: float = 0
+    ):
         """Update DOWN side prices"""
         self.down_best_bid = best_bid
         self.down_best_ask = best_ask
@@ -118,9 +119,9 @@ class MarketStateManager:
     """Manages collection of market states"""
 
     def __init__(self):
-        self.markets: Dict[str, MarketState] = {}
-        self._token_to_market: Dict[str, str] = {}  # token_id -> market_id
-        self._token_is_up: Dict[str, bool] = {}  # token_id -> is_up_side
+        self.markets: dict[str, MarketState] = {}
+        self._token_to_market: dict[str, str] = {}  # token_id -> market_id
+        self._token_is_up: dict[str, bool] = {}  # token_id -> is_up_side
 
     def add_market(self, state: MarketState):
         """Add or update a market"""
@@ -130,11 +131,11 @@ class MarketStateManager:
         self._token_is_up[state.up_token_id] = True
         self._token_is_up[state.down_token_id] = False
 
-    def get_market(self, market_id: str) -> Optional[MarketState]:
+    def get_market(self, market_id: str) -> MarketState | None:
         """Get market by ID"""
         return self.markets.get(market_id)
 
-    def get_market_by_token(self, token_id: str) -> Optional[MarketState]:
+    def get_market_by_token(self, token_id: str) -> MarketState | None:
         """Get market by token ID"""
         market_id = self._token_to_market.get(token_id)
         if market_id:
@@ -145,8 +146,14 @@ class MarketStateManager:
         """Check if token is UP side"""
         return self._token_is_up.get(token_id, False)
 
-    def update_from_book(self, token_id: str, best_bid: float, best_ask: float,
-                         bid_size: float = 0, ask_size: float = 0):
+    def update_from_book(
+        self,
+        token_id: str,
+        best_bid: float,
+        best_ask: float,
+        bid_size: float = 0,
+        ask_size: float = 0,
+    ):
         """Update market from order book data"""
         market = self.get_market_by_token(token_id)
         if not market:

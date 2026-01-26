@@ -2,15 +2,14 @@
 Order execution via CLOB API.
 """
 
-from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, BookParams
+from py_clob_client.clob_types import BookParams, OrderArgs
 from py_clob_client.order_builder.constants import BUY, SELL
 
-from src.config import CLOB_HOST, CHAIN_ID, TradingConfig
+from src.config import CHAIN_ID, CLOB_HOST, TradingConfig
 from src.strategy.signals import ArbOpportunity
 from src.utils.logging import get_logger
 
@@ -35,11 +34,11 @@ class OrderResult:
     """Result of an order attempt"""
 
     success: bool
-    order_id: Optional[str] = None
+    order_id: str | None = None
     status: OrderStatus = OrderStatus.PENDING
     filled_size: float = 0.0
     filled_price: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class OrderExecutor:
@@ -48,11 +47,11 @@ class OrderExecutor:
     def __init__(
         self,
         config: TradingConfig,
-        private_key: Optional[str] = None,
-        funder_address: Optional[str] = None,
+        private_key: str | None = None,
+        funder_address: str | None = None,
     ):
         self.config = config
-        self.client: Optional[ClobClient] = None
+        self.client: ClobClient | None = None
 
         if not config.dry_run:
             if not private_key or not funder_address:
@@ -73,7 +72,7 @@ class OrderExecutor:
             self.client = ClobClient(CLOB_HOST)
             logger.info("INIT", "Read-only CLOB client (DRY RUN)")
 
-    def get_order_book(self, token_id: str) -> Optional[dict]:
+    def get_order_book(self, token_id: str) -> dict | None:
         """Fetch order book for a token"""
         try:
             book = self.client.get_order_book(token_id)
@@ -153,7 +152,9 @@ class OrderExecutor:
             logger.error("ORDER_ERROR", f"token={token_id[:16]}... error={e}")
             return OrderResult(success=False, error=str(e), status=OrderStatus.FAILED)
 
-    def execute_arb_entry(self, opp: ArbOpportunity, position_size: float) -> tuple[OrderResult, OrderResult]:
+    def execute_arb_entry(
+        self, opp: ArbOpportunity, position_size: float
+    ) -> tuple[OrderResult, OrderResult]:
         """
         Execute arbitrage entry: buy both UP and DOWN.
 

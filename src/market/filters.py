@@ -4,11 +4,8 @@ Market filtering functions.
 Filter markets based on liquidity, timing, and other criteria.
 """
 
-from datetime import datetime
-from typing import Optional
-
-from src.market.state import MarketState, MarketStateManager
 from src.config import FilterConfig
+from src.market.state import MarketState, MarketStateManager
 from src.utils.logging import get_logger
 
 logger = get_logger("filters")
@@ -35,10 +32,7 @@ def filter_by_liquidity(
         return False
 
     # Check ask sizes
-    if market.up_ask_size < min_book_depth or market.down_ask_size < min_book_depth:
-        return False
-
-    return True
+    return not (market.up_ask_size < min_book_depth or market.down_ask_size < min_book_depth)
 
 
 def filter_by_spread(
@@ -55,11 +49,7 @@ def filter_by_spread(
     Returns:
         True if spreads are acceptable
     """
-    if market.spread_up > max_spread_pct:
-        return False
-    if market.spread_down > max_spread_pct:
-        return False
-    return True
+    return market.spread_up <= max_spread_pct and market.spread_down <= max_spread_pct
 
 
 def filter_by_time_to_resolution(

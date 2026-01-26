@@ -6,7 +6,6 @@ Format: timestamp | level | component | event | details
 
 import logging
 import sys
-from typing import Optional
 
 
 class ComponentLogger:
@@ -17,22 +16,22 @@ class ComponentLogger:
         self.logger = logging.getLogger(f"arb_bot.{component}")
         self.logger.setLevel(level)
 
-    def _format(self, event: str, details: Optional[str] = None) -> str:
+    def _format(self, event: str, details: str | None = None) -> str:
         msg = f"[{self.component}] {event}"
         if details:
             msg += f" | {details}"
         return msg
 
-    def info(self, event: str, details: Optional[str] = None):
+    def info(self, event: str, details: str | None = None):
         self.logger.info(self._format(event, details))
 
-    def warning(self, event: str, details: Optional[str] = None):
+    def warning(self, event: str, details: str | None = None):
         self.logger.warning(self._format(event, details))
 
-    def error(self, event: str, details: Optional[str] = None):
+    def error(self, event: str, details: str | None = None):
         self.logger.error(self._format(event, details))
 
-    def debug(self, event: str, details: Optional[str] = None):
+    def debug(self, event: str, details: str | None = None):
         self.logger.debug(self._format(event, details))
 
 

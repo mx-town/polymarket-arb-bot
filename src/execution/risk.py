@@ -4,7 +4,6 @@ Risk management for Polymarket Arbitrage Bot.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from src.config import RiskConfig
 from src.execution.position import PositionManager
@@ -19,10 +18,10 @@ class RiskState:
 
     consecutive_losses: int = 0
     daily_pnl: float = 0.0
-    last_loss_time: Optional[datetime] = None
+    last_loss_time: datetime | None = None
     is_paused: bool = False
-    pause_reason: Optional[str] = None
-    pause_until: Optional[datetime] = None
+    pause_reason: str | None = None
+    pause_until: datetime | None = None
 
 
 class RiskManager:
@@ -63,6 +62,7 @@ class RiskManager:
         self.state.pause_until = datetime.now()
         # Add seconds to pause_until
         from datetime import timedelta
+
         self.state.pause_until += timedelta(seconds=seconds)
 
         logger.warning(
@@ -70,7 +70,7 @@ class RiskManager:
             f"reason={reason} until={self.state.pause_until.isoformat()}",
         )
 
-    def check_can_trade(self) -> tuple[bool, Optional[str]]:
+    def check_can_trade(self) -> tuple[bool, str | None]:
         """
         Check if trading is allowed.
 
@@ -94,7 +94,7 @@ class RiskManager:
         self,
         position_manager: PositionManager,
         new_position_size: float,
-    ) -> tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """
         Check if new position would exceed exposure limits.
 
