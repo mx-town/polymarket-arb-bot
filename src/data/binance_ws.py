@@ -6,9 +6,9 @@ Used for lag arbitrage: detecting spot moves before Polymarket reprices.
 """
 
 import json
-import time
 import threading
-from typing import Callable, Optional, List
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -55,8 +55,8 @@ class BinanceWebSocket:
 
     def __init__(
         self,
-        symbols: List[str] = None,
-        on_trade: Optional[Callable[[AggTrade], None]] = None,
+        symbols: list[str] = None,
+        on_trade: Callable[[AggTrade], None] | None = None,
         reconnect_delay: float = 5.0,
     ):
         """
@@ -69,8 +69,8 @@ class BinanceWebSocket:
         self.on_trade = on_trade
         self.reconnect_delay = reconnect_delay
 
-        self.ws: Optional[websocket.WebSocketApp] = None
-        self.thread: Optional[threading.Thread] = None
+        self.ws: websocket.WebSocketApp | None = None
+        self.thread: threading.Thread | None = None
         self.running = False
         self.connected = False
         self.reconnect_count = 0
@@ -193,11 +193,11 @@ class BinanceWebSocket:
             self.ws.close()
         logger.info("CLOSED", "Binance WebSocket disconnected")
 
-    def get_price(self, symbol: str) -> Optional[float]:
+    def get_price(self, symbol: str) -> float | None:
         """Get latest price for a symbol"""
         return self.latest_prices.get(symbol.upper())
 
-    def get_latest_trade(self, symbol: str) -> Optional[AggTrade]:
+    def get_latest_trade(self, symbol: str) -> AggTrade | None:
         """Get latest trade for a symbol"""
         return self.latest_trades.get(symbol.upper())
 

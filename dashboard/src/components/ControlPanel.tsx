@@ -45,87 +45,107 @@ export function ControlPanel() {
   };
 
   return (
-    <div style={{
-      background: 'var(--bg-card)',
-      borderRadius: 'var(--radius-md)',
-      border: '1px solid var(--border)',
-      overflow: 'hidden',
-    }}>
+    <div
+      style={{
+        background: 'var(--bg-card)',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border)',
+        overflow: 'hidden',
+      }}
+    >
       {/* Header */}
-      <div style={{
-        padding: '0.75rem 1rem',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        background: 'var(--bg-elevated)',
-      }}>
+      <div
+        style={{
+          padding: '0.75rem 1rem',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          background: 'var(--bg-elevated)',
+        }}
+      >
         <span style={{ fontSize: '1rem' }}>⌘</span>
-        <span style={{
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          color: 'var(--text-secondary)',
-        }}>
+        <span
+          style={{
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            color: 'var(--text-secondary)',
+          }}
+        >
           Control
         </span>
       </div>
 
       {/* Status Display */}
       <div style={{ padding: '1rem' }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          marginBottom: '1rem',
-        }}>
-          <div style={{
-            width: '12px',
-            height: '12px',
-            borderRadius: '50%',
-            background: status?.running ? 'var(--accent-green)' : 'var(--accent-red)',
-            boxShadow: status?.running
-              ? '0 0 12px var(--accent-green), 0 0 4px var(--accent-green)'
-              : '0 0 12px var(--accent-red)',
-            animation: status?.running ? 'pulse 2s ease-in-out infinite' : undefined,
-          }} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            marginBottom: '1rem',
+          }}
+        >
+          <div
+            style={{
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              background: status?.running ? 'var(--accent-green)' : 'var(--accent-red)',
+              boxShadow: status?.running
+                ? '0 0 12px var(--accent-green), 0 0 4px var(--accent-green)'
+                : '0 0 12px var(--accent-red)',
+              animation: status?.running ? 'pulse 2s ease-in-out infinite' : undefined,
+            }}
+          />
           <div>
-            <div style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: status?.running ? 'var(--accent-green)' : 'var(--accent-red)',
-            }}>
+            <div
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: status?.running ? 'var(--accent-green)' : 'var(--accent-red)',
+              }}
+            >
               {status?.running ? 'RUNNING' : 'STOPPED'}
             </div>
             {status?.pid && (
-              <div style={{
-                fontSize: '0.6875rem',
-                color: 'var(--text-muted)',
-                fontFamily: 'var(--font-mono)',
-              }}>
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: 'var(--text-muted)',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
                 PID {status.pid}
               </div>
             )}
           </div>
           {status?.uptime_sec && (
-            <div style={{
-              marginLeft: 'auto',
-              textAlign: 'right',
-            }}>
-              <div style={{
-                fontSize: '0.6875rem',
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-              }}>
+            <div
+              style={{
+                marginLeft: 'auto',
+                textAlign: 'right',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: 'var(--text-muted)',
+                  textTransform: 'uppercase',
+                }}
+              >
                 Uptime
               </div>
-              <div style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.875rem',
-                color: 'var(--text-primary)',
-              }}>
+              <div
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.875rem',
+                  color: 'var(--text-primary)',
+                }}
+              >
                 {formatUptime(status.uptime_sec)}
               </div>
             </div>
@@ -170,13 +190,16 @@ export function ControlPanel() {
 
       {/* Message */}
       {message && (
-        <div style={{
-          padding: '0.75rem 1rem',
-          background: message.type === 'success' ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
-          color: message.type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)',
-          fontSize: '0.75rem',
-          borderTop: '1px solid var(--border)',
-        }}>
+        <div
+          style={{
+            padding: '0.75rem 1rem',
+            background:
+              message.type === 'success' ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
+            color: message.type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)',
+            fontSize: '0.75rem',
+            borderTop: '1px solid var(--border)',
+          }}
+        >
           {message.text}
         </div>
       )}

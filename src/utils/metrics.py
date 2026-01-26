@@ -4,10 +4,9 @@ Performance metrics tracking for Polymarket Arbitrage Bot.
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 # Default paths for IPC
 DEFAULT_METRICS_PATH = "/tmp/polymarket_metrics.json"
@@ -20,8 +19,8 @@ class BotMetrics:
 
     # Cycle stats
     cycles: int = 0
-    start_time: Optional[datetime] = None
-    last_cycle_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    last_cycle_time: datetime | None = None
 
     # Market stats
     markets_fetched: int = 0
@@ -92,9 +91,8 @@ class BotMetrics:
         self.ws_message_count += 1
         # Running average
         self.avg_message_latency_ms = (
-            (self.avg_message_latency_ms * (self.ws_message_count - 1) + latency_ms)
-            / self.ws_message_count
-        )
+            self.avg_message_latency_ms * (self.ws_message_count - 1) + latency_ms
+        ) / self.ws_message_count
 
     def reset_daily(self):
         """Reset daily metrics"""
@@ -135,10 +133,10 @@ class BotMetrics:
     def export_to_file(
         self,
         path: str = DEFAULT_METRICS_PATH,
-        active_markets: Optional[list] = None,
-        active_windows: Optional[list] = None,
-        recent_signals: Optional[list] = None,
-        config_summary: Optional[dict] = None,
+        active_markets: list | None = None,
+        active_windows: list | None = None,
+        recent_signals: list | None = None,
+        config_summary: dict | None = None,
     ) -> bool:
         """Export metrics to JSON file for IPC with API server"""
         try:
@@ -189,7 +187,7 @@ def remove_pid(path: str = DEFAULT_PID_PATH) -> bool:
         return False
 
 
-def read_pid(path: str = DEFAULT_PID_PATH) -> Optional[int]:
+def read_pid(path: str = DEFAULT_PID_PATH) -> int | None:
     """Read PID from file"""
     try:
         content = Path(path).read_text().strip()

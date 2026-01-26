@@ -9,27 +9,26 @@ Strategies:
 """
 
 import os
-import time
 import signal
-import sys
 import threading
-from typing import Optional, Union
+import time
 
-from src.config import build_config, BotConfig
-from src.utils.logging import setup_logging, get_logger
-from src.utils.metrics import BotMetrics, write_pid, remove_pid
-from src.market.discovery import fetch_updown_markets, fetch_all_markets, fetch_recent_updown_markets
-from src.market.state import MarketStateManager, MarketState
-from src.market.filters import get_tradeable_markets
-from src.strategy.signals import ArbOpportunity, SignalDetector
-from src.strategy.conservative import ConservativeStrategy, scan_for_opportunities
-from src.strategy.lag_arb import LagArbStrategy
+from src.config import BotConfig, build_config
+from src.data.binance_ws import BinanceWebSocket
+from src.data.polymarket_ws import PolymarketWebSocket
+from src.data.price_tracker import DirectionSignal, PriceTracker
 from src.execution.orders import OrderExecutor
 from src.execution.position import PositionManager
 from src.execution.risk import RiskManager
-from src.data.polymarket_ws import PolymarketWebSocket
-from src.data.binance_ws import BinanceWebSocket
-from src.data.price_tracker import PriceTracker, DirectionSignal
+from src.market.discovery import (
+    fetch_recent_updown_markets,
+)
+from src.market.state import MarketState, MarketStateManager
+from src.strategy.conservative import ConservativeStrategy
+from src.strategy.lag_arb import LagArbStrategy
+from src.strategy.signals import ArbOpportunity
+from src.utils.logging import get_logger, setup_logging
+from src.utils.metrics import BotMetrics, remove_pid, write_pid
 
 logger = get_logger("main")
 
@@ -43,23 +42,23 @@ class ArbBot:
         self.running = False
 
         # Components
-        self.state_manager: Optional[MarketStateManager] = None
-        self.executor: Optional[OrderExecutor] = None
+        self.state_manager: MarketStateManager | None = None
+        self.executor: OrderExecutor | None = None
         self.position_manager = PositionManager()
         self.risk_manager = RiskManager(config.risk)
 
         # WebSocket clients
-        self.polymarket_ws: Optional[PolymarketWebSocket] = None
-        self.binance_ws: Optional[BinanceWebSocket] = None
+        self.polymarket_ws: PolymarketWebSocket | None = None
+        self.binance_ws: BinanceWebSocket | None = None
 
         # Price tracker for lag arb
-        self.price_tracker: Optional[PriceTracker] = None
+        self.price_tracker: PriceTracker | None = None
 
         # Market refresh thread
-        self._refresh_thread: Optional[threading.Thread] = None
+        self._refresh_thread: threading.Thread | None = None
 
         # Strategy (set based on config)
-        self.strategy: Optional[Union[ConservativeStrategy, LagArbStrategy]] = None
+        self.strategy: ConservativeStrategy | LagArbStrategy | None = None
 
         # Recent signals buffer for dashboard visibility (max 50)
         self._recent_signals: list = []
@@ -73,18 +72,20 @@ class ArbBot:
         print("=" * 60)
         print(f"  Mode:            {'DRY RUN' if cfg.trading.dry_run else 'LIVE'}")
         print(f"  Strategy:        {cfg.strategy}")
-        print(f"  Min gross:       ${cfg.trading.min_spread} ({cfg.trading.min_spread*100:.1f}%)")
-        print(f"  Min net profit:  ${cfg.trading.min_net_profit} ({cfg.trading.min_net_profit*100:.2f}%)")
+        print(f"  Min gross:       ${cfg.trading.min_spread} ({cfg.trading.min_spread * 100:.1f}%)")
+        print(
+            f"  Min net profit:  ${cfg.trading.min_net_profit} ({cfg.trading.min_net_profit * 100:.2f}%)"
+        )
         print(f"  Max position:    ${cfg.trading.max_position_size}")
         print(f"  Market refresh:  {cfg.polling.market_refresh_interval}s")
         if cfg.strategy == "lag_arb":
-            print(f"  Binance feed:    enabled (candle-based)")
+            print("  Binance feed:    enabled (candle-based)")
             print(f"  Candle interval: {cfg.lag_arb.candle_interval}")
-            print(f"  Move threshold:  {cfg.lag_arb.spot_move_threshold_pct*100:.2f}% from open")
-            print(f"  Fee rate:        {cfg.lag_arb.fee_rate*100:.1f}% (1H markets)")
+            print(f"  Move threshold:  {cfg.lag_arb.spot_move_threshold_pct * 100:.2f}% from open")
+            print(f"  Fee rate:        {cfg.lag_arb.fee_rate * 100:.1f}% (1H markets)")
         else:
             print(f"  Poll interval:   {cfg.polling.interval}s")
-            print(f"  Est. fee rate:   {cfg.trading.fee_rate*100:.1f}%")
+            print(f"  Est. fee rate:   {cfg.trading.fee_rate * 100:.1f}%")
         print("=" * 60)
 
     def initialize(self):

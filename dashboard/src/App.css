@@ -83,8 +83,8 @@ body::before {
 }
 
 /* Input styling */
-input[type="number"],
-input[type="text"] {
+input[type='number'],
+input[type='text'] {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   background: var(--bg-primary);
@@ -92,24 +92,26 @@ input[type="text"] {
   color: var(--text-primary);
   padding: 0.5rem 0.625rem;
   border-radius: var(--radius-sm);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
   width: 100%;
 }
 
-input[type="number"]:focus,
-input[type="text"]:focus {
+input[type='number']:focus,
+input[type='text']:focus {
   outline: none;
   border-color: var(--accent-blue);
   box-shadow: 0 0 0 3px var(--accent-blue-dim);
 }
 
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
-input[type="number"] {
+input[type='number'] {
   -moz-appearance: textfield;
 }
 
@@ -129,13 +131,24 @@ button:disabled {
 
 /* Animations */
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 @keyframes slideIn {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-pulse {

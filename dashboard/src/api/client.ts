@@ -152,9 +152,13 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export async function getStatus(): Promise<BotStatus> {
-  const data = await fetchJson<{ running: boolean; pid: number | null; uptime_sec?: number; start_time?: string; last_update?: string }>(
-    `${API_BASE}/status`
-  );
+  const data = await fetchJson<{
+    running: boolean;
+    pid: number | null;
+    uptime_sec?: number;
+    start_time?: string;
+    last_update?: string;
+  }>(`${API_BASE}/status`);
   return data;
 }
 

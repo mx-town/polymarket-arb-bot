@@ -7,7 +7,6 @@ POST /api/restart - Send SIGTERM to bot (expects supervisor to restart)
 
 import os
 import signal
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -52,6 +51,7 @@ async def get_status() -> dict:
     if METRICS_PATH.exists():
         try:
             import json
+
             with open(METRICS_PATH) as f:
                 metrics = json.load(f)
                 status["uptime_sec"] = metrics.get("uptime_sec", 0)

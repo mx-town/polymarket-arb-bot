@@ -13,15 +13,15 @@ TRIGGER LOGIC (momentum-based):
 """
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict, Callable
 from enum import Enum
 
 import requests
 
-from src.data.binance_ws import AggTrade
 from src.config import LagArbConfig
+from src.data.binance_ws import AggTrade
 from src.utils.logging import get_logger
 
 logger = get_logger("price_tracker")
@@ -99,7 +99,7 @@ class DirectionSignal:
         )
 
     @property
-    def expected_winner(self) -> Optional[str]:
+    def expected_winner(self) -> str | None:
         """Which outcome should win at resolution?"""
         if self.direction == Direction.UP:
             return "UP"
@@ -118,12 +118,12 @@ class PricePoint:
     quantity: float
 
 
-def fetch_candle_open(symbol: str, interval: str = "1h") -> Optional[CandleState]:
+def fetch_candle_open(symbol: str, interval: str = "1h") -> CandleState | None:
     """
     Fetch current candle from Binance Klines API.
-    
+
     GET https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1
-    
+
     Response: [[open_time, open, high, low, close, volume, close_time, ...]]
     """
     try:
@@ -169,14 +169,14 @@ class SymbolTracker:
         self.momentum_trigger_threshold = momentum_trigger_threshold  # PRIMARY trigger
 
         # Candle state (fetched from Klines API)
-        self.candle: Optional[CandleState] = None
+        self.candle: CandleState | None = None
 
         # Rolling window of price points (for momentum)
         self.prices: deque[PricePoint] = deque()
 
         # Current spot price (from WebSocket)
         self.current_price: float = 0.0
-        self.last_signal: Optional[DirectionSignal] = None
+        self.last_signal: DirectionSignal | None = None
 
     def refresh_candle(self) -> bool:
         """Fetch fresh candle data from Binance"""
@@ -315,7 +315,7 @@ class SymbolTracker:
 class PriceTracker:
     """
     Tracks prices across multiple symbols for lag arbitrage.
-    
+
     For 1H markets:
     - Fetches candle OPEN from Binance Klines API
     - Compares spot vs candle open to predict winner
@@ -325,12 +325,12 @@ class PriceTracker:
     def __init__(
         self,
         config: LagArbConfig,
-        on_signal: Optional[Callable[[DirectionSignal], None]] = None,
+        on_signal: Callable[[DirectionSignal], None] | None = None,
     ):
         self.config = config
         self.on_signal = on_signal
 
-        self.trackers: Dict[str, SymbolTracker] = {}
+        self.trackers: dict[str, SymbolTracker] = {}
 
         # Map Polymarket assets to Binance symbols
         self.asset_to_symbol = {
@@ -340,7 +340,7 @@ class PriceTracker:
 
     def initialize(self):
         """Initialize trackers and fetch initial candle data"""
-        for asset, symbol in self.asset_to_symbol.items():
+        for _asset, symbol in self.asset_to_symbol.items():
             tracker = self._get_or_create_tracker(symbol)
             tracker.refresh_candle()
 
@@ -364,7 +364,7 @@ class PriceTracker:
     def on_trade(self, trade: AggTrade):
         """
         Handle incoming trade from Binance WebSocket.
-        
+
         Updates tracker and emits signal if direction is clear.
         """
         tracker = self._get_or_create_tracker(trade.symbol)
@@ -377,41 +377,41 @@ class PriceTracker:
             logger.info(
                 "DIRECTION_SIGNAL",
                 f"symbol={signal.symbol} dir={signal.direction.value} "
-                f"momentum={signal.momentum*100:.3f}% "
+                f"momentum={signal.momentum * 100:.3f}% "
                 f"spot={signal.current_price:.2f} open={signal.candle_open:.2f}",
             )
 
             if self.on_signal:
                 self.on_signal(signal)
 
-    def get_signal(self, symbol: str) -> Optional[DirectionSignal]:
+    def get_signal(self, symbol: str) -> DirectionSignal | None:
         """Get current direction signal for a symbol"""
         tracker = self.trackers.get(symbol.upper())
         if tracker:
             return tracker.get_signal()
         return None
 
-    def get_price(self, symbol: str) -> Optional[float]:
+    def get_price(self, symbol: str) -> float | None:
         """Get current price for a symbol"""
         tracker = self.trackers.get(symbol.upper())
         if tracker:
             return tracker.current_price
         return None
 
-    def get_candle_open(self, symbol: str) -> Optional[float]:
+    def get_candle_open(self, symbol: str) -> float | None:
         """Get candle open price for a symbol"""
         tracker = self.trackers.get(symbol.upper())
         if tracker and tracker.candle:
             return tracker.candle.open_price
         return None
 
-    def get_asset_signal(self, asset: str) -> Optional[DirectionSignal]:
+    def get_asset_signal(self, asset: str) -> DirectionSignal | None:
         """
         Get direction signal for a Polymarket asset.
-        
+
         Args:
             asset: "btc" or "eth"
-            
+
         Returns:
             DirectionSignal if tracking, else None
         """

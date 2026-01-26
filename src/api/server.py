@@ -7,13 +7,14 @@ Runs independently from the bot, communicates via:
 - config/default.yaml (configuration)
 """
 
+from pathlib import Path
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
-from src.api.routes import config, metrics, control
+from src.api.routes import config, control, metrics
 
 # Create FastAPI app
 app = FastAPI(
@@ -30,6 +31,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Health check endpoint (before routers to ensure it's accessible)
 @app.get("/api/health")

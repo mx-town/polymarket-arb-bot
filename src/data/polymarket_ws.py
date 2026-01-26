@@ -6,10 +6,9 @@ for real-time order book updates.
 """
 
 import json
-import time
 import threading
-from typing import Callable, Optional
-from datetime import datetime
+import time
+from collections.abc import Callable
 
 import websocket
 
@@ -29,14 +28,14 @@ class PolymarketWebSocket:
         self,
         config: WebSocketConfig,
         state_manager: MarketStateManager,
-        on_update: Optional[Callable[[str], None]] = None,
+        on_update: Callable[[str], None] | None = None,
     ):
         self.config = config
         self.state_manager = state_manager
         self.on_update = on_update  # Callback when market is updated
 
-        self.ws: Optional[websocket.WebSocketApp] = None
-        self.thread: Optional[threading.Thread] = None
+        self.ws: websocket.WebSocketApp | None = None
+        self.thread: threading.Thread | None = None
         self.running = False
         self.connected = False
         self.last_ping = 0.0
@@ -122,8 +121,8 @@ class PolymarketWebSocket:
                 return
 
             # Handle non-JSON text responses
-            if not message.startswith('{') and not message.startswith('['):
-                if message in ('0', 'pong', 'PONG'):  # heartbeat or pong response
+            if not message.startswith("{") and not message.startswith("["):
+                if message in ("0", "pong", "PONG"):  # heartbeat or pong response
                     return
                 logger.warning("SERVER_MESSAGE", message[:100])
                 return
@@ -138,11 +137,14 @@ class PolymarketWebSocket:
             event_type = data.get("event_type")
 
             # Debug: log first few messages to see what we're receiving
-            if not hasattr(self, '_msg_count'):
+            if not hasattr(self, "_msg_count"):
                 self._msg_count = 0
             self._msg_count += 1
             if self._msg_count <= 5:
-                logger.info("MSG_RECEIVED", f"count={self._msg_count} event_type={event_type} keys={list(data.keys())[:5]}")
+                logger.info(
+                    "MSG_RECEIVED",
+                    f"count={self._msg_count} event_type={event_type} keys={list(data.keys())[:5]}",
+                )
 
             if event_type == "book":
                 self._handle_book(data)
@@ -157,7 +159,10 @@ class PolymarketWebSocket:
             logger.error("PARSE_ERROR", f"error={e} msg_repr={repr(message)[:100]}")
         except Exception as e:
             # Log full message structure for debugging
-            logger.error("MESSAGE_HANDLER_ERROR", f"type={type(e).__name__} error={e} keys={list(data.keys()) if isinstance(data, dict) else 'N/A'} msg_preview={str(message)[:200]}")
+            logger.error(
+                "MESSAGE_HANDLER_ERROR",
+                f"type={type(e).__name__} error={e} keys={list(data.keys()) if isinstance(data, dict) else 'N/A'} msg_preview={str(message)[:200]}",
+            )
 
     def _handle_book(self, data: dict):
         """
@@ -181,15 +186,24 @@ class PolymarketWebSocket:
 
         # Ensure bids/asks are lists before accessing by index
         if not isinstance(bids, list) or not isinstance(asks, list):
-            logger.debug("BOOK_INVALID_FORMAT", f"asset={asset_id} bids_type={type(bids).__name__} asks_type={type(asks).__name__}")
+            logger.debug(
+                "BOOK_INVALID_FORMAT",
+                f"asset={asset_id} bids_type={type(bids).__name__} asks_type={type(asks).__name__}",
+            )
             return
 
         # Validate nested structure: bids[0] and asks[0] should be lists like ["price", "size"]
         if bids and (not isinstance(bids[0], (list, tuple)) or len(bids[0]) < 2):
-            logger.debug("BOOK_INVALID_BID_FORMAT", f"asset={asset_id} bid_entry_type={type(bids[0]).__name__}")
+            logger.debug(
+                "BOOK_INVALID_BID_FORMAT",
+                f"asset={asset_id} bid_entry_type={type(bids[0]).__name__}",
+            )
             return
         if asks and (not isinstance(asks[0], (list, tuple)) or len(asks[0]) < 2):
-            logger.debug("BOOK_INVALID_ASK_FORMAT", f"asset={asset_id} ask_entry_type={type(asks[0]).__name__}")
+            logger.debug(
+                "BOOK_INVALID_ASK_FORMAT",
+                f"asset={asset_id} ask_entry_type={type(asks[0]).__name__}",
+            )
             return
 
         best_bid = float(bids[0][0]) if bids else 0.0
@@ -197,9 +211,7 @@ class PolymarketWebSocket:
         bid_size = float(bids[0][1]) if bids else 0.0
         ask_size = float(asks[0][1]) if asks else 0.0
 
-        self.state_manager.update_from_book(
-            asset_id, best_bid, best_ask, bid_size, ask_size
-        )
+        self.state_manager.update_from_book(asset_id, best_bid, best_ask, bid_size, ask_size)
 
         # Notify callback
         market = self.state_manager.get_market_by_token(asset_id)
@@ -232,7 +244,9 @@ class PolymarketWebSocket:
 
         change = changes[0]
         if not isinstance(change, dict):
-            logger.debug("PRICE_CHANGE_INVALID", f"asset={asset_id} change_type={type(change).__name__}")
+            logger.debug(
+                "PRICE_CHANGE_INVALID", f"asset={asset_id} change_type={type(change).__name__}"
+            )
             return
 
         best_bid = float(change.get("best_bid", 0))

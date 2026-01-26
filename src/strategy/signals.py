@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from src.market.state import MarketState
 
@@ -46,7 +45,7 @@ class ArbOpportunity:
     timestamp: datetime
 
     # Optional metadata
-    time_to_resolution: Optional[float] = None
+    time_to_resolution: float | None = None
     confidence: float = 1.0  # For lag arb signals
 
     @property
@@ -90,8 +89,8 @@ class Signal:
 
     signal_type: SignalType
     market_id: str
-    opportunity: Optional[ArbOpportunity] = None
-    exit_reason: Optional[ExitReason] = None
+    opportunity: ArbOpportunity | None = None
+    exit_reason: ExitReason | None = None
     confidence: float = 1.0
     timestamp: datetime = None
 
@@ -104,11 +103,11 @@ class SignalDetector(ABC):
     """Base class for signal detection strategies"""
 
     @abstractmethod
-    def check_entry(self, market: MarketState) -> Optional[Signal]:
+    def check_entry(self, market: MarketState) -> Signal | None:
         """Check if market has entry signal"""
         pass
 
     @abstractmethod
-    def check_exit(self, market: MarketState, entry_price: float) -> Optional[Signal]:
+    def check_exit(self, market: MarketState, entry_price: float) -> Signal | None:
         """Check if position should exit"""
         pass

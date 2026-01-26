@@ -19,6 +19,7 @@ CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "default.y
 
 class ConfigUpdate(BaseModel):
     """Request body for config updates"""
+
     config: dict[str, Any]
 
 
