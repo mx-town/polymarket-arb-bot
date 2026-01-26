@@ -61,6 +61,10 @@ class ArbBot:
         # Strategy (set based on config)
         self.strategy: Optional[Union[ConservativeStrategy, LagArbStrategy]] = None
 
+        # Recent signals buffer for dashboard visibility (max 50)
+        self._recent_signals: list = []
+        self._max_signals = 50
+
     def _print_banner(self):
         """Print startup banner"""
         cfg = self.config
@@ -257,6 +261,21 @@ class ArbBot:
         if not isinstance(self.strategy, LagArbStrategy):
             return
 
+        # Record signal for dashboard visibility
+        if signal.is_significant:
+            self._record_signal(
+                "DIRECTION",
+                signal.symbol,
+                {
+                    "direction": signal.direction.value,
+                    "momentum": signal.momentum,
+                    "spot_price": signal.current_price,
+                    "candle_open": signal.candle_open,
+                    "expected_winner": signal.expected_winner,
+                    "confidence": signal.confidence,
+                },
+            )
+
         # Forward signal to lag arb strategy (opens lag window)
         self.strategy.on_direction_signal(signal)
 
@@ -367,6 +386,80 @@ class ArbBot:
                     f"market={market.slug} pnl=${pnl:.4f} reason={reason}",
                 )
 
+    def _record_signal(self, signal_type: str, symbol: str, details: dict):
+        """Record a signal for dashboard visibility"""
+        from datetime import datetime
+
+        signal_entry = {
+            "type": signal_type,
+            "symbol": symbol,
+            "timestamp": datetime.now().isoformat(),
+            **details,
+        }
+        self._recent_signals.insert(0, signal_entry)
+        # Keep only the most recent signals
+        if len(self._recent_signals) > self._max_signals:
+            self._recent_signals = self._recent_signals[: self._max_signals]
+
+    def _get_dashboard_data(self) -> dict:
+        """Collect data for dashboard visibility"""
+        # Active markets
+        active_markets = []
+        if self.state_manager:
+            for market in self.state_manager.markets.values():
+                active_markets.append(
+                    {
+                        "slug": market.slug,
+                        "market_id": market.market_id,
+                        "combined_ask": market.combined_ask,
+                        "combined_bid": market.combined_bid,
+                        "up_best_ask": market.up_best_ask,
+                        "up_best_bid": market.up_best_bid,
+                        "down_best_ask": market.down_best_ask,
+                        "down_best_bid": market.down_best_bid,
+                        "is_valid": market.is_valid,
+                        "last_updated": market.last_updated.isoformat()
+                        if market.last_updated
+                        else None,
+                    }
+                )
+
+        # Active lag windows
+        active_windows = []
+        if isinstance(self.strategy, LagArbStrategy):
+            for window in self.strategy.get_active_windows():
+                active_windows.append(
+                    {
+                        "symbol": window.symbol,
+                        "expected_winner": window.expected_winner,
+                        "direction": window.direction.value,
+                        "start_time": window.start_time.isoformat(),
+                        "remaining_ms": window.remaining_ms,
+                        "entry_made": window.entry_made,
+                        "momentum": window.signal.momentum,
+                        "spot_price": window.signal.current_price,
+                        "candle_open": window.signal.candle_open,
+                    }
+                )
+
+        # Config summary for dashboard
+        config_summary = {
+            "strategy": self.config.strategy,
+            "dry_run": self.config.trading.dry_run,
+            "lag_arb_enabled": self.config.lag_arb.enabled,
+            "market_types": self.config.filters.market_types,
+            "momentum_threshold": self.config.lag_arb.momentum_trigger_threshold_pct,
+            "max_lag_window_ms": self.config.lag_arb.max_lag_window_ms,
+            "max_combined_price": self.config.lag_arb.max_combined_price,
+        }
+
+        return {
+            "active_markets": active_markets,
+            "active_windows": active_windows,
+            "recent_signals": self._recent_signals,
+            "config_summary": config_summary,
+        }
+
     def run(self):
         """Main run loop"""
         self._print_banner()
@@ -387,8 +480,14 @@ class ArbBot:
             while self.running:
                 time.sleep(1)
 
-                # Export metrics to file for API server
-                self.metrics.export_to_file()
+                # Export metrics to file for API server (with dashboard visibility data)
+                dashboard_data = self._get_dashboard_data()
+                self.metrics.export_to_file(
+                    active_markets=dashboard_data["active_markets"],
+                    active_windows=dashboard_data["active_windows"],
+                    recent_signals=dashboard_data["recent_signals"],
+                    config_summary=dashboard_data["config_summary"],
+                )
 
                 # For lag arb, also check for expired windows and exits
                 if isinstance(self.strategy, LagArbStrategy):

@@ -12,6 +12,53 @@ export interface BotStatus {
   last_update?: string;
 }
 
+export interface ActiveMarket {
+  slug: string;
+  market_id: string;
+  combined_ask: number;
+  combined_bid: number;
+  up_best_ask: number;
+  up_best_bid: number;
+  down_best_ask: number;
+  down_best_bid: number;
+  is_valid: boolean;
+  last_updated: string | null;
+}
+
+export interface LagWindow {
+  symbol: string;
+  expected_winner: string;
+  direction: string;
+  start_time: string;
+  remaining_ms: number;
+  entry_made: boolean;
+  momentum: number;
+  spot_price: number;
+  candle_open: number;
+}
+
+export interface SignalEntry {
+  type: string;
+  symbol: string;
+  timestamp: string;
+  direction?: string;
+  momentum?: number;
+  spot_price?: number;
+  candle_open?: number;
+  expected_winner?: string;
+  confidence?: number;
+}
+
+export interface ConfigSummary {
+  strategy: string;
+  dry_run: boolean;
+  lag_arb_enabled: boolean;
+  market_types: string[];
+  momentum_threshold: number;
+  max_lag_window_ms: number;
+  max_combined_price: number;
+}
+
 export interface BotMetrics {
   cycles: number;
   uptime_sec: number;
@@ -36,6 +83,11 @@ export interface BotMetrics {
   ws_message_count?: number;
   error?: string;
   bot_running?: boolean;
+  // Dashboard visibility data
+  active_markets?: ActiveMarket[];
+  active_windows?: LagWindow[];
+  recent_signals?: SignalEntry[];
+  config_summary?: ConfigSummary;
 }
 
 export interface BotConfig {

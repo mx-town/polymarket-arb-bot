@@ -2,10 +2,19 @@ import { useMetrics } from './hooks/useMetrics';
 import { MetricsDisplay } from './components/MetricsDisplay';
 import { ControlPanel } from './components/ControlPanel';
 import { ConfigPanel } from './components/ConfigPanel';
+import { MarketsPanel } from './components/MarketsPanel';
+import { LagWindowsPanel } from './components/LagWindowsPanel';
+import { SignalFeed } from './components/SignalFeed';
 import './App.css';
 
 function App() {
   const { metrics, connected } = useMetrics();
+
+  // Extract visibility data from metrics
+  const activeMarkets = metrics?.active_markets || [];
+  const activeWindows = metrics?.active_windows || [];
+  const recentSignals = metrics?.recent_signals || [];
+  const configSummary = metrics?.config_summary;
 
   return (
     <div style={{
@@ -49,58 +58,80 @@ function App() {
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
             }}>
-              Dashboard v1.0
+              {configSummary?.strategy || 'lag_arb'} | {configSummary?.dry_run ? 'DRY RUN' : 'LIVE'}
             </div>
           </div>
         </div>
 
-        {/* Connection indicator */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          padding: '0.375rem 0.75rem',
-          background: connected ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
-          borderRadius: '9999px',
-          border: `1px solid ${connected ? 'var(--accent-green)' : 'var(--accent-red)'}`,
-        }}>
+        {/* Connection indicator + Market count */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {configSummary?.market_types && (
+            <div style={{
+              padding: '0.375rem 0.75rem',
+              background: 'var(--bg-card)',
+              borderRadius: '9999px',
+              border: '1px solid var(--border)',
+              fontSize: '0.6875rem',
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-secondary)',
+            }}>
+              {configSummary.market_types.join(', ')}
+            </div>
+          )}
           <div style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            background: connected ? 'var(--accent-green)' : 'var(--accent-red)',
-          }} />
-          <span style={{
-            fontSize: '0.6875rem',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 500,
-            color: connected ? 'var(--accent-green)' : 'var(--accent-red)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.375rem 0.75rem',
+            background: connected ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
+            borderRadius: '9999px',
+            border: `1px solid ${connected ? 'var(--accent-green)' : 'var(--accent-red)'}`,
           }}>
-            {connected ? 'LIVE' : 'OFFLINE'}
-          </span>
+            <div style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: connected ? 'var(--accent-green)' : 'var(--accent-red)',
+            }} />
+            <span style={{
+              fontSize: '0.6875rem',
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 500,
+              color: connected ? 'var(--accent-green)' : 'var(--accent-red)',
+            }}>
+              {connected ? 'LIVE' : 'OFFLINE'}
+            </span>
+          </div>
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content - 3-column layout */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '1fr 280px',
+        gridTemplateColumns: '1fr 1fr 320px',
         gap: '1.5rem',
-        maxWidth: '1400px',
+        maxWidth: '1800px',
       }}>
-        {/* Left Column - Metrics & Config */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {/* Left Column - Markets & Metrics */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <MarketsPanel markets={activeMarkets} />
           <MetricsDisplay metrics={metrics} connected={connected} />
-          <ConfigPanel />
         </div>
 
-        {/* Right Column - Control */}
+        {/* Center Column - Lag Windows & Signal Feed */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <LagWindowsPanel windows={activeWindows} config={configSummary} />
+          <SignalFeed signals={recentSignals} />
+        </div>
+
+        {/* Right Column - Control & Config */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
           gap: '1rem',
         }}>
           <ControlPanel />
+          <ConfigPanel />
 
           {/* Quick Info */}
           <div style={{

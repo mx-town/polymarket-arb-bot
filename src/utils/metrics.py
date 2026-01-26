@@ -132,7 +132,14 @@ class BotMetrics:
             "avg_latency_ms": self.avg_message_latency_ms,
         }
 
-    def export_to_file(self, path: str = DEFAULT_METRICS_PATH) -> bool:
+    def export_to_file(
+        self,
+        path: str = DEFAULT_METRICS_PATH,
+        active_markets: Optional[list] = None,
+        active_windows: Optional[list] = None,
+        recent_signals: Optional[list] = None,
+        config_summary: Optional[dict] = None,
+    ) -> bool:
         """Export metrics to JSON file for IPC with API server"""
         try:
             data = self.summary()
@@ -146,6 +153,12 @@ class BotMetrics:
             data["unrealized_pnl"] = self.unrealized_pnl
             data["current_exposure"] = self.current_exposure
             data["ws_message_count"] = self.ws_message_count
+
+            # Live visibility data for dashboard
+            data["active_markets"] = active_markets or []
+            data["active_windows"] = active_windows or []
+            data["recent_signals"] = recent_signals or []
+            data["config_summary"] = config_summary or {}
 
             # Atomic write using temp file
             temp_path = f"{path}.tmp"
