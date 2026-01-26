@@ -257,6 +257,19 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
             min_volume_24h=f.get("min_volume_24h", config.filters.min_volume_24h),
         )
 
+    # Apply top-level YAML settings
+    if "strategy" in yaml_config:
+        config.strategy = yaml_config["strategy"]
+        # Sync lag_arb.enabled with strategy choice
+        if config.strategy == "lag_arb":
+            config.lag_arb.enabled = True
+    elif config.lag_arb.enabled:
+        # Derive strategy from lag_arb.enabled if strategy not explicitly set
+        config.strategy = "lag_arb"
+
+    if "verbose" in yaml_config:
+        config.verbose = yaml_config["verbose"]
+
     # Apply environment variables (override YAML)
     if os.getenv("MIN_SPREAD"):
         config.trading.min_spread = float(os.getenv("MIN_SPREAD"))
