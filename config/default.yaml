@@ -13,8 +13,8 @@ polling:
   max_markets: 0            # 0 = all markets
 
 websocket:
-  enabled: true
-  ping_interval: 30.0
+  enabled: false
+  ping_interval: 5.0   # Polymarket recommends 5s
   reconnect_delay: 5.0
 
 # Phase 1: Conservative arbitrage thresholds

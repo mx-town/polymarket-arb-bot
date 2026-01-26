@@ -98,11 +98,11 @@ class PolymarketWebSocket:
         logger.info("SUBSCRIBED", f"tokens={len(token_ids)}")
 
     def _ping_loop(self):
-        """Send periodic pings"""
+        """Send periodic pings (Polymarket expects plain string 'ping')"""
         while self.running and self.connected:
             try:
                 if self.ws:
-                    self.ws.send(json.dumps({"type": "ping"}))
+                    self.ws.send("ping")
                     self.last_ping = time.time()
                 time.sleep(self.config.ping_interval)
             except Exception as e:
@@ -121,6 +121,13 @@ class PolymarketWebSocket:
             if not message or not message.strip():
                 return
 
+            # Handle non-JSON text responses
+            if not message.startswith('{') and not message.startswith('['):
+                if message in ('0', 'pong', 'PONG'):  # heartbeat or pong response
+                    return
+                logger.warning("SERVER_MESSAGE", message[:100])
+                return
+
             data = json.loads(message)
 
             # Handle non-dict messages (heartbeats send "0")
@@ -129,6 +136,13 @@ class PolymarketWebSocket:
                 return
 
             event_type = data.get("event_type")
+
+            # Debug: log first few messages to see what we're receiving
+            if not hasattr(self, '_msg_count'):
+                self._msg_count = 0
+            self._msg_count += 1
+            if self._msg_count <= 5:
+                logger.info("MSG_RECEIVED", f"count={self._msg_count} event_type={event_type} keys={list(data.keys())[:5]}")
 
             if event_type == "book":
                 self._handle_book(data)
@@ -140,7 +154,7 @@ class PolymarketWebSocket:
                 pass  # Pong received
 
         except json.JSONDecodeError as e:
-            logger.error("PARSE_ERROR", f"error={e}")
+            logger.error("PARSE_ERROR", f"error={e} msg_repr={repr(message)[:100]}")
         except Exception as e:
             # Log full message structure for debugging
             logger.error("MESSAGE_HANDLER_ERROR", f"type={type(e).__name__} error={e} keys={list(data.keys()) if isinstance(data, dict) else 'N/A'} msg_preview={str(message)[:200]}")
