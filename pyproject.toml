@@ -1,13 +1,16 @@
 [project]
 name = "polymarket-arb-bot"
-version = "0.1.0"
-description = "Polymarket arbitrage bot"
+version = "0.2.0"
+description = "Polymarket arbitrage bot with lag arbitrage"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
     "requests",
     "python-dotenv",
+    "pyyaml",
+    "websocket-client",
 ]
 
 [project.scripts]
-arb-bot = "src.arb_bot:main"
+arb-bot = "src.main:main"
+arb-bot-legacy = "src.arb_bot:main"
