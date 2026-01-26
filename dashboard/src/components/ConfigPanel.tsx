@@ -2,135 +2,144 @@ import { useEffect, useState } from 'react';
 import type { BotConfig } from '../api/client';
 import { getConfig, updateConfig } from '../api/client';
 
-interface SectionProps {
-  title: string;
-  expanded: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}
-
-function Section({ title, expanded, onToggle, children }: SectionProps) {
+// Toggle switch component
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <div style={{
-      background: '#16213e',
-      borderRadius: '8px',
-      marginBottom: '0.5rem',
+    <label style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.75rem',
+      cursor: 'pointer',
     }}>
-      <button
-        onClick={onToggle}
+      <div
+        onClick={() => onChange(!checked)}
         style={{
-          width: '100%',
-          padding: '0.75rem 1rem',
-          background: 'transparent',
-          border: 'none',
-          color: 'white',
-          textAlign: 'left',
-          cursor: 'pointer',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontWeight: 'bold',
+          width: '36px',
+          height: '20px',
+          borderRadius: '10px',
+          background: checked ? 'var(--accent-green)' : 'var(--border)',
+          position: 'relative',
+          transition: 'background 0.15s',
         }}
       >
-        {title}
-        <span>{expanded ? '▼' : '▶'}</span>
-      </button>
-      {expanded && (
-        <div style={{ padding: '0 1rem 1rem 1rem' }}>
-          {children}
-        </div>
-      )}
+        <div style={{
+          width: '16px',
+          height: '16px',
+          borderRadius: '50%',
+          background: 'white',
+          position: 'absolute',
+          top: '2px',
+          left: checked ? '18px' : '2px',
+          transition: 'left 0.15s',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+        }} />
+      </div>
+      <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)' }}>{label}</span>
+    </label>
+  );
+}
+
+// Inline editable value
+function InlineValue({
+  label,
+  value,
+  onChange,
+  suffix = '',
+  type = 'number',
+}: {
+  label: string;
+  value: string | number;
+  onChange: (v: string | number) => void;
+  suffix?: string;
+  type?: 'number' | 'text';
+}) {
+  const [editing, setEditing] = useState(false);
+  const [tempValue, setTempValue] = useState(String(value));
+
+  const handleSave = () => {
+    setEditing(false);
+    const newValue = type === 'number' ? parseFloat(tempValue) || 0 : tempValue;
+    if (newValue !== value) {
+      onChange(newValue);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+        <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', minWidth: '60px' }}>{label}</span>
+        <input
+          type={type}
+          value={tempValue}
+          onChange={(e) => setTempValue(e.target.value)}
+          onBlur={handleSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+          autoFocus
+          style={{
+            width: '80px',
+            padding: '0.25rem 0.375rem',
+            fontSize: '0.8125rem',
+          }}
+        />
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{suffix}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={() => { setTempValue(String(value)); setEditing(true); }}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.25rem',
+        cursor: 'pointer',
+        padding: '0.25rem 0',
+        borderRadius: 'var(--radius-sm)',
+        transition: 'background 0.1s',
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-elevated)'}
+      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+    >
+      <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', minWidth: '60px' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: 'var(--accent-blue)' }}>
+        {value}{suffix}
+      </span>
     </div>
   );
 }
 
-interface FieldProps {
-  label: string;
-  value: unknown;
-  onChange: (value: unknown) => void;
-  type?: 'number' | 'boolean' | 'string' | 'array';
-}
-
-function Field({ label, value, onChange, type = 'string' }: FieldProps) {
-  if (type === 'boolean') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <input
-          type="checkbox"
-          checked={value as boolean}
-          onChange={(e) => onChange(e.target.checked)}
-          style={{ marginRight: '0.5rem' }}
-        />
-        <label style={{ fontSize: '0.9rem' }}>{label}</label>
-      </div>
-    );
-  }
-
-  if (type === 'array') {
-    return (
-      <div style={{ marginBottom: '0.5rem' }}>
-        <label style={{ fontSize: '0.8rem', color: '#888' }}>{label}</label>
-        <input
-          type="text"
-          value={(value as string[]).join(', ')}
-          onChange={(e) => onChange(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            background: '#0f0f1a',
-            border: '1px solid #333',
-            borderRadius: '4px',
-            color: 'white',
-            marginTop: '0.25rem',
-          }}
-        />
-      </div>
-    );
-  }
-
+// Value group
+function ValueGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: '0.5rem' }}>
-      <label style={{ fontSize: '0.8rem', color: '#888' }}>{label}</label>
-      <input
-        type={type === 'number' ? 'number' : 'text'}
-        value={value as string | number}
-        onChange={(e) => onChange(type === 'number' ? parseFloat(e.target.value) : e.target.value)}
-        step={type === 'number' ? 'any' : undefined}
-        style={{
-          width: '100%',
-          padding: '0.5rem',
-          background: '#0f0f1a',
-          border: '1px solid #333',
-          borderRadius: '4px',
-          color: 'white',
-          marginTop: '0.25rem',
-        }}
-      />
+    <div>
+      <div style={{
+        fontSize: '0.625rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.1em',
+        color: 'var(--text-muted)',
+        marginBottom: '0.5rem',
+        paddingBottom: '0.25rem',
+        borderBottom: '1px solid var(--border-subtle)',
+      }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+        {children}
+      </div>
     </div>
   );
 }
 
 export function ConfigPanel() {
   const [config, setConfig] = useState<BotConfig | null>(null);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['trading']));
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     getConfig().then(setConfig).catch(console.error);
   }, []);
-
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-      }
-      return next;
-    });
-  };
 
   const updateField = (section: keyof BotConfig, field: string, value: unknown) => {
     if (!config) return;
@@ -141,119 +150,176 @@ export function ConfigPanel() {
         [field]: value,
       },
     });
+    setDirty(true);
+    setMessage(null);
   };
 
   const handleSave = async () => {
     if (!config) return;
     setSaving(true);
-    setMessage(null);
     try {
       await updateConfig(config);
-      setMessage('Configuration saved! Restart the bot to apply changes.');
+      setMessage({ text: 'Saved. Restart bot to apply.', type: 'success' });
+      setDirty(false);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Failed to save');
+      setMessage({ text: e instanceof Error ? e.message : 'Failed to save', type: 'error' });
     } finally {
       setSaving(false);
     }
   };
 
   if (!config) {
-    return <div>Loading configuration...</div>;
+    return (
+      <div style={{
+        background: 'var(--bg-card)',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border)',
+        padding: '2rem',
+        textAlign: 'center',
+        color: 'var(--text-muted)',
+      }}>
+        Loading config...
+      </div>
+    );
   }
 
   return (
     <div style={{
-      background: '#1a1a2e',
-      padding: '1.5rem',
-      borderRadius: '8px',
+      background: 'var(--bg-card)',
+      borderRadius: 'var(--radius-md)',
+      border: '1px solid var(--border)',
+      overflow: 'hidden',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{ margin: 0 }}>Configuration</h2>
+      {/* Header */}
+      <div style={{
+        padding: '0.75rem 1rem',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: 'var(--bg-elevated)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <span style={{ fontSize: '1rem' }}>⚙</span>
+          <span style={{
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            color: 'var(--text-secondary)',
+          }}>
+            Configuration
+          </span>
+          {dirty && (
+            <span style={{
+              fontSize: '0.625rem',
+              padding: '0.125rem 0.5rem',
+              background: 'var(--accent-amber-dim)',
+              color: 'var(--accent-amber)',
+              borderRadius: '9999px',
+            }}>
+              UNSAVED
+            </span>
+          )}
+        </div>
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !dirty}
           style={{
-            background: '#4ecdc4',
-            border: 'none',
-            color: '#0f0f1a',
-            padding: '0.5rem 1rem',
-            borderRadius: '4px',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            fontWeight: 'bold',
+            background: dirty ? 'var(--accent-green)' : 'var(--border)',
+            color: dirty ? 'black' : 'var(--text-muted)',
+            padding: '0.375rem 0.75rem',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.75rem',
+            fontWeight: 600,
           }}
         >
-          {saving ? 'Saving...' : 'Save Config'}
+          {saving ? 'Saving...' : 'Save'}
         </button>
       </div>
 
+      {/* Message */}
       {message && (
-        <p style={{
-          padding: '0.5rem',
-          background: '#16213e',
-          borderRadius: '4px',
-          fontSize: '0.9rem',
-          marginBottom: '1rem',
+        <div style={{
+          padding: '0.5rem 1rem',
+          background: message.type === 'success' ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
+          color: message.type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)',
+          fontSize: '0.75rem',
+          borderBottom: '1px solid var(--border)',
         }}>
-          {message}
-        </p>
+          {message.text}
+        </div>
       )}
 
-      <Section title="Trading" expanded={expandedSections.has('trading')} onToggle={() => toggleSection('trading')}>
-        <Field label="Dry Run" value={config.trading.dry_run} onChange={(v) => updateField('trading', 'dry_run', v)} type="boolean" />
-        <Field label="Min Spread" value={config.trading.min_spread} onChange={(v) => updateField('trading', 'min_spread', v)} type="number" />
-        <Field label="Min Net Profit" value={config.trading.min_net_profit} onChange={(v) => updateField('trading', 'min_net_profit', v)} type="number" />
-        <Field label="Max Position Size" value={config.trading.max_position_size} onChange={(v) => updateField('trading', 'max_position_size', v)} type="number" />
-        <Field label="Fee Rate" value={config.trading.fee_rate} onChange={(v) => updateField('trading', 'fee_rate', v)} type="number" />
-      </Section>
+      {/* Quick Toggles */}
+      <div style={{
+        padding: '1rem',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        gap: '1.5rem',
+        flexWrap: 'wrap',
+      }}>
+        <Toggle
+          checked={config.trading.dry_run}
+          onChange={(v) => updateField('trading', 'dry_run', v)}
+          label="Dry Run"
+        />
+        <Toggle
+          checked={config.lag_arb.enabled}
+          onChange={(v) => updateField('lag_arb', 'enabled', v)}
+          label="Lag Arb"
+        />
+      </div>
 
-      <Section title="Polling" expanded={expandedSections.has('polling')} onToggle={() => toggleSection('polling')}>
-        <Field label="Interval" value={config.polling.interval} onChange={(v) => updateField('polling', 'interval', v)} type="number" />
-        <Field label="Batch Size" value={config.polling.batch_size} onChange={(v) => updateField('polling', 'batch_size', v)} type="number" />
-        <Field label="Max Markets" value={config.polling.max_markets} onChange={(v) => updateField('polling', 'max_markets', v)} type="number" />
-        <Field label="Refresh Interval" value={config.polling.market_refresh_interval} onChange={(v) => updateField('polling', 'market_refresh_interval', v)} type="number" />
-      </Section>
+      {/* Config Values Grid */}
+      <div style={{
+        padding: '1rem',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: '1.25rem',
+      }}>
+        {/* Entry Thresholds */}
+        <ValueGroup title="Entry">
+          <InlineValue label="Min Spread" value={config.trading.min_spread} onChange={(v) => updateField('trading', 'min_spread', v)} />
+          <InlineValue label="Min Profit" value={config.trading.min_net_profit} onChange={(v) => updateField('trading', 'min_net_profit', v)} />
+          <InlineValue label="Max Price" value={config.lag_arb.max_combined_price} onChange={(v) => updateField('lag_arb', 'max_combined_price', v)} />
+        </ValueGroup>
 
-      <Section title="WebSocket" expanded={expandedSections.has('websocket')} onToggle={() => toggleSection('websocket')}>
-        <Field label="Ping Interval" value={config.websocket.ping_interval} onChange={(v) => updateField('websocket', 'ping_interval', v)} type="number" />
-        <Field label="Reconnect Delay" value={config.websocket.reconnect_delay} onChange={(v) => updateField('websocket', 'reconnect_delay', v)} type="number" />
-      </Section>
+        {/* Position */}
+        <ValueGroup title="Position">
+          <InlineValue label="Max Size" value={config.trading.max_position_size} onChange={(v) => updateField('trading', 'max_position_size', v)} suffix="$" />
+          <InlineValue label="Exposure" value={config.risk.max_total_exposure} onChange={(v) => updateField('risk', 'max_total_exposure', v)} suffix="$" />
+          <InlineValue label="Fee Rate" value={config.trading.fee_rate} onChange={(v) => updateField('trading', 'fee_rate', v)} />
+        </ValueGroup>
 
-      <Section title="Conservative Strategy" expanded={expandedSections.has('conservative')} onToggle={() => toggleSection('conservative')}>
-        <Field label="Max Combined Price" value={config.conservative.max_combined_price} onChange={(v) => updateField('conservative', 'max_combined_price', v)} type="number" />
-        <Field label="Min Time to Resolution (sec)" value={config.conservative.min_time_to_resolution_sec} onChange={(v) => updateField('conservative', 'min_time_to_resolution_sec', v)} type="number" />
-        <Field label="Exit on Pump Threshold" value={config.conservative.exit_on_pump_threshold} onChange={(v) => updateField('conservative', 'exit_on_pump_threshold', v)} type="number" />
-      </Section>
+        {/* Timing */}
+        <ValueGroup title="Timing">
+          <InlineValue label="Hold Max" value={config.lag_arb.max_hold_time_sec} onChange={(v) => updateField('lag_arb', 'max_hold_time_sec', v)} suffix="s" />
+          <InlineValue label="Lag Window" value={config.lag_arb.max_lag_window_ms} onChange={(v) => updateField('lag_arb', 'max_lag_window_ms', v)} suffix="ms" />
+          <InlineValue label="Refresh" value={config.polling.market_refresh_interval} onChange={(v) => updateField('polling', 'market_refresh_interval', v)} suffix="s" />
+        </ValueGroup>
 
-      <Section title="Lag Arb Strategy" expanded={expandedSections.has('lag_arb')} onToggle={() => toggleSection('lag_arb')}>
-        <Field label="Enabled" value={config.lag_arb.enabled} onChange={(v) => updateField('lag_arb', 'enabled', v)} type="boolean" />
-        <Field label="Candle Interval" value={config.lag_arb.candle_interval} onChange={(v) => updateField('lag_arb', 'candle_interval', v)} type="string" />
-        <Field label="Momentum Window (sec)" value={config.lag_arb.spot_momentum_window_sec} onChange={(v) => updateField('lag_arb', 'spot_momentum_window_sec', v)} type="number" />
-        <Field label="Move Threshold %" value={config.lag_arb.spot_move_threshold_pct} onChange={(v) => updateField('lag_arb', 'spot_move_threshold_pct', v)} type="number" />
-        <Field label="Max Combined Price" value={config.lag_arb.max_combined_price} onChange={(v) => updateField('lag_arb', 'max_combined_price', v)} type="number" />
-        <Field label="Expected Lag (ms)" value={config.lag_arb.expected_lag_ms} onChange={(v) => updateField('lag_arb', 'expected_lag_ms', v)} type="number" />
-        <Field label="Max Lag Window (ms)" value={config.lag_arb.max_lag_window_ms} onChange={(v) => updateField('lag_arb', 'max_lag_window_ms', v)} type="number" />
-        <Field label="Fee Rate" value={config.lag_arb.fee_rate} onChange={(v) => updateField('lag_arb', 'fee_rate', v)} type="number" />
-        <Field label="Momentum Trigger %" value={config.lag_arb.momentum_trigger_threshold_pct} onChange={(v) => updateField('lag_arb', 'momentum_trigger_threshold_pct', v)} type="number" />
-        <Field label="Pump Exit %" value={config.lag_arb.pump_exit_threshold_pct} onChange={(v) => updateField('lag_arb', 'pump_exit_threshold_pct', v)} type="number" />
-        <Field label="Max Hold Time (sec)" value={config.lag_arb.max_hold_time_sec} onChange={(v) => updateField('lag_arb', 'max_hold_time_sec', v)} type="number" />
-      </Section>
+        {/* Risk */}
+        <ValueGroup title="Risk">
+          <InlineValue label="Max Losses" value={config.risk.max_consecutive_losses} onChange={(v) => updateField('risk', 'max_consecutive_losses', v)} />
+          <InlineValue label="Daily Loss" value={config.risk.max_daily_loss_usd} onChange={(v) => updateField('risk', 'max_daily_loss_usd', v)} suffix="$" />
+          <InlineValue label="Cooldown" value={config.risk.cooldown_after_loss_sec} onChange={(v) => updateField('risk', 'cooldown_after_loss_sec', v)} suffix="s" />
+        </ValueGroup>
 
-      <Section title="Risk" expanded={expandedSections.has('risk')} onToggle={() => toggleSection('risk')}>
-        <Field label="Max Consecutive Losses" value={config.risk.max_consecutive_losses} onChange={(v) => updateField('risk', 'max_consecutive_losses', v)} type="number" />
-        <Field label="Max Daily Loss (USD)" value={config.risk.max_daily_loss_usd} onChange={(v) => updateField('risk', 'max_daily_loss_usd', v)} type="number" />
-        <Field label="Cooldown After Loss (sec)" value={config.risk.cooldown_after_loss_sec} onChange={(v) => updateField('risk', 'cooldown_after_loss_sec', v)} type="number" />
-        <Field label="Max Total Exposure" value={config.risk.max_total_exposure} onChange={(v) => updateField('risk', 'max_total_exposure', v)} type="number" />
-      </Section>
+        {/* Momentum */}
+        <ValueGroup title="Momentum">
+          <InlineValue label="Trigger" value={config.lag_arb.momentum_trigger_threshold_pct} onChange={(v) => updateField('lag_arb', 'momentum_trigger_threshold_pct', v)} suffix="%" />
+          <InlineValue label="Move Thr" value={config.lag_arb.spot_move_threshold_pct} onChange={(v) => updateField('lag_arb', 'spot_move_threshold_pct', v)} suffix="%" />
+          <InlineValue label="Pump Exit" value={config.lag_arb.pump_exit_threshold_pct} onChange={(v) => updateField('lag_arb', 'pump_exit_threshold_pct', v)} suffix="%" />
+        </ValueGroup>
 
-      <Section title="Filters" expanded={expandedSections.has('filters')} onToggle={() => toggleSection('filters')}>
-        <Field label="Min Liquidity (USD)" value={config.filters.min_liquidity_usd} onChange={(v) => updateField('filters', 'min_liquidity_usd', v)} type="number" />
-        <Field label="Min Book Depth" value={config.filters.min_book_depth} onChange={(v) => updateField('filters', 'min_book_depth', v)} type="number" />
-        <Field label="Max Spread %" value={config.filters.max_spread_pct} onChange={(v) => updateField('filters', 'max_spread_pct', v)} type="number" />
-        <Field label="Max Market Age (hours)" value={config.filters.max_market_age_hours} onChange={(v) => updateField('filters', 'max_market_age_hours', v)} type="number" />
-        <Field label="Fallback Age (hours)" value={config.filters.fallback_age_hours} onChange={(v) => updateField('filters', 'fallback_age_hours', v)} type="number" />
-        <Field label="Min 24h Volume" value={config.filters.min_volume_24h} onChange={(v) => updateField('filters', 'min_volume_24h', v)} type="number" />
-        <Field label="Market Types" value={config.filters.market_types} onChange={(v) => updateField('filters', 'market_types', v)} type="array" />
-      </Section>
+        {/* Filters */}
+        <ValueGroup title="Filters">
+          <InlineValue label="Min Vol" value={config.filters.min_volume_24h} onChange={(v) => updateField('filters', 'min_volume_24h', v)} suffix="$" />
+          <InlineValue label="Min Liq" value={config.filters.min_liquidity_usd} onChange={(v) => updateField('filters', 'min_liquidity_usd', v)} suffix="$" />
+          <InlineValue label="Max Age" value={config.filters.max_market_age_hours} onChange={(v) => updateField('filters', 'max_market_age_hours', v)} suffix="h" />
+        </ValueGroup>
+      </div>
     </div>
   );
 }
