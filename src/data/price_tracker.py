@@ -6,8 +6,10 @@ KEY INSIGHT: Polymarket 1H markets resolve based on Binance 1H candle.
 - If close >= open → "Up" wins
 - If close < open → "Down" wins
 
-We compare current spot vs candle open to predict the winner,
-then check if Polymarket hasn't caught up (combined_ask < $1.00).
+TRIGGER LOGIC (momentum-based):
+- PRIMARY: Momentum crosses threshold → direction signal
+- SECONDARY: Candle move confirms direction (not contradicting)
+- Enter during lag window when Polymarket hasn't caught up
 """
 
 from collections import deque
@@ -72,26 +74,27 @@ class CandleState:
 class DirectionSignal:
     """
     Signal indicating predicted market direction.
-    
-    Based on spot price vs candle open (primary)
-    with momentum confirmation (secondary).
+
+    Based on momentum (primary trigger) with candle move
+    confirmation (secondary - ensures not contradicting).
     """
 
     symbol: str
     direction: Direction
-    move_from_open: float  # % move from candle open
-    momentum: float  # Short-term momentum (confirmation)
+    move_from_open: float  # % move from candle open (for confirmation)
+    momentum: float  # Short-term momentum (PRIMARY trigger)
     confidence: float  # 0.0 to 1.0
     current_price: float
     candle_open: float
     timestamp: datetime
+    momentum_threshold: float = 0.001  # Threshold used for trigger
 
     @property
     def is_significant(self) -> bool:
-        """Check if signal is actionable"""
+        """Check if signal is actionable (momentum-based)"""
         return (
             self.direction != Direction.NEUTRAL
-            and abs(self.move_from_open) >= 0.002  # 0.2% from open
+            and abs(self.momentum) >= self.momentum_threshold  # Momentum crosses threshold
             and self.confidence >= 0.5
         )
 
@@ -156,14 +159,14 @@ class SymbolTracker:
         symbol: str,
         interval: str = "1h",
         momentum_window_sec: float = 10.0,
-        move_threshold: float = 0.002,  # 0.2% from candle open
-        momentum_threshold: float = 0.001,  # 0.1% momentum for confirmation
+        move_threshold: float = 0.002,  # 0.2% from candle open (confirmation)
+        momentum_trigger_threshold: float = 0.001,  # 0.1% momentum = PRIMARY trigger
     ):
         self.symbol = symbol
         self.interval = interval
         self.momentum_window_sec = momentum_window_sec
-        self.move_threshold = move_threshold
-        self.momentum_threshold = momentum_threshold
+        self.move_threshold = move_threshold  # For candle confirmation
+        self.momentum_trigger_threshold = momentum_trigger_threshold  # PRIMARY trigger
 
         # Candle state (fetched from Klines API)
         self.candle: Optional[CandleState] = None
@@ -229,25 +232,33 @@ class SymbolTracker:
 
         return (newest - oldest) / oldest
 
-    def is_momentum_confirming(self, direction: Direction) -> bool:
-        """Check if momentum confirms the expected direction"""
-        momentum = self.get_momentum()
+    def is_candle_confirming(self, direction: Direction) -> bool:
+        """
+        Check if candle move doesn't contradict momentum direction.
+
+        For momentum-based triggers, we just need candle to not be
+        strongly contradicting the momentum direction.
+        """
+        if not self.candle:
+            return True  # No candle data, don't block
+
+        move = self.candle.move_from_open
 
         if direction == Direction.UP:
-            # Not dumping hard
-            return momentum > -self.momentum_threshold
+            # Candle shouldn't be strongly down (contradicting UP momentum)
+            return move >= -self.move_threshold
         elif direction == Direction.DOWN:
-            # Not pumping hard
-            return momentum < self.momentum_threshold
+            # Candle shouldn't be strongly up (contradicting DOWN momentum)
+            return move <= self.move_threshold
 
-        return False
+        return True
 
     def get_signal(self) -> DirectionSignal:
         """
-        Calculate direction signal based on spot vs candle open.
-        
-        Primary: spot vs candle_open → predicts winner
-        Secondary: momentum → confirms not reversing
+        Calculate direction signal based on MOMENTUM (primary).
+
+        Primary: momentum crosses threshold → direction signal
+        Secondary: candle move confirms (not contradicting)
         """
         if not self.candle or self.current_price == 0:
             return DirectionSignal(
@@ -259,6 +270,7 @@ class SymbolTracker:
                 current_price=self.current_price,
                 candle_open=0.0,
                 timestamp=datetime.now(),
+                momentum_threshold=self.momentum_trigger_threshold,
             )
 
         # Check if candle is stale (needs refresh)
@@ -268,19 +280,19 @@ class SymbolTracker:
         move = self.candle.move_from_open
         momentum = self.get_momentum()
 
-        # Determine direction from candle comparison
-        if move >= self.move_threshold:
+        # PRIMARY: Determine direction from MOMENTUM
+        if momentum >= self.momentum_trigger_threshold:
             direction = Direction.UP
-        elif move <= -self.move_threshold:
+        elif momentum <= -self.momentum_trigger_threshold:
             direction = Direction.DOWN
         else:
             direction = Direction.NEUTRAL
 
-        # Calculate confidence
-        # Higher if momentum confirms direction
+        # SECONDARY: Calculate confidence based on candle confirmation
+        # Higher if candle move doesn't contradict momentum direction
         if direction != Direction.NEUTRAL:
-            momentum_confirms = self.is_momentum_confirming(direction)
-            confidence = 0.8 if momentum_confirms else 0.5
+            candle_confirms = self.is_candle_confirming(direction)
+            confidence = 0.8 if candle_confirms else 0.5
         else:
             confidence = 0.0
 
@@ -293,6 +305,7 @@ class SymbolTracker:
             current_price=self.current_price,
             candle_open=self.candle.open_price,
             timestamp=datetime.now(),
+            momentum_threshold=self.momentum_trigger_threshold,
         )
 
         self.last_signal = signal
@@ -336,10 +349,10 @@ class PriceTracker:
         if symbol not in self.trackers:
             self.trackers[symbol] = SymbolTracker(
                 symbol=symbol,
-                interval="1h",  # Use 1H candles (0% fees)
+                interval=self.config.candle_interval,  # Use 1H candles (0% fees)
                 momentum_window_sec=self.config.spot_momentum_window_sec,
-                move_threshold=self.config.spot_move_threshold_pct,
-                momentum_threshold=0.001,  # 0.1% for confirmation
+                move_threshold=self.config.spot_move_threshold_pct,  # For candle confirmation
+                momentum_trigger_threshold=self.config.momentum_trigger_threshold_pct,  # PRIMARY trigger
             )
         return self.trackers[symbol]
 
@@ -361,7 +374,7 @@ class PriceTracker:
         signal = tracker.get_signal()
 
         if signal.is_significant:
-            logger.info(
+            logger.debug(
                 "DIRECTION_SIGNAL",
                 f"symbol={signal.symbol} dir={signal.direction.value} "
                 f"move={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "

@@ -1,26 +1,30 @@
 """
-Lag arbitrage strategy (Phase 2).
+Lag arbitrage strategy (Phase 2) - Momentum-based trigger.
 
 KEY INSIGHT: Polymarket 1H markets resolve based on Binance 1H candle.
 - Reference price = candle OPEN (not close)
 - If close >= open → "Up" wins at resolution
 - If close < open → "Down" wins at resolution
 
-Strategy:
-1. Fetch candle OPEN from Binance Klines API
-2. Compare current spot vs candle open
-3. If spot > open + threshold → "Up" is expected winner
-4. If spot < open - threshold → "Down" is expected winner
-5. If Polymarket hasn't repriced (combined_ask < $1.00), that's the arbitrage
-6. Buy BOTH sides during the lag window
-7. Exit on price normalization or hold to resolution
+Strategy (momentum-based):
+1. PRIMARY: Detect momentum in spot price (10-sec rolling window)
+2. SECONDARY: Confirm candle move doesn't contradict
+3. If momentum > threshold → direction signal
+4. If Polymarket hasn't repriced (combined_ask < $1.00), enter
+5. Buy BOTH sides during the lag window
+
+Exit Strategy (aggressive):
+1. Exit if max hold time exceeded (force exit after 5 min)
+2. Exit if one side pumps >= threshold (3% default)
+3. Exit if combined_bid > entry_cost (any profit)
+4. Exit on price normalization (spread < 0.5%)
+5. Otherwise hold to resolution
 
 Why this works:
 - Polymarket lags Binance by 1-5 seconds
-- When spot crosses above candle open, "Up" becomes likely winner
-- Market makers are slow to reprice
-- We buy BOTH sides during the lag for < $1.00
-- Even if wrong about direction, we profit if combined < $1.00
+- Momentum catches price moves EARLY (before candle cross)
+- We enter during the lag, exit on pump (capture repricing)
+- Even if wrong about direction, profit if combined < $1.00
 """
 
 from datetime import datetime
@@ -127,7 +131,7 @@ class LagArbStrategy(SignalDetector):
 
         self.lag_windows[signal.symbol] = window
 
-        logger.info(
+        logger.debug(
             "LAG_WINDOW_OPEN",
             f"symbol={signal.symbol} expected_winner={expected_winner} "
             f"move_from_open={signal.move_from_open:.4f} ({signal.move_from_open*100:.2f}%) "
@@ -229,22 +233,72 @@ class LagArbStrategy(SignalDetector):
         market: MarketState,
         entry_up_price: float,
         entry_down_price: float,
+        entry_time: Optional[datetime] = None,
     ) -> Optional[Signal]:
         """
         Check if position should exit.
-        
-        Lag arb exits more aggressively:
-        1. Exit if combined_bid > entry_cost (any profit available)
-        2. Exit on price normalization (spread < threshold)
-        3. Otherwise hold to resolution (guaranteed profit if entry < $1.00)
+
+        Lag arb exits aggressively with multiple triggers:
+        1. Exit if max hold time exceeded (force exit)
+        2. Exit if one side pumps >= threshold (3% default)
+        3. Exit if combined_bid > entry_cost (any profit available)
+        4. Exit on price normalization (spread < threshold)
+        5. Otherwise hold to resolution (guaranteed profit if entry < $1.00)
         """
         if not market.is_valid:
             return None
 
         entry_cost = entry_up_price + entry_down_price
-        current_value = market.combined_bid
 
-        # Exit on any profit (more aggressive than conservative)
+        # 1. Check max hold time (force exit after N seconds)
+        if entry_time:
+            hold_duration = (datetime.now() - entry_time).total_seconds()
+            if hold_duration >= self.config.max_hold_time_sec:
+                logger.info(
+                    "LAG_EXIT_MAX_HOLD",
+                    f"market={market.slug} duration={hold_duration:.0f}s "
+                    f"max={self.config.max_hold_time_sec}s",
+                )
+                return Signal(
+                    signal_type=SignalType.EXIT,
+                    market_id=market.market_id,
+                    exit_reason=ExitReason.EARLY_EXIT,
+                )
+
+        # 2. Check single-side pump (UP side)
+        if entry_up_price > 0:
+            up_change = (market.up_best_bid - entry_up_price) / entry_up_price
+            if up_change >= self.config.pump_exit_threshold_pct:
+                logger.info(
+                    "LAG_EXIT_PUMP_UP",
+                    f"market={market.slug} up_change={up_change:.2%} "
+                    f"threshold={self.config.pump_exit_threshold_pct:.2%} "
+                    f"entry={entry_up_price:.4f} current={market.up_best_bid:.4f}",
+                )
+                return Signal(
+                    signal_type=SignalType.EXIT,
+                    market_id=market.market_id,
+                    exit_reason=ExitReason.PUMP_EXIT,
+                )
+
+        # 3. Check single-side pump (DOWN side)
+        if entry_down_price > 0:
+            down_change = (market.down_best_bid - entry_down_price) / entry_down_price
+            if down_change >= self.config.pump_exit_threshold_pct:
+                logger.info(
+                    "LAG_EXIT_PUMP_DOWN",
+                    f"market={market.slug} down_change={down_change:.2%} "
+                    f"threshold={self.config.pump_exit_threshold_pct:.2%} "
+                    f"entry={entry_down_price:.4f} current={market.down_best_bid:.4f}",
+                )
+                return Signal(
+                    signal_type=SignalType.EXIT,
+                    market_id=market.market_id,
+                    exit_reason=ExitReason.PUMP_EXIT,
+                )
+
+        # 4. Exit on any profit (combined bid > entry cost)
+        current_value = market.combined_bid
         if current_value > entry_cost:
             profit = current_value - entry_cost
             profit_pct = profit / entry_cost
@@ -261,7 +315,7 @@ class LagArbStrategy(SignalDetector):
                 exit_reason=ExitReason.EARLY_EXIT,
             )
 
-        # Exit on price normalization (spread tightened)
+        # 5. Exit on price normalization (spread tightened)
         spread = market.combined_ask - market.combined_bid
         if spread < 0.005:  # < 0.5% spread = normalized
             logger.info(

@@ -13,7 +13,7 @@ polling:
   max_markets: 0            # 0 = all markets
 
 websocket:
-  enabled: false
+  enabled: true
   ping_interval: 30.0
   reconnect_delay: 5.0
 
@@ -23,18 +23,22 @@ conservative:
   min_time_to_resolution_sec: 300
   exit_on_pump_threshold: 0.10   # Exit if one side moves +10%
 
-# Phase 2: Lag arbitrage (candle-based)
-# Uses Binance 1H candle open as reference price
-# If spot >= open → "Up" wins, else "Down" wins
+# Phase 2: Lag arbitrage (momentum-based trigger)
+# Uses momentum as primary trigger, candle move as confirmation
+# If spot momentum > threshold → direction signal, enter during lag window
 lag_arb:
-  enabled: false
+  enabled: true
   candle_interval: 1h             # Use 1H candles (0% fees)
-  spot_momentum_window_sec: 10    # Rolling window for momentum confirmation
-  spot_move_threshold_pct: 0.002  # 0.2% from candle open = clear direction
+  spot_momentum_window_sec: 10    # Rolling window for momentum calculation
+  spot_move_threshold_pct: 0.002  # 0.2% from candle open (for confirmation)
   max_combined_price: 0.995       # Entry threshold
   expected_lag_ms: 2000           # Polymarket typically lags 2 seconds
   max_lag_window_ms: 5000         # Give up after 5 seconds
   fee_rate: 0.0                   # 1H markets have 0% fees
+  # Momentum-based trigger parameters
+  momentum_trigger_threshold_pct: 0.001  # 0.1% momentum = trigger signal
+  pump_exit_threshold_pct: 0.03          # 3% single-side pump = exit
+  max_hold_time_sec: 300                 # 5 min max hold before force exit
 
 # Risk management
 risk:
