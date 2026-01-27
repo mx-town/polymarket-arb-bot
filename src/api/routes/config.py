@@ -80,9 +80,7 @@ async def update_config(update: ConfigUpdate) -> dict:
             if "max_combined_price" not in update.config.get("lag_arb", {}):
                 if "lag_arb" not in merged:
                     merged["lag_arb"] = {}
-                merged["lag_arb"]["max_combined_price"] = INTERVAL_MAX_COMBINED.get(
-                    interval, 0.995
-                )
+                merged["lag_arb"]["max_combined_price"] = INTERVAL_MAX_COMBINED.get(interval, 0.995)
 
         # Save
         save_config(merged)

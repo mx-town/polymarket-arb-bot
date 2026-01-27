@@ -37,12 +37,17 @@ export function MarketDiscoverySubpanel({ config, onChange }: SubpanelProps) {
               onChange={(v) => onChange('lag_arb', 'candle_interval', v)}
               label="Candle"
             />
-            <div style={{
-              fontSize: '0.625rem',
-              color: config.lag_arb.candle_interval === '1h' ? 'var(--accent-green)' : 'var(--accent-amber)',
-              marginTop: '0.25rem',
-              textAlign: 'center'
-            }}>
+            <div
+              style={{
+                fontSize: '0.625rem',
+                color:
+                  config.lag_arb.candle_interval === '1h'
+                    ? 'var(--accent-green)'
+                    : 'var(--accent-amber)',
+                marginTop: '0.25rem',
+                textAlign: 'center',
+              }}
+            >
               Fee: {config.lag_arb.candle_interval === '1h' ? '0%' : '~3%'}
             </div>
           </div>

@@ -73,6 +73,7 @@ class LagArbConfig:
 @dataclass
 class PureArbConfig:
     """Pure arbitrage: enter on price threshold only (no momentum required)"""
+
     enabled: bool = False
     max_combined_price: float = 0.99  # Entry when combined < this
     min_net_profit: float = 0.005  # Minimum profit after fees

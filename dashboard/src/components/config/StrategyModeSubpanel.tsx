@@ -26,8 +26,23 @@ export function StrategyModeSubpanel({ config, onChange }: SubpanelProps) {
 
       {/* Pure Arb settings */}
       {config.pure_arb?.enabled && (
-        <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
-          <span style={{ fontSize: '0.5625rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>
+        <div
+          style={{
+            marginTop: '0.75rem',
+            paddingTop: '0.75rem',
+            borderTop: '1px solid var(--border-subtle)',
+          }}
+        >
+          <span
+            style={{
+              fontSize: '0.5625rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.1em',
+              color: 'var(--text-muted)',
+              marginBottom: '0.5rem',
+              display: 'block',
+            }}
+          >
             Pure Arb (no momentum)
           </span>
           <InlineValue
