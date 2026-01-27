@@ -8,6 +8,7 @@ Used for lag arbitrage: detecting spot moves before Polymarket reprices.
 import json
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -78,6 +79,10 @@ class BinanceWebSocket:
         # Track latest prices
         self.latest_prices: dict[str, float] = {}
         self.latest_trades: dict[str, AggTrade] = {}
+
+        # Price history for sparklines (symbol -> deque of (timestamp, price))
+        self.price_history: dict[str, deque] = {}
+        self.history_max_points = 60  # ~1 minute of history at 1 update/sec
 
     def _build_url(self) -> str:
         """Build WebSocket URL for combined streams"""
@@ -169,6 +174,11 @@ class BinanceWebSocket:
             self.latest_prices[trade.symbol] = trade.price
             self.latest_trades[trade.symbol] = trade
 
+            # Track price history for sparklines
+            if trade.symbol not in self.price_history:
+                self.price_history[trade.symbol] = deque(maxlen=self.history_max_points)
+            self.price_history[trade.symbol].append((trade.trade_time / 1000, trade.price))
+
             # Callback
             if self.on_trade:
                 self.on_trade(trade)
@@ -204,3 +214,11 @@ class BinanceWebSocket:
     @property
     def is_connected(self) -> bool:
         return self.connected
+
+    def get_price_history(self, symbol: str) -> list[dict]:
+        """Get price history for sparkline display.
+
+        Returns list of {ts: timestamp, price: price} dicts.
+        """
+        history = self.price_history.get(symbol.upper(), deque())
+        return [{"ts": ts, "price": price} for ts, price in history]

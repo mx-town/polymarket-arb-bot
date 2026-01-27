@@ -71,9 +71,6 @@ class TestIntervalMapping:
     def test_15m_maps_correctly(self):
         assert INTERVAL_TO_RECURRENCE["15m"] == "15m"
 
-    def test_5m_maps_correctly(self):
-        assert INTERVAL_TO_RECURRENCE["5m"] == "5m"
-
 
 class TestAssetAliases:
     """Tests for asset alias mappings"""

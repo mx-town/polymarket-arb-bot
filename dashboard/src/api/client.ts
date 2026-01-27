@@ -115,9 +115,22 @@ export interface ConfigSummary {
   dry_run: boolean;
   lag_arb_enabled: boolean;
   market_types: string[];
+  assets: string[];
   momentum_threshold: number;
   max_lag_window_ms: number;
   max_combined_price: number;
+}
+
+export interface PriceHistoryPoint {
+  ts: number;
+  price: number;
+}
+
+export interface SpotPriceData {
+  price: number | null;
+  candle_open?: number | null;
+  momentum?: number;
+  history: PriceHistoryPoint[];
 }
 
 export interface BotMetrics {
@@ -155,6 +168,8 @@ export interface BotMetrics {
   events?: TradingEvent[];
   pnl_history?: PnlSnapshot[];
   trades_history?: ClosedTrade[];
+  // Spot prices with history for sparklines
+  spot_prices?: Record<string, SpotPriceData>;
 }
 
 export interface BotConfig {
@@ -216,6 +231,7 @@ export interface BotConfig {
     fallback_age_hours: number;
     min_volume_24h: number;
     market_types: string[];
+    assets: string[];
   };
 }
 

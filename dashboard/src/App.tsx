@@ -7,6 +7,7 @@ import { LagWindowsPanel } from './components/LagWindowsPanel';
 import { SignalFeed } from './components/SignalFeed';
 import { PnlChart } from './components/PnlChart';
 import { ActivityChart } from './components/ActivityChart';
+import { SpotPricesPanel } from './components/SpotPricesPanel';
 import './App.css';
 
 function App() {
@@ -21,6 +22,9 @@ function App() {
   const events = metrics?.events || [];
   const pnlHistory = metrics?.pnl_history || [];
   const tradesHistory = metrics?.trades_history || [];
+
+  // Extract spot prices for price tracking panel
+  const spotPrices = metrics?.spot_prices || {};
 
   // Derive bot status from metrics (single source of truth)
   const botRunning = metrics?.bot_running ?? false;
@@ -144,8 +148,9 @@ function App() {
           maxWidth: '1800px',
         }}
       >
-        {/* Left Column - Markets, Metrics & P&L Chart */}
+        {/* Left Column - Spot Prices, Markets, Metrics & P&L Chart */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <SpotPricesPanel spotPrices={spotPrices} />
           <MarketsPanel markets={activeMarkets} />
           <MetricsDisplay metrics={metrics} connected={connected} />
           <PnlChart data={pnlHistory} />

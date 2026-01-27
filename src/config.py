@@ -97,6 +97,25 @@ class FilterConfig:
     max_market_age_hours: float = 1.0  # Prefer markets created within 1 hour
     fallback_age_hours: float = 24.0  # Fallback to 24h if no recent markets
     min_volume_24h: float = 100.0  # Minimum volume to ensure activity
+    # Assets to track (14 major cryptos by default)
+    assets: list = field(
+        default_factory=lambda: [
+            "bitcoin",
+            "ethereum",
+            "solana",
+            "xrp",
+            "bnb",
+            "cardano",
+            "dogecoin",
+            "avalanche",
+            "polkadot",
+            "chainlink",
+            "litecoin",
+            "shiba",
+            "near",
+            "aptos",
+        ]
+    )
 
 
 @dataclass
@@ -288,6 +307,7 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
             max_market_age_hours=f.get("max_market_age_hours", config.filters.max_market_age_hours),
             fallback_age_hours=f.get("fallback_age_hours", config.filters.fallback_age_hours),
             min_volume_24h=f.get("min_volume_24h", config.filters.min_volume_24h),
+            assets=f.get("assets", config.filters.assets),
         )
 
     # Apply top-level YAML settings
