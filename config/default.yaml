@@ -30,6 +30,15 @@ lag_arb:
   momentum_trigger_threshold_pct: 0.001
   pump_exit_threshold_pct: 0.03
   max_hold_time_sec: 300
+  # Side-by-side exit: sell pumped side first, hold other
+  prioritize_pump_exit: false
+  secondary_exit_threshold_pct: 0.02
+pure_arb:
+  # Pure arb: enter on price threshold only (no momentum required)
+  enabled: false
+  max_combined_price: 0.99
+  min_net_profit: 0.005
+  fee_rate: 0.02
 risk:
   max_consecutive_losses: 3
   max_daily_loss_usd: 100

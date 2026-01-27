@@ -16,6 +16,10 @@ CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 CHAIN_ID = 137  # Polygon
 
+# Fee rates by candle interval (auto-adjusted in dashboard)
+INTERVAL_FEE_RATES = {"1h": 0.0, "15m": 0.03, "5m": 0.03}
+INTERVAL_MAX_COMBINED = {"1h": 0.995, "15m": 0.97, "5m": 0.97}
+
 
 @dataclass
 class TradingConfig:
@@ -61,6 +65,19 @@ class LagArbConfig:
     momentum_trigger_threshold_pct: float = 0.001  # 0.1% momentum = trigger signal
     pump_exit_threshold_pct: float = 0.03  # 3% single-side pump = exit
     max_hold_time_sec: int = 300  # 5 min max hold before force exit
+    # Side-by-side exit (sell pumped side first)
+    prioritize_pump_exit: bool = False  # Sell pumped side first, hold other
+    secondary_exit_threshold_pct: float = 0.02  # Exit other side at +2%
+
+
+@dataclass
+class PureArbConfig:
+    """Pure arbitrage: enter on price threshold only (no momentum required)"""
+
+    enabled: bool = False
+    max_combined_price: float = 0.99  # Entry when combined < this
+    min_net_profit: float = 0.005  # Minimum profit after fees
+    fee_rate: float = 0.02  # Assume standard fees unless on 1H
 
 
 @dataclass
@@ -91,6 +108,7 @@ class BotConfig:
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     conservative: ConservativeConfig = field(default_factory=ConservativeConfig)
     lag_arb: LagArbConfig = field(default_factory=LagArbConfig)
+    pure_arb: PureArbConfig = field(default_factory=PureArbConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     verbose: bool = False
@@ -230,6 +248,21 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
                 "pump_exit_threshold_pct", config.lag_arb.pump_exit_threshold_pct
             ),
             max_hold_time_sec=la.get("max_hold_time_sec", config.lag_arb.max_hold_time_sec),
+            prioritize_pump_exit=la.get(
+                "prioritize_pump_exit", config.lag_arb.prioritize_pump_exit
+            ),
+            secondary_exit_threshold_pct=la.get(
+                "secondary_exit_threshold_pct", config.lag_arb.secondary_exit_threshold_pct
+            ),
+        )
+
+    if "pure_arb" in yaml_config:
+        pa = yaml_config["pure_arb"]
+        config.pure_arb = PureArbConfig(
+            enabled=pa.get("enabled", config.pure_arb.enabled),
+            max_combined_price=pa.get("max_combined_price", config.pure_arb.max_combined_price),
+            min_net_profit=pa.get("min_net_profit", config.pure_arb.min_net_profit),
+            fee_rate=pa.get("fee_rate", config.pure_arb.fee_rate),
         )
 
     if "risk" in yaml_config:

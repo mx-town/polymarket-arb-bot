@@ -36,6 +36,10 @@ class Position:
     down_exit_price: float = 0.0
     exit_reason: str | None = None
 
+    # Partial exit tracking (side-by-side exits)
+    up_exited: bool = False
+    down_exited: bool = False
+
     @property
     def total_cost(self) -> float:
         """Total entry cost"""
@@ -94,6 +98,31 @@ class Position:
             return (datetime.now() - self.entry_time).total_seconds()
         return (self.exit_time - self.entry_time).total_seconds()
 
+    @property
+    def is_partially_exited(self) -> bool:
+        """Check if one side has been exited"""
+        return self.up_exited != self.down_exited
+
+    @property
+    def remaining_side(self) -> str | None:
+        """Which side still has shares"""
+        if self.up_exited and not self.down_exited:
+            return "down"
+        if self.down_exited and not self.up_exited:
+            return "up"
+        return None
+
+    def partial_exit(self, side: str, exit_price: float) -> float:
+        """Mark one side as exited, return PnL for that side"""
+        if side == "up":
+            self.up_exited = True
+            self.up_exit_price = exit_price
+            return (exit_price - self.up_entry_price) * self.up_shares
+        else:
+            self.down_exited = True
+            self.down_exit_price = exit_price
+            return (exit_price - self.down_entry_price) * self.down_shares
+
 
 class PositionManager:
     """Manages all open positions"""
@@ -146,6 +175,39 @@ class PositionManager:
             position.close(up_exit_price, down_exit_price, reason)
             self.closed_positions.append(position)
         return position
+
+    def partial_exit_position(
+        self,
+        market_id: str,
+        side: str,
+        exit_price: float,
+    ) -> tuple[Position | None, float]:
+        """
+        Exit one side of a position.
+
+        Args:
+            market_id: Market ID
+            side: "up" or "down"
+            exit_price: Exit price for this side
+
+        Returns:
+            Tuple of (position, pnl_for_this_side)
+        """
+        position = self.positions.get(market_id)
+        if not position:
+            return None, 0.0
+
+        pnl = position.partial_exit(side, exit_price)
+
+        # If both sides now exited, move to closed
+        if position.up_exited and position.down_exited:
+            position.status = PositionStatus.CLOSED
+            position.exit_time = datetime.now()
+            position.exit_reason = "partial_exits"
+            self.closed_positions.append(position)
+            del self.positions[market_id]
+
+        return position, pnl
 
     def get_open_positions(self) -> list[Position]:
         """Get all open positions"""

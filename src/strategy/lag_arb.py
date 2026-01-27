@@ -249,11 +249,9 @@ class LagArbStrategy(SignalDetector):
             )
             return None
 
-        # Calculate profits
-        # For 1H markets: 0% fees
-        # For 15m markets: ~3% fees at 50/50, but we're not targeting those now
+        # Calculate profits using lag_arb fee_rate (0% for 1H, 3% for 15m)
         gross_profit = 1.0 - combined
-        estimated_fees = combined * self.trading.fee_rate  # 0 for 1H markets
+        estimated_fees = combined * self.config.fee_rate
         net_profit = gross_profit - estimated_fees
 
         # Accept any positive net profit during lag window
@@ -261,7 +259,7 @@ class LagArbStrategy(SignalDetector):
             return None
 
         # Create opportunity
-        opp = ArbOpportunity.from_market(market, self.trading.fee_rate)
+        opp = ArbOpportunity.from_market(market, self.config.fee_rate)
         opp.confidence = window.signal.confidence
 
         logger.info(
@@ -288,6 +286,7 @@ class LagArbStrategy(SignalDetector):
         entry_up_price: float,
         entry_down_price: float,
         entry_time: datetime | None = None,
+        position=None,  # Position for partial exit tracking
     ) -> Signal | None:
         """
         Check if position should exit.
@@ -295,16 +294,24 @@ class LagArbStrategy(SignalDetector):
         Lag arb exits aggressively with multiple triggers:
         1. Exit if max hold time exceeded (force exit)
         2. Exit if one side pumps >= threshold (3% default)
+           - If prioritize_pump_exit: sell pumped side only
+           - Otherwise: full exit
         3. Exit if combined_bid > entry_cost (any profit available)
         4. Exit on price normalization (spread < threshold)
         5. Otherwise hold to resolution (guaranteed profit if entry < $1.00)
+
+        If position is partially exited, check remaining side for secondary threshold.
         """
         if not market.is_valid:
             return None
 
         entry_cost = entry_up_price + entry_down_price
 
-        # 1. Check max hold time (force exit after N seconds)
+        # Check if position is partially exited
+        is_partial = position and position.is_partially_exited
+        remaining = position.remaining_side if position else None
+
+        # 1. Check max hold time (force full exit after N seconds)
         if entry_time:
             hold_duration = (datetime.now() - entry_time).total_seconds()
             if hold_duration >= self.config.max_hold_time_sec:
@@ -319,6 +326,39 @@ class LagArbStrategy(SignalDetector):
                     exit_reason=ExitReason.EARLY_EXIT,
                 )
 
+        # Handle partially exited positions: check remaining side
+        if is_partial and remaining:
+            if remaining == "up" and entry_up_price > 0:
+                up_change = (market.up_best_bid - entry_up_price) / entry_up_price
+                if up_change >= self.config.secondary_exit_threshold_pct:
+                    logger.info(
+                        "LAG_EXIT_SECONDARY_UP",
+                        f"market={market.slug} up_change={up_change:.2%} "
+                        f"threshold={self.config.secondary_exit_threshold_pct:.2%}",
+                    )
+                    return Signal(
+                        signal_type=SignalType.EXIT,
+                        market_id=market.market_id,
+                        exit_reason=ExitReason.PARTIAL_PROFIT_EXIT,
+                        exit_side="up",
+                    )
+            elif remaining == "down" and entry_down_price > 0:
+                down_change = (market.down_best_bid - entry_down_price) / entry_down_price
+                if down_change >= self.config.secondary_exit_threshold_pct:
+                    logger.info(
+                        "LAG_EXIT_SECONDARY_DOWN",
+                        f"market={market.slug} down_change={down_change:.2%} "
+                        f"threshold={self.config.secondary_exit_threshold_pct:.2%}",
+                    )
+                    return Signal(
+                        signal_type=SignalType.EXIT,
+                        market_id=market.market_id,
+                        exit_reason=ExitReason.PARTIAL_PROFIT_EXIT,
+                        exit_side="down",
+                    )
+            # Hold remaining side to resolution
+            return None
+
         # 2. Check single-side pump (UP side)
         if entry_up_price > 0:
             up_change = (market.up_best_bid - entry_up_price) / entry_up_price
@@ -329,6 +369,15 @@ class LagArbStrategy(SignalDetector):
                     f"threshold={self.config.pump_exit_threshold_pct:.2%} "
                     f"entry={entry_up_price:.4f} current={market.up_best_bid:.4f}",
                 )
+                # Side-by-side exit: sell pumped side only
+                if self.config.prioritize_pump_exit:
+                    return Signal(
+                        signal_type=SignalType.EXIT,
+                        market_id=market.market_id,
+                        exit_reason=ExitReason.PARTIAL_PUMP_EXIT,
+                        exit_side="up",
+                    )
+                # Full exit
                 return Signal(
                     signal_type=SignalType.EXIT,
                     market_id=market.market_id,
@@ -345,43 +394,53 @@ class LagArbStrategy(SignalDetector):
                     f"threshold={self.config.pump_exit_threshold_pct:.2%} "
                     f"entry={entry_down_price:.4f} current={market.down_best_bid:.4f}",
                 )
+                # Side-by-side exit: sell pumped side only
+                if self.config.prioritize_pump_exit:
+                    return Signal(
+                        signal_type=SignalType.EXIT,
+                        market_id=market.market_id,
+                        exit_reason=ExitReason.PARTIAL_PUMP_EXIT,
+                        exit_side="down",
+                    )
+                # Full exit
                 return Signal(
                     signal_type=SignalType.EXIT,
                     market_id=market.market_id,
                     exit_reason=ExitReason.PUMP_EXIT,
                 )
 
-        # 4. Exit on any profit (combined bid > entry cost)
-        current_value = market.combined_bid
-        if current_value > entry_cost:
-            profit = current_value - entry_cost
-            profit_pct = profit / entry_cost
+        # 4. Exit on any profit (combined bid > entry cost) - only for full positions
+        if not is_partial:
+            current_value = market.combined_bid
+            if current_value > entry_cost:
+                profit = current_value - entry_cost
+                profit_pct = profit / entry_cost
 
-            logger.info(
-                "LAG_EXIT_PROFIT",
-                f"market={market.slug} entry={entry_cost:.4f} "
-                f"current={current_value:.4f} profit={profit:.4f} ({profit_pct:.2%})",
-            )
+                logger.info(
+                    "LAG_EXIT_PROFIT",
+                    f"market={market.slug} entry={entry_cost:.4f} "
+                    f"current={current_value:.4f} profit={profit:.4f} ({profit_pct:.2%})",
+                )
 
-            return Signal(
-                signal_type=SignalType.EXIT,
-                market_id=market.market_id,
-                exit_reason=ExitReason.EARLY_EXIT,
-            )
+                return Signal(
+                    signal_type=SignalType.EXIT,
+                    market_id=market.market_id,
+                    exit_reason=ExitReason.EARLY_EXIT,
+                )
 
-        # 5. Exit on price normalization (spread tightened)
-        spread = market.combined_ask - market.combined_bid
-        if spread < 0.005:  # < 0.5% spread = normalized
-            logger.info(
-                "LAG_EXIT_NORMALIZED",
-                f"market={market.slug} spread={spread:.4f}",
-            )
+            # 5. Exit on price normalization (spread tightened)
+            spread = market.combined_ask - market.combined_bid
+            if spread < 0.005:  # < 0.5% spread = normalized
+                logger.info(
+                    "LAG_EXIT_NORMALIZED",
+                    f"market={market.slug} spread={spread:.4f}",
+                )
 
-            return Signal(
-                signal_type=SignalType.EXIT,
-                market_id=market.market_id,
-                exit_reason=ExitReason.EARLY_EXIT,
-            )
+                return Signal(
+                    signal_type=SignalType.EXIT,
+                    market_id=market.market_id,
+                    exit_reason=ExitReason.EARLY_EXIT,
+                )
 
         # Otherwise hold to resolution
         return None

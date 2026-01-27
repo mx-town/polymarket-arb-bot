@@ -230,3 +230,34 @@ class OrderExecutor:
         )
 
         return up_result, down_result
+
+    def execute_partial_exit(
+        self,
+        token_id: str,
+        bid_price: float,
+        shares: float,
+        side: str,
+    ) -> OrderResult:
+        """
+        Execute partial exit: sell only one side.
+
+        Args:
+            token_id: Token ID to sell
+            bid_price: Current best bid
+            shares: Number of shares to sell
+            side: "up" or "down" (for logging)
+
+        Returns:
+            OrderResult
+        """
+        logger.info(
+            "PARTIAL_EXIT",
+            f"side={side} shares={shares:.2f} bid={bid_price:.4f}",
+        )
+
+        return self.place_order(
+            token_id,
+            OrderSide.SELL,
+            bid_price,
+            shares,
+        )

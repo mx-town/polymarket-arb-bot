@@ -23,19 +23,34 @@ export function MarketDiscoverySubpanel({ config, onChange }: SubpanelProps) {
     <SubpanelCard title="Market Discovery" accentColor={SECTION_COLORS.discovery}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {/* Primary selectors row */}
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <MultiSelectDropdown
             values={config.filters.market_types}
             options={MARKET_TYPES}
             onChange={(v) => onChange('filters', 'market_types', v)}
             label="Markets"
           />
-          <SegmentedControl
-            value={config.lag_arb.candle_interval}
-            options={TIME_WINDOWS}
-            onChange={(v) => onChange('lag_arb', 'candle_interval', v)}
-            label="Candle"
-          />
+          <div>
+            <SegmentedControl
+              value={config.lag_arb.candle_interval}
+              options={TIME_WINDOWS}
+              onChange={(v) => onChange('lag_arb', 'candle_interval', v)}
+              label="Candle"
+            />
+            <div
+              style={{
+                fontSize: '0.625rem',
+                color:
+                  config.lag_arb.candle_interval === '1h'
+                    ? 'var(--accent-green)'
+                    : 'var(--accent-amber)',
+                marginTop: '0.25rem',
+                textAlign: 'center',
+              }}
+            >
+              Fee: {config.lag_arb.candle_interval === '1h' ? '0%' : '~3%'}
+            </div>
+          </div>
         </div>
 
         {/* Divider */}

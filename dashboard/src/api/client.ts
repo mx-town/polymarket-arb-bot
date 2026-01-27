@@ -192,6 +192,15 @@ export interface BotConfig {
     momentum_trigger_threshold_pct: number;
     pump_exit_threshold_pct: number;
     max_hold_time_sec: number;
+    // Side-by-side exit
+    prioritize_pump_exit: boolean;
+    secondary_exit_threshold_pct: number;
+  };
+  pure_arb: {
+    enabled: boolean;
+    max_combined_price: number;
+    min_net_profit: number;
+    fee_rate: number;
   };
   risk: {
     max_consecutive_losses: number;

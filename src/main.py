@@ -26,6 +26,7 @@ from src.market.discovery import (
 from src.market.state import MarketState, MarketStateManager, MarketStatus
 from src.strategy.conservative import ConservativeStrategy
 from src.strategy.lag_arb import LagArbStrategy
+from src.strategy.pure_arb import PureArbStrategy
 from src.strategy.signals import ArbOpportunity
 from src.utils.logging import get_logger, setup_logging
 from src.utils.metrics import BotMetrics, remove_pid, write_pid
@@ -59,6 +60,7 @@ class ArbBot:
 
         # Strategy (set based on config)
         self.strategy: ConservativeStrategy | LagArbStrategy | None = None
+        self.pure_arb_strategy: PureArbStrategy | None = None
 
         # P&L snapshot interval tracking
         self._last_pnl_snapshot = 0.0
@@ -119,6 +121,14 @@ class ArbBot:
             self._init_lag_arb()
         else:
             self._init_conservative()
+
+        # Initialize pure arb if enabled (can run alongside main strategy)
+        if self.config.pure_arb.enabled:
+            self.pure_arb_strategy = PureArbStrategy(
+                self.config.trading,
+                self.config.pure_arb,
+            )
+            logger.info("STRATEGY", "Pure arb strategy enabled (no momentum required)")
 
         # Connect Polymarket WebSocket (always enabled)
         self._init_polymarket_ws()
@@ -369,9 +379,18 @@ class ArbBot:
 
         # Check entry signal if no position
         if not self.position_manager.has_position(market_id):
+            # Check main strategy first
             signal = self.strategy.check_entry(market)
             if signal and signal.opportunity:
                 self._execute_entry(signal.opportunity)
+                return
+
+            # Check pure arb entry (if enabled)
+            if self.pure_arb_strategy:
+                signal = self.pure_arb_strategy.check_entry(market)
+                if signal and signal.opportunity:
+                    self._execute_entry(signal.opportunity)
+                    return
 
         # Check exit signal if has position
         else:
@@ -381,9 +400,16 @@ class ArbBot:
                     market,
                     position.up_entry_price,
                     position.down_entry_price,
+                    position.entry_time,
+                    position,  # Pass position for partial exit tracking
                 )
                 if exit_signal:
-                    self._execute_exit(market, position, exit_signal.exit_reason.value)
+                    self._execute_exit(
+                        market,
+                        position,
+                        exit_signal.exit_reason.value,
+                        exit_signal.exit_side,  # Pass exit_side for partial exits
+                    )
 
     def _execute_entry(self, opp: ArbOpportunity):
         """Execute entry trade"""
@@ -455,8 +481,69 @@ class ArbBot:
                 },
             )
 
-    def _execute_exit(self, market: MarketState, position, reason: str):
-        """Execute exit trade"""
+    def _execute_exit(
+        self, market: MarketState, position, reason: str, exit_side: str | None = None
+    ):
+        """Execute exit trade (full or partial)"""
+        # Partial exit: sell only one side
+        if exit_side:
+            if exit_side == "up":
+                result = self.executor.execute_partial_exit(
+                    market.up_token_id,
+                    market.up_best_bid,
+                    position.up_shares,
+                    "up",
+                )
+                if result.success:
+                    pos, pnl = self.position_manager.partial_exit_position(
+                        market.market_id,
+                        "up",
+                        market.up_best_bid,
+                    )
+                    logger.info(
+                        "PARTIAL_EXIT_UP",
+                        f"market={market.slug} pnl=${pnl:.4f} reason={reason}",
+                    )
+                    self.metrics.record_event(
+                        "PARTIAL_EXIT",
+                        market.slug,
+                        {
+                            "market_id": market.market_id,
+                            "side": "up",
+                            "pnl": pnl,
+                            "reason": reason,
+                        },
+                    )
+            else:
+                result = self.executor.execute_partial_exit(
+                    market.down_token_id,
+                    market.down_best_bid,
+                    position.down_shares,
+                    "down",
+                )
+                if result.success:
+                    pos, pnl = self.position_manager.partial_exit_position(
+                        market.market_id,
+                        "down",
+                        market.down_best_bid,
+                    )
+                    logger.info(
+                        "PARTIAL_EXIT_DOWN",
+                        f"market={market.slug} pnl=${pnl:.4f} reason={reason}",
+                    )
+                    self.metrics.record_event(
+                        "PARTIAL_EXIT",
+                        market.slug,
+                        {
+                            "market_id": market.market_id,
+                            "side": "down",
+                            "pnl": pnl,
+                            "reason": reason,
+                        },
+                    )
+            return
+
+        # Full exit: sell both sides
         up_result, down_result = self.executor.execute_arb_exit(
             market.up_token_id,
             market.down_token_id,
@@ -474,11 +561,7 @@ class ArbBot:
             )
             if closed:
                 pnl = closed.realized_pnl
-                hold_duration = (
-                    (closed.closed_at - closed.opened_at).total_seconds()
-                    if closed.closed_at and closed.opened_at
-                    else 0.0
-                )
+                hold_duration = closed.hold_duration_seconds or 0.0
                 self.risk_manager.record_trade_result(pnl)
                 self.metrics.record_trade(success=True, pnl=pnl)
                 logger.info(
@@ -619,9 +702,16 @@ class ArbBot:
                 market,
                 position.up_entry_price,
                 position.down_entry_price,
+                position.entry_time,
+                position,  # Pass position for partial exit tracking
             )
             if exit_signal:
-                self._execute_exit(market, position, exit_signal.exit_reason.value)
+                self._execute_exit(
+                    market,
+                    position,
+                    exit_signal.exit_reason.value,
+                    exit_signal.exit_side,  # Pass exit_side for partial exits
+                )
 
     def shutdown(self):
         """Clean shutdown"""
