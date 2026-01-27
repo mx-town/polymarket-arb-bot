@@ -38,7 +38,7 @@ export function MarketsPanel({ markets }: Props) {
 
   // Parse and enrich markets with asset/interval info
   const enrichedMarkets = useMemo(() => {
-    return markets.map(market => {
+    return markets.map((market) => {
       const { asset, interval } = parseMarketSlug(market.slug);
       const spread = market.combined_ask - market.combined_bid;
       const profit = Math.max(0, 1 - market.combined_ask);
@@ -49,7 +49,7 @@ export function MarketsPanel({ markets }: Props) {
   // Filter by interval
   const filteredMarkets = useMemo(() => {
     if (intervalFilter === 'all') return enrichedMarkets;
-    return enrichedMarkets.filter(m => m.interval === intervalFilter);
+    return enrichedMarkets.filter((m) => m.interval === intervalFilter);
   }, [enrichedMarkets, intervalFilter]);
 
   // Group markets by asset
@@ -92,7 +92,7 @@ export function MarketsPanel({ markets }: Props) {
   }, [groupedMarkets]);
 
   const toggleAsset = (asset: string) => {
-    setExpandedAssets(prev => {
+    setExpandedAssets((prev) => {
       const next = new Set(prev);
       if (next.has(asset)) {
         next.delete(asset);
@@ -178,7 +178,9 @@ export function MarketsPanel({ markets }: Props) {
           background: 'var(--bg-elevated)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}
+        >
           <span style={{ fontSize: '1rem' }}>&#x25C9;</span>
           <span
             style={{
@@ -235,7 +237,9 @@ export function MarketsPanel({ markets }: Props) {
                   textTransform: 'uppercase',
                 }}
               >
-                {interval === 'all' ? `All (${markets.length})` : `${interval} (${intervalCounts[interval]})`}
+                {interval === 'all'
+                  ? `All (${markets.length})`
+                  : `${interval} (${intervalCounts[interval]})`}
               </button>
             ))}
           </div>
@@ -301,7 +305,7 @@ export function MarketsPanel({ markets }: Props) {
         {sortedAssets.map((asset) => {
           const assetMarkets = groupedMarkets[asset];
           const isExpanded = expandedAssets.has(asset);
-          const tradeableCount = assetMarkets.filter(m => isTradeable(m.interval)).length;
+          const tradeableCount = assetMarkets.filter((m) => isTradeable(m.interval)).length;
           const totalProfit = assetMarkets.reduce((sum, m) => sum + m.profit, 0);
 
           return (
@@ -431,7 +435,9 @@ export function MarketsPanel({ markets }: Props) {
                               width: '5px',
                               height: '5px',
                               borderRadius: '50%',
-                              background: market.is_valid ? 'var(--accent-green)' : 'var(--accent-red)',
+                              background: market.is_valid
+                                ? 'var(--accent-green)'
+                                : 'var(--accent-red)',
                               flexShrink: 0,
                             }}
                           />
@@ -444,7 +450,9 @@ export function MarketsPanel({ markets }: Props) {
                             }}
                             title={market.slug}
                           >
-                            {market.slug.replace(`${asset.toLowerCase()}-updown-`, '').replace(/-/g, ' ')}
+                            {market.slug
+                              .replace(`${asset.toLowerCase()}-updown-`, '')
+                              .replace(/-/g, ' ')}
                           </span>
                         </div>
                         <div
@@ -457,7 +465,9 @@ export function MarketsPanel({ markets }: Props) {
                             style={{
                               fontSize: '0.5625rem',
                               padding: '0.0625rem 0.25rem',
-                              background: tradeable ? 'var(--accent-green-dim)' : 'var(--accent-amber-dim)',
+                              background: tradeable
+                                ? 'var(--accent-green-dim)'
+                                : 'var(--accent-amber-dim)',
                               borderRadius: '2px',
                             }}
                           >
@@ -467,7 +477,10 @@ export function MarketsPanel({ markets }: Props) {
                         <div
                           style={{
                             textAlign: 'right',
-                            color: market.combined_ask < 1 ? 'var(--accent-green)' : 'var(--text-secondary)',
+                            color:
+                              market.combined_ask < 1
+                                ? 'var(--accent-green)'
+                                : 'var(--text-secondary)',
                           }}
                         >
                           ${market.combined_ask.toFixed(3)}
@@ -475,7 +488,8 @@ export function MarketsPanel({ markets }: Props) {
                         <div
                           style={{
                             textAlign: 'right',
-                            color: market.spread < 0.02 ? 'var(--accent-green)' : 'var(--accent-amber)',
+                            color:
+                              market.spread < 0.02 ? 'var(--accent-green)' : 'var(--accent-amber)',
                           }}
                         >
                           {(market.spread * 100).toFixed(1)}%
@@ -513,7 +527,8 @@ export function MarketsPanel({ markets }: Props) {
         }}
       >
         <span>
-          {sortedAssets.length} assets | {filteredMarkets.filter(m => isTradeable(m.interval)).length} tradeable
+          {sortedAssets.length} assets |{' '}
+          {filteredMarkets.filter((m) => isTradeable(m.interval)).length} tradeable
         </span>
         <span style={{ color: 'var(--accent-green)' }}>
           Total: +${filteredMarkets.reduce((sum, m) => sum + m.profit, 0).toFixed(3)}

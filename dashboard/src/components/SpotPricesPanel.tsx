@@ -31,13 +31,7 @@ function formatPrice(price: number | null | undefined): string {
   return `$${price.toFixed(6)}`;
 }
 
-function SpotPriceCard({
-  symbol,
-  data,
-}: {
-  symbol: string;
-  data: SpotPriceData;
-}) {
+function SpotPriceCard({ symbol, data }: { symbol: string; data: SpotPriceData }) {
   const display = SYMBOL_DISPLAY[symbol] || { name: symbol, short: symbol.replace('USDT', '') };
   const momentum = data.momentum ?? 0;
   const momentumPct = momentum * 100;
@@ -161,9 +155,7 @@ function SpotPriceCard({
           }}
         >
           <span>Open</span>
-          <span style={{ fontFamily: 'var(--font-mono)' }}>
-            {formatPrice(data.candle_open)}
-          </span>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{formatPrice(data.candle_open)}</span>
         </div>
       )}
     </div>
@@ -220,9 +212,20 @@ export function SpotPricesPanel({ spotPrices }: Props) {
 
   // Sort symbols by a predefined order (major coins first)
   const sortOrder = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT',
-    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
-    'LTCUSDT', 'SHIBUSDT', 'NEARUSDT', 'APTUSDT',
+    'BTCUSDT',
+    'ETHUSDT',
+    'SOLUSDT',
+    'XRPUSDT',
+    'BNBUSDT',
+    'ADAUSDT',
+    'DOGEUSDT',
+    'AVAXUSDT',
+    'DOTUSDT',
+    'LINKUSDT',
+    'LTCUSDT',
+    'SHIBUSDT',
+    'NEARUSDT',
+    'APTUSDT',
   ];
   const sortedSymbols = symbols.sort((a, b) => {
     const aIdx = sortOrder.indexOf(a);
