@@ -49,11 +49,6 @@ function SpotPriceCard({
     price: point.price,
   }));
 
-  // Calculate min/max for better chart scaling
-  const prices = chartData.map((d) => d.price);
-  const minPrice = Math.min(...prices) * 0.9999;
-  const maxPrice = Math.max(...prices) * 1.0001;
-
   return (
     <div
       style={{

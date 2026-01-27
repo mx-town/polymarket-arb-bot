@@ -98,11 +98,24 @@ class FilterConfig:
     fallback_age_hours: float = 24.0  # Fallback to 24h if no recent markets
     min_volume_24h: float = 100.0  # Minimum volume to ensure activity
     # Assets to track (14 major cryptos by default)
-    assets: list = field(default_factory=lambda: [
-        "bitcoin", "ethereum", "solana", "xrp", "bnb", "cardano",
-        "dogecoin", "avalanche", "polkadot", "chainlink", "litecoin",
-        "shiba", "near", "aptos",
-    ])
+    assets: list = field(
+        default_factory=lambda: [
+            "bitcoin",
+            "ethereum",
+            "solana",
+            "xrp",
+            "bnb",
+            "cardano",
+            "dogecoin",
+            "avalanche",
+            "polkadot",
+            "chainlink",
+            "litecoin",
+            "shiba",
+            "near",
+            "aptos",
+        ]
+    )
 
 
 @dataclass

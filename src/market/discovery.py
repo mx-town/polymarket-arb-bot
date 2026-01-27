@@ -25,9 +25,20 @@ INTERVAL_TO_RECURRENCE = {
 
 # Default crypto assets to track (14 major cryptos)
 DEFAULT_ASSETS = [
-    "bitcoin", "ethereum", "solana", "xrp", "bnb", "cardano",
-    "dogecoin", "avalanche", "polkadot", "chainlink", "litecoin",
-    "shiba", "near", "aptos",
+    "bitcoin",
+    "ethereum",
+    "solana",
+    "xrp",
+    "bnb",
+    "cardano",
+    "dogecoin",
+    "avalanche",
+    "polkadot",
+    "chainlink",
+    "litecoin",
+    "shiba",
+    "near",
+    "aptos",
 ]
 
 # Asset name variations (slug can use full name or abbreviation)

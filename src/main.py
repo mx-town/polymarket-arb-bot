@@ -168,9 +168,7 @@ class ArbBot:
         # Build Binance symbols from config assets
         assets = self.config.filters.assets
         binance_symbols = [
-            ASSET_TO_BINANCE_SYMBOL[a]
-            for a in assets
-            if a in ASSET_TO_BINANCE_SYMBOL
+            ASSET_TO_BINANCE_SYMBOL[a] for a in assets if a in ASSET_TO_BINANCE_SYMBOL
         ]
         logger.info("BINANCE_SYMBOLS", f"tracking={len(binance_symbols)} symbols")
 

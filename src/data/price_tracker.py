@@ -356,11 +356,20 @@ class PriceTracker:
                 mapping[asset] = symbol
                 # Add short name mapping (first 3-4 chars based on common abbreviations)
                 short_names = {
-                    "bitcoin": "btc", "ethereum": "eth", "solana": "sol",
-                    "cardano": "ada", "dogecoin": "doge", "avalanche": "avax",
-                    "polkadot": "dot", "chainlink": "link", "litecoin": "ltc",
-                    "shiba": "shib", "aptos": "apt", "near": "near",
-                    "xrp": "xrp", "bnb": "bnb",
+                    "bitcoin": "btc",
+                    "ethereum": "eth",
+                    "solana": "sol",
+                    "cardano": "ada",
+                    "dogecoin": "doge",
+                    "avalanche": "avax",
+                    "polkadot": "dot",
+                    "chainlink": "link",
+                    "litecoin": "ltc",
+                    "shiba": "shib",
+                    "aptos": "apt",
+                    "near": "near",
+                    "xrp": "xrp",
+                    "bnb": "bnb",
                 }
                 short = short_names.get(asset, asset[:3])
                 mapping[short] = symbol
