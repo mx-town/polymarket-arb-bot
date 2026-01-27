@@ -17,14 +17,18 @@ from src.utils.logging import get_logger
 logger = get_logger("discovery")
 
 # Map candle intervals to series recurrence patterns
+# Note: 5m removed - same fees as 15m with no advantage
 INTERVAL_TO_RECURRENCE = {
     "1h": "hourly",
     "15m": "15m",
-    "5m": "5m",
 }
 
-# Default crypto assets to track
-DEFAULT_ASSETS = ["bitcoin", "ethereum"]
+# Default crypto assets to track (14 major cryptos)
+DEFAULT_ASSETS = [
+    "bitcoin", "ethereum", "solana", "xrp", "bnb", "cardano",
+    "dogecoin", "avalanche", "polkadot", "chainlink", "litecoin",
+    "shiba", "near", "aptos",
+]
 
 # Asset name variations (slug can use full name or abbreviation)
 ASSET_ALIASES = {
@@ -32,6 +36,34 @@ ASSET_ALIASES = {
     "ethereum": ["ethereum", "eth"],
     "solana": ["solana", "sol"],
     "xrp": ["xrp"],
+    "bnb": ["bnb", "binancecoin"],
+    "cardano": ["cardano", "ada"],
+    "dogecoin": ["dogecoin", "doge"],
+    "avalanche": ["avalanche", "avax"],
+    "polkadot": ["polkadot", "dot"],
+    "chainlink": ["chainlink", "link"],
+    "litecoin": ["litecoin", "ltc"],
+    "shiba": ["shiba", "shib"],
+    "near": ["near"],
+    "aptos": ["aptos", "apt"],
+}
+
+# Map asset names to Binance trading symbols
+ASSET_TO_BINANCE_SYMBOL = {
+    "bitcoin": "BTCUSDT",
+    "ethereum": "ETHUSDT",
+    "solana": "SOLUSDT",
+    "xrp": "XRPUSDT",
+    "bnb": "BNBUSDT",
+    "cardano": "ADAUSDT",
+    "dogecoin": "DOGEUSDT",
+    "avalanche": "AVAXUSDT",
+    "polkadot": "DOTUSDT",
+    "chainlink": "LINKUSDT",
+    "litecoin": "LTCUSDT",
+    "shiba": "SHIBUSDT",
+    "near": "NEARUSDT",
+    "aptos": "APTUSDT",
 }
 
 
@@ -335,14 +367,12 @@ def fetch_recent_updown_markets(
         assets = []
         for mt in market_types:
             mt_lower = mt.lower()
-            if "btc" in mt_lower or "bitcoin" in mt_lower:
-                assets.append("bitcoin")
-            elif "eth" in mt_lower or "ethereum" in mt_lower:
-                assets.append("ethereum")
-            elif "sol" in mt_lower or "solana" in mt_lower:
-                assets.append("solana")
-            elif "xrp" in mt_lower:
-                assets.append("xrp")
+            # Check all known aliases
+            for asset, aliases in ASSET_ALIASES.items():
+                if any(alias in mt_lower for alias in aliases):
+                    if asset not in assets:
+                        assets.append(asset)
+                    break
         if not assets:
             assets = DEFAULT_ASSETS
     elif assets is None:

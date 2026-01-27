@@ -21,6 +21,7 @@ from src.execution.orders import OrderExecutor
 from src.execution.position import PositionManager
 from src.execution.risk import RiskManager
 from src.market.discovery import (
+    ASSET_TO_BINANCE_SYMBOL,
     fetch_recent_updown_markets,
 )
 from src.market.state import MarketState, MarketStateManager, MarketStatus
@@ -103,13 +104,13 @@ class ArbBot:
         # Discover recent markets
         logger.info(
             "DISCOVER",
-            f"interval={self.config.lag_arb.candle_interval} assets={self.config.filters.market_types}",
+            f"interval={self.config.lag_arb.candle_interval} assets={self.config.filters.assets}",
         )
         self.state_manager = fetch_recent_updown_markets(
             max_age_hours=self.config.filters.max_market_age_hours,
             fallback_age_hours=self.config.filters.fallback_age_hours,
             min_volume_24h=self.config.filters.min_volume_24h,
-            market_types=self.config.filters.market_types,
+            assets=self.config.filters.assets,
             max_markets=self.config.polling.max_markets,
             candle_interval=self.config.lag_arb.candle_interval,
         )
@@ -164,10 +165,20 @@ class ArbBot:
             on_event=self._on_strategy_event,
         )
 
-        # Create price tracker
+        # Build Binance symbols from config assets
+        assets = self.config.filters.assets
+        binance_symbols = [
+            ASSET_TO_BINANCE_SYMBOL[a]
+            for a in assets
+            if a in ASSET_TO_BINANCE_SYMBOL
+        ]
+        logger.info("BINANCE_SYMBOLS", f"tracking={len(binance_symbols)} symbols")
+
+        # Create price tracker with config assets
         self.price_tracker = PriceTracker(
             self.config.lag_arb,
             on_signal=self._on_direction_signal,
+            assets=assets,
         )
 
         # Fetch initial candle data from Binance Klines API
@@ -176,7 +187,7 @@ class ArbBot:
 
         # Connect to Binance WebSocket for real-time trades
         self.binance_ws = BinanceWebSocket(
-            symbols=["BTCUSDT", "ETHUSDT"],
+            symbols=binance_symbols,
             on_trade=self.price_tracker.on_trade,
             reconnect_delay=5.0,
         )
@@ -634,15 +645,34 @@ class ArbBot:
             "dry_run": self.config.trading.dry_run,
             "lag_arb_enabled": self.config.lag_arb.enabled,
             "market_types": self.config.filters.market_types,
+            "assets": self.config.filters.assets,
             "momentum_threshold": self.config.lag_arb.momentum_trigger_threshold_pct,
             "max_lag_window_ms": self.config.lag_arb.max_lag_window_ms,
             "max_combined_price": self.config.lag_arb.max_combined_price,
         }
 
+        # Spot prices with history for sparklines
+        spot_prices = {}
+        if self.binance_ws:
+            for symbol in self.binance_ws.symbols:
+                spot_prices[symbol] = {
+                    "price": self.binance_ws.get_price(symbol),
+                    "history": self.binance_ws.get_price_history(symbol),
+                }
+                # Add candle info if available from price tracker
+                if self.price_tracker:
+                    tracker = self.price_tracker.trackers.get(symbol)
+                    if tracker:
+                        spot_prices[symbol]["candle_open"] = (
+                            tracker.candle.open_price if tracker.candle else None
+                        )
+                        spot_prices[symbol]["momentum"] = tracker.get_momentum()
+
         return {
             "active_markets": active_markets,
             "active_windows": active_windows,
             "config_summary": config_summary,
+            "spot_prices": spot_prices,
         }
 
     def run(self):
@@ -682,6 +712,7 @@ class ArbBot:
                     active_markets=dashboard_data["active_markets"],
                     active_windows=dashboard_data["active_windows"],
                     config_summary=dashboard_data["config_summary"],
+                    spot_prices=dashboard_data["spot_prices"],
                 )
 
                 # For lag arb, also check for expired windows and exits

@@ -22,6 +22,7 @@ import requests
 
 from src.config import LagArbConfig
 from src.data.binance_ws import AggTrade
+from src.market.discovery import ASSET_TO_BINANCE_SYMBOL
 from src.utils.logging import get_logger
 
 logger = get_logger("price_tracker")
@@ -326,17 +327,45 @@ class PriceTracker:
         self,
         config: LagArbConfig,
         on_signal: Callable[[DirectionSignal], None] | None = None,
+        assets: list[str] | None = None,
     ):
         self.config = config
         self.on_signal = on_signal
 
         self.trackers: dict[str, SymbolTracker] = {}
 
-        # Map Polymarket assets to Binance symbols
-        self.asset_to_symbol = {
-            "btc": "BTCUSDT",
-            "eth": "ETHUSDT",
-        }
+        # Map Polymarket assets to Binance symbols (dynamic from config)
+        self.asset_to_symbol = self._build_asset_mapping(assets)
+
+    def _build_asset_mapping(self, assets: list[str] | None) -> dict[str, str]:
+        """Build asset-to-symbol mapping from config assets.
+
+        Maps both full names and short names to Binance symbols:
+        - "bitcoin" -> "BTCUSDT"
+        - "btc" -> "BTCUSDT" (short name derived from first 3 chars or full name)
+        """
+        if assets is None:
+            # Fallback to default BTC/ETH only
+            return {"btc": "BTCUSDT", "eth": "ETHUSDT"}
+
+        mapping = {}
+        for asset in assets:
+            if asset in ASSET_TO_BINANCE_SYMBOL:
+                symbol = ASSET_TO_BINANCE_SYMBOL[asset]
+                # Add full name mapping
+                mapping[asset] = symbol
+                # Add short name mapping (first 3-4 chars based on common abbreviations)
+                short_names = {
+                    "bitcoin": "btc", "ethereum": "eth", "solana": "sol",
+                    "cardano": "ada", "dogecoin": "doge", "avalanche": "avax",
+                    "polkadot": "dot", "chainlink": "link", "litecoin": "ltc",
+                    "shiba": "shib", "aptos": "apt", "near": "near",
+                    "xrp": "xrp", "bnb": "bnb",
+                }
+                short = short_names.get(asset, asset[:3])
+                mapping[short] = symbol
+
+        return mapping
 
     def initialize(self):
         """Initialize trackers and fetch initial candle data"""

@@ -264,6 +264,7 @@ class BotMetrics:
         active_markets: list | None = None,
         active_windows: list | None = None,
         config_summary: dict | None = None,
+        spot_prices: dict | None = None,
     ) -> bool:
         """Export metrics to JSON file for IPC with API server"""
         try:
@@ -288,6 +289,7 @@ class BotMetrics:
             data["active_markets"] = active_markets or []
             data["active_windows"] = active_windows or []
             data["config_summary"] = config_summary or {}
+            data["spot_prices"] = spot_prices or {}
 
             # Unified event stream for dashboard
             data["events"] = self.get_events()
