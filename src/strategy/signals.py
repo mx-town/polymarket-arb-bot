@@ -22,6 +22,8 @@ class ExitReason(Enum):
     EARLY_EXIT = "early_exit"
     STOP_LOSS = "stop_loss"
     TIME_LIMIT = "time_limit"
+    PARTIAL_PUMP_EXIT = "partial_pump_exit"  # Single side pump (side-by-side exit)
+    PARTIAL_PROFIT_EXIT = "partial_profit_exit"  # Secondary exit threshold
 
 
 @dataclass
@@ -93,6 +95,7 @@ class Signal:
     exit_reason: ExitReason | None = None
     confidence: float = 1.0
     timestamp: datetime = None
+    exit_side: str | None = None  # "up" or "down" for partial exits
 
     def __post_init__(self):
         if self.timestamp is None:

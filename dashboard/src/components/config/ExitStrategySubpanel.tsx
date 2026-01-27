@@ -1,4 +1,4 @@
-import { SubpanelCard, InlineValue, SECTION_COLORS, type SubpanelProps } from './shared';
+import { SubpanelCard, InlineValue, Toggle, SECTION_COLORS, type SubpanelProps } from './shared';
 
 export function ExitStrategySubpanel({ config, onChange }: SubpanelProps) {
   const isLagArb = config.lag_arb.enabled;
@@ -8,6 +8,14 @@ export function ExitStrategySubpanel({ config, onChange }: SubpanelProps) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
         {isLagArb ? (
           <>
+            <div style={{ marginBottom: '0.25rem' }}>
+              <Toggle
+                checked={config.lag_arb.prioritize_pump_exit ?? false}
+                onChange={(v) => onChange('lag_arb', 'prioritize_pump_exit', v)}
+                label="Prioritize Pump Exit"
+                activeColor={SECTION_COLORS.exit}
+              />
+            </div>
             <InlineValue
               label="Max Hold Time"
               value={config.lag_arb.max_hold_time_sec}
@@ -22,6 +30,15 @@ export function ExitStrategySubpanel({ config, onChange }: SubpanelProps) {
               suffix="%"
               accentColor={SECTION_COLORS.risk}
             />
+            {config.lag_arb.prioritize_pump_exit && (
+              <InlineValue
+                label="Secondary Exit"
+                value={config.lag_arb.secondary_exit_threshold_pct ?? 0.02}
+                onChange={(v) => onChange('lag_arb', 'secondary_exit_threshold_pct', v)}
+                suffix="%"
+                accentColor={SECTION_COLORS.exit}
+              />
+            )}
 
             <div
               style={{
