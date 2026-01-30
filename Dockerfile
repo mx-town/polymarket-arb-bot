@@ -3,17 +3,20 @@
 # Stage 1: Build the React dashboard
 FROM node:20-slim AS dashboard-builder
 
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 WORKDIR /app/dashboard
 
 # Copy package files first for layer caching
-COPY dashboard/package*.json ./
+COPY dashboard/package.json dashboard/pnpm-lock.yaml* ./
 
 # Install dependencies
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 # Copy source and build
 COPY dashboard/ ./
-RUN npm run build
+RUN pnpm run build
 
 
 # Stage 2: Production Python image

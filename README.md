@@ -78,6 +78,38 @@ open http://localhost:3000
 docker compose logs -f backend
 ```
 
+## Local Development
+
+### Prerequisites
+
+- Python 3.11+ with [uv](https://github.com/astral-sh/uv) package manager
+- Node.js 20+ with [pnpm](https://pnpm.io/) package manager
+
+### Setup
+
+```bash
+# Install pnpm (if not already installed)
+npm install -g pnpm
+# or
+corepack enable
+corepack prepare pnpm@latest --activate
+
+# Install Python dependencies
+uv sync
+
+# Install frontend dependencies
+cd dashboard
+pnpm install
+cd ..
+
+# Run backend
+uv run python -m src.main
+
+# Run frontend (in another terminal)
+cd dashboard
+pnpm run dev
+```
+
 ## Configuration
 
 Configuration is loaded from multiple sources (priority: CLI > ENV > YAML > defaults):
