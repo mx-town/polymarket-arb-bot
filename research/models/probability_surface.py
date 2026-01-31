@@ -130,16 +130,20 @@ class ProbabilitySurface:
 
         return (lower, upper)
 
+    def _round_bucket(self, value: float) -> float:
+        """Round bucket boundary to avoid floating point precision issues."""
+        return round(value, 10)
+
     def _get_deviation_bucket(self, deviation: float) -> tuple[float, float]:
         """Get bucket boundaries for a deviation value."""
         if deviation < self.deviation_range[0]:
-            return (float("-inf"), self.deviation_range[0])
+            return (float("-inf"), self._round_bucket(self.deviation_range[0]))
         if deviation >= self.deviation_range[1]:
-            return (self.deviation_range[1], float("inf"))
+            return (self._round_bucket(self.deviation_range[1]), float("inf"))
 
         bucket_idx = int((deviation - self.deviation_range[0]) / self.deviation_step)
-        bucket_min = self.deviation_range[0] + bucket_idx * self.deviation_step
-        bucket_max = bucket_min + self.deviation_step
+        bucket_min = self._round_bucket(self.deviation_range[0] + bucket_idx * self.deviation_step)
+        bucket_max = self._round_bucket(bucket_min + self.deviation_step)
 
         return (bucket_min, bucket_max)
 
@@ -191,6 +195,9 @@ class ProbabilitySurface:
                 # Bucket by deviation
                 for i, dev_min in enumerate(self.deviation_bins[:-1]):
                     dev_max = self.deviation_bins[i + 1]
+                    # Round for consistent keys
+                    dev_min_key = self._round_bucket(dev_min)
+                    dev_max_key = self._round_bucket(dev_max)
 
                     # Get observations in this bucket
                     dev_mask = (base_df["deviation_pct"] >= dev_min) & \
@@ -207,8 +214,8 @@ class ProbabilitySurface:
                     )
 
                     bucket = ProbabilityBucket(
-                        deviation_min=dev_min,
-                        deviation_max=dev_max,
+                        deviation_min=dev_min_key,
+                        deviation_max=dev_max_key,
                         time_remaining=time_remaining,
                         vol_regime=vol_regime,
                         sample_size=sample_size,
@@ -221,7 +228,7 @@ class ProbabilitySurface:
                         is_usable=sample_size >= MIN_SAMPLES_USABLE
                     )
 
-                    key = (dev_min, dev_max, time_remaining, vol_regime)
+                    key = (dev_min_key, dev_max_key, time_remaining, vol_regime)
                     self.buckets[key] = bucket
 
         # Also add extreme buckets (< min and >= max deviation)
@@ -254,9 +261,10 @@ class ProbabilitySurface:
                     ci_lower, ci_upper = self._wilson_score_interval(
                         win_count, sample_size, self.confidence_level
                     )
+                    dev_max_key = self._round_bucket(self.deviation_range[0])
                     bucket = ProbabilityBucket(
                         deviation_min=float("-inf"),
-                        deviation_max=self.deviation_range[0],
+                        deviation_max=dev_max_key,
                         time_remaining=time_remaining,
                         vol_regime=vol_regime,
                         sample_size=sample_size,
@@ -268,7 +276,7 @@ class ProbabilitySurface:
                         is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
                         is_usable=sample_size >= MIN_SAMPLES_USABLE
                     )
-                    key = (float("-inf"), self.deviation_range[0], time_remaining, vol_regime)
+                    key = (float("-inf"), dev_max_key, time_remaining, vol_regime)
                     self.buckets[key] = bucket
 
                 # Upper extreme
@@ -280,8 +288,9 @@ class ProbabilitySurface:
                     ci_lower, ci_upper = self._wilson_score_interval(
                         win_count, sample_size, self.confidence_level
                     )
+                    dev_min_key = self._round_bucket(self.deviation_range[1])
                     bucket = ProbabilityBucket(
-                        deviation_min=self.deviation_range[1],
+                        deviation_min=dev_min_key,
                         deviation_max=float("inf"),
                         time_remaining=time_remaining,
                         vol_regime=vol_regime,
@@ -294,7 +303,7 @@ class ProbabilitySurface:
                         is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
                         is_usable=sample_size >= MIN_SAMPLES_USABLE
                     )
-                    key = (self.deviation_range[1], float("inf"), time_remaining, vol_regime)
+                    key = (dev_min_key, float("inf"), time_remaining, vol_regime)
                     self.buckets[key] = bucket
 
     def get_probability(
