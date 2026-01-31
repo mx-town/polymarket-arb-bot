@@ -19,6 +19,12 @@ dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",
 ]
+research = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pyarrow>=14.0.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -31,6 +37,7 @@ pythonpath = ["."]
 arb-bot = "src.main:main"
 arb-bot-legacy = "src.arb_bot:main"
 arb-api = "src.api.server:main"
+arb-research = "research.run_research:main"
 
 [tool.ruff]
 line-length = 100
