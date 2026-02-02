@@ -5,8 +5,17 @@ Computes empirical P(UP) indexed by:
 - deviation_pct: Current price deviation from window open
 - time_remaining: Minutes until window close
 - vol_regime: Low / Medium / High volatility
+- session: Trading session (Asia, Europe, US_EU_Overlap, US, Late_US)
 
 Includes confidence intervals and sample size requirements.
+
+Bucket dimensions (per testing_plan):
+- Deviation: 0.05% increments from -2% to +2% (80 buckets)
+- Time remaining: 30-second increments for 15min = 30 buckets (or 1-min = 15 buckets)
+- Volatility: terciles (3 buckets) + "all"
+- Session: 5 categories + "all"
+
+Total theoretical buckets: 80 × 30 × 4 × 6 = 57,600 (with "all" fallbacks)
 """
 
 import json
@@ -25,6 +34,10 @@ logger = logging.getLogger(__name__)
 MIN_SAMPLES_RELIABLE = 30
 MIN_SAMPLES_USABLE = 10
 
+# Session categories aligned with feature_extractor
+SESSIONS = ["asia", "europe", "us_eu_overlap", "us", "late_us", "all"]
+VOL_REGIMES = ["low", "medium", "high", "all"]
+
 
 @dataclass
 class ProbabilityBucket:
@@ -34,6 +47,7 @@ class ProbabilityBucket:
     deviation_max: float
     time_remaining: int
     vol_regime: str  # "low", "medium", "high", or "all"
+    session: str     # "asia", "europe", "us_eu_overlap", "us", "late_us", or "all"
 
     # Statistics
     sample_size: int
@@ -56,11 +70,12 @@ class ProbabilityQuery:
     deviation_pct: float
     time_remaining: int
     vol_regime: Optional[str] = None  # None = use "all"
+    session: Optional[str] = None     # None = use "all"
 
 
 class ProbabilitySurface:
     """
-    Empirical probability surface for P(UP | deviation, time_remaining, volatility).
+    Empirical probability surface for P(UP | deviation, time_remaining, volatility, session).
 
     The surface is built by bucketing observations and computing win rates.
     Uses Wilson score intervals for confidence bounds.
@@ -68,15 +83,17 @@ class ProbabilitySurface:
     Bucket sizes:
     - Deviation: 0.1% bands (-2% to +2%)
     - Time remaining: 1-minute bands
-    - Volatility: Low / Medium / High terciles
+    - Volatility: Low / Medium / High terciles + "all"
+    - Session: 5 sessions + "all"
 
     Usage:
         surface = ProbabilitySurface()
         surface.fit(features_df)
-        prob, ci_lower, ci_upper = surface.get_probability(
+        prob, ci_lower, ci_upper, reliable = surface.get_probability(
             deviation_pct=0.002,
             time_remaining=10,
-            vol_regime="medium"
+            vol_regime="medium",
+            session="us_eu_overlap"
         )
     """
 
@@ -100,7 +117,8 @@ class ProbabilitySurface:
         self.buckets: dict[tuple, ProbabilityBucket] = {}
         self.deviation_bins: list[float] = []
         self.time_bins: list[int] = []
-        self.vol_regimes: list[str] = ["low", "medium", "high", "all"]
+        self.vol_regimes: list[str] = VOL_REGIMES
+        self.sessions: list[str] = SESSIONS
 
         self._fitted = False
 
@@ -147,6 +165,40 @@ class ProbabilitySurface:
 
         return (bucket_min, bucket_max)
 
+    def _create_bucket(
+        self,
+        df: pd.DataFrame,
+        dev_min: float,
+        dev_max: float,
+        time_remaining: int,
+        vol_regime: str,
+        session: str
+    ) -> ProbabilityBucket:
+        """Create a probability bucket from filtered data."""
+        sample_size = len(df)
+        win_count = int(df["outcome"].sum()) if sample_size > 0 else 0
+        win_rate = win_count / sample_size if sample_size > 0 else 0.5
+
+        ci_lower, ci_upper = self._wilson_score_interval(
+            win_count, sample_size, self.confidence_level
+        )
+
+        return ProbabilityBucket(
+            deviation_min=dev_min,
+            deviation_max=dev_max,
+            time_remaining=time_remaining,
+            vol_regime=vol_regime,
+            session=session,
+            sample_size=sample_size,
+            win_count=win_count,
+            win_rate=win_rate,
+            ci_lower=ci_lower,
+            ci_upper=ci_upper,
+            ci_width=ci_upper - ci_lower,
+            is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
+            is_usable=sample_size >= MIN_SAMPLES_USABLE
+        )
+
     def fit(self, df: pd.DataFrame) -> "ProbabilitySurface":
         """
         Fit the probability surface from feature data.
@@ -156,9 +208,10 @@ class ProbabilitySurface:
                 - deviation_pct
                 - time_remaining
                 - vol_regime
+                - session
                 - outcome (0 or 1)
         """
-        required_cols = ["deviation_pct", "time_remaining", "vol_regime", "outcome"]
+        required_cols = ["deviation_pct", "time_remaining", "vol_regime", "session", "outcome"]
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column: {col}")
@@ -177,61 +230,50 @@ class ProbabilitySurface:
 
         # Bucket all observations
         self.buckets = {}
+        total_buckets = 0
 
-        # Process each (deviation_bucket, time_remaining, vol_regime) combination
-        for vol_regime in self.vol_regimes:
-            for time_remaining in self.time_bins:
-                # Filter by time
-                time_mask = df["time_remaining"] == time_remaining
+        # Process each combination
+        for session in self.sessions:
+            for vol_regime in self.vol_regimes:
+                for time_remaining in self.time_bins:
+                    # Filter by time
+                    time_mask = df["time_remaining"] == time_remaining
 
-                # Filter by volatility (or use all)
-                if vol_regime == "all":
-                    vol_mask = pd.Series(True, index=df.index)
-                else:
-                    vol_mask = df["vol_regime"] == vol_regime
+                    # Filter by volatility
+                    if vol_regime == "all":
+                        vol_mask = pd.Series(True, index=df.index)
+                    else:
+                        vol_mask = df["vol_regime"] == vol_regime
 
-                base_df = df[time_mask & vol_mask]
+                    # Filter by session
+                    if session == "all":
+                        session_mask = pd.Series(True, index=df.index)
+                    else:
+                        session_mask = df["session"] == session
 
-                # Bucket by deviation
-                for i, dev_min in enumerate(self.deviation_bins[:-1]):
-                    dev_max = self.deviation_bins[i + 1]
-                    # Round for consistent keys
-                    dev_min_key = self._round_bucket(dev_min)
-                    dev_max_key = self._round_bucket(dev_max)
+                    base_df = df[time_mask & vol_mask & session_mask]
 
-                    # Get observations in this bucket
-                    dev_mask = (base_df["deviation_pct"] >= dev_min) & \
-                               (base_df["deviation_pct"] < dev_max)
-                    bucket_df = base_df[dev_mask]
+                    # Bucket by deviation
+                    for i, dev_min in enumerate(self.deviation_bins[:-1]):
+                        dev_max = self.deviation_bins[i + 1]
+                        dev_min_key = self._round_bucket(dev_min)
+                        dev_max_key = self._round_bucket(dev_max)
 
-                    sample_size = len(bucket_df)
-                    win_count = bucket_df["outcome"].sum() if sample_size > 0 else 0
-                    win_rate = win_count / sample_size if sample_size > 0 else 0.5
+                        # Get observations in this bucket
+                        dev_mask = (base_df["deviation_pct"] >= dev_min) & \
+                                   (base_df["deviation_pct"] < dev_max)
+                        bucket_df = base_df[dev_mask]
 
-                    # Confidence interval
-                    ci_lower, ci_upper = self._wilson_score_interval(
-                        win_count, sample_size, self.confidence_level
-                    )
+                        bucket = self._create_bucket(
+                            bucket_df, dev_min_key, dev_max_key,
+                            time_remaining, vol_regime, session
+                        )
 
-                    bucket = ProbabilityBucket(
-                        deviation_min=dev_min_key,
-                        deviation_max=dev_max_key,
-                        time_remaining=time_remaining,
-                        vol_regime=vol_regime,
-                        sample_size=sample_size,
-                        win_count=win_count,
-                        win_rate=win_rate,
-                        ci_lower=ci_lower,
-                        ci_upper=ci_upper,
-                        ci_width=ci_upper - ci_lower,
-                        is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
-                        is_usable=sample_size >= MIN_SAMPLES_USABLE
-                    )
+                        key = (dev_min_key, dev_max_key, time_remaining, vol_regime, session)
+                        self.buckets[key] = bucket
+                        total_buckets += 1
 
-                    key = (dev_min_key, dev_max_key, time_remaining, vol_regime)
-                    self.buckets[key] = bucket
-
-        # Also add extreme buckets (< min and >= max deviation)
+        # Add extreme buckets
         self._add_extreme_buckets(df)
 
         self._fitted = True
@@ -241,76 +283,53 @@ class ProbabilitySurface:
 
     def _add_extreme_buckets(self, df: pd.DataFrame):
         """Add buckets for extreme deviations outside the main range."""
-        for vol_regime in self.vol_regimes:
-            for time_remaining in self.time_bins:
-                time_mask = df["time_remaining"] == time_remaining
+        for session in self.sessions:
+            for vol_regime in self.vol_regimes:
+                for time_remaining in self.time_bins:
+                    time_mask = df["time_remaining"] == time_remaining
 
-                if vol_regime == "all":
-                    vol_mask = pd.Series(True, index=df.index)
-                else:
-                    vol_mask = df["vol_regime"] == vol_regime
+                    if vol_regime == "all":
+                        vol_mask = pd.Series(True, index=df.index)
+                    else:
+                        vol_mask = df["vol_regime"] == vol_regime
 
-                base_df = df[time_mask & vol_mask]
+                    if session == "all":
+                        session_mask = pd.Series(True, index=df.index)
+                    else:
+                        session_mask = df["session"] == session
 
-                # Lower extreme
-                lower_mask = base_df["deviation_pct"] < self.deviation_range[0]
-                lower_df = base_df[lower_mask]
-                if len(lower_df) > 0:
-                    win_count = lower_df["outcome"].sum()
-                    sample_size = len(lower_df)
-                    ci_lower, ci_upper = self._wilson_score_interval(
-                        win_count, sample_size, self.confidence_level
-                    )
-                    dev_max_key = self._round_bucket(self.deviation_range[0])
-                    bucket = ProbabilityBucket(
-                        deviation_min=float("-inf"),
-                        deviation_max=dev_max_key,
-                        time_remaining=time_remaining,
-                        vol_regime=vol_regime,
-                        sample_size=sample_size,
-                        win_count=win_count,
-                        win_rate=win_count / sample_size,
-                        ci_lower=ci_lower,
-                        ci_upper=ci_upper,
-                        ci_width=ci_upper - ci_lower,
-                        is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
-                        is_usable=sample_size >= MIN_SAMPLES_USABLE
-                    )
-                    key = (float("-inf"), dev_max_key, time_remaining, vol_regime)
-                    self.buckets[key] = bucket
+                    base_df = df[time_mask & vol_mask & session_mask]
 
-                # Upper extreme
-                upper_mask = base_df["deviation_pct"] >= self.deviation_range[1]
-                upper_df = base_df[upper_mask]
-                if len(upper_df) > 0:
-                    win_count = upper_df["outcome"].sum()
-                    sample_size = len(upper_df)
-                    ci_lower, ci_upper = self._wilson_score_interval(
-                        win_count, sample_size, self.confidence_level
-                    )
-                    dev_min_key = self._round_bucket(self.deviation_range[1])
-                    bucket = ProbabilityBucket(
-                        deviation_min=dev_min_key,
-                        deviation_max=float("inf"),
-                        time_remaining=time_remaining,
-                        vol_regime=vol_regime,
-                        sample_size=sample_size,
-                        win_count=win_count,
-                        win_rate=win_count / sample_size,
-                        ci_lower=ci_lower,
-                        ci_upper=ci_upper,
-                        ci_width=ci_upper - ci_lower,
-                        is_reliable=sample_size >= MIN_SAMPLES_RELIABLE,
-                        is_usable=sample_size >= MIN_SAMPLES_USABLE
-                    )
-                    key = (dev_min_key, float("inf"), time_remaining, vol_regime)
-                    self.buckets[key] = bucket
+                    # Lower extreme
+                    lower_mask = base_df["deviation_pct"] < self.deviation_range[0]
+                    lower_df = base_df[lower_mask]
+                    if len(lower_df) > 0:
+                        dev_max_key = self._round_bucket(self.deviation_range[0])
+                        bucket = self._create_bucket(
+                            lower_df, float("-inf"), dev_max_key,
+                            time_remaining, vol_regime, session
+                        )
+                        key = (float("-inf"), dev_max_key, time_remaining, vol_regime, session)
+                        self.buckets[key] = bucket
+
+                    # Upper extreme
+                    upper_mask = base_df["deviation_pct"] >= self.deviation_range[1]
+                    upper_df = base_df[upper_mask]
+                    if len(upper_df) > 0:
+                        dev_min_key = self._round_bucket(self.deviation_range[1])
+                        bucket = self._create_bucket(
+                            upper_df, dev_min_key, float("inf"),
+                            time_remaining, vol_regime, session
+                        )
+                        key = (dev_min_key, float("inf"), time_remaining, vol_regime, session)
+                        self.buckets[key] = bucket
 
     def get_probability(
         self,
         deviation_pct: float,
         time_remaining: int,
-        vol_regime: Optional[str] = None
+        vol_regime: Optional[str] = None,
+        session: Optional[str] = None
     ) -> tuple[float, float, float, bool]:
         """
         Look up probability of UP outcome.
@@ -319,6 +338,7 @@ class ProbabilitySurface:
             deviation_pct: Current deviation from window open
             time_remaining: Minutes until window close
             vol_regime: Volatility regime (None = use "all")
+            session: Trading session (None = use "all")
 
         Returns:
             Tuple of (win_rate, ci_lower, ci_upper, is_reliable)
@@ -328,24 +348,27 @@ class ProbabilitySurface:
 
         if vol_regime is None:
             vol_regime = "all"
+        if session is None:
+            session = "all"
 
         # Find the right deviation bucket
         dev_min, dev_max = self._get_deviation_bucket(deviation_pct)
 
         # Clamp time_remaining to available bins
         if time_remaining not in self.time_bins:
-            # Find closest
             time_remaining = min(self.time_bins, key=lambda t: abs(t - time_remaining))
 
-        key = (dev_min, dev_max, time_remaining, vol_regime)
+        key = (dev_min, dev_max, time_remaining, vol_regime, session)
 
         if key in self.buckets:
             bucket = self.buckets[key]
             return (bucket.win_rate, bucket.ci_lower, bucket.ci_upper, bucket.is_reliable)
 
-        # Fallback to "all" vol regime if specific not found
+        # Fallback hierarchy: specific session -> "all" session -> specific vol -> "all" vol
+        if session != "all":
+            return self.get_probability(deviation_pct, time_remaining, vol_regime, "all")
         if vol_regime != "all":
-            return self.get_probability(deviation_pct, time_remaining, "all")
+            return self.get_probability(deviation_pct, time_remaining, "all", "all")
 
         # Default prior
         return (0.5, 0.0, 1.0, False)
@@ -354,7 +377,8 @@ class ProbabilitySurface:
         self,
         deviation_pct: float,
         time_remaining: int,
-        vol_regime: Optional[str] = None
+        vol_regime: Optional[str] = None,
+        session: Optional[str] = None
     ) -> Optional[ProbabilityBucket]:
         """Get the full bucket object for inspection."""
         if not self._fitted:
@@ -362,13 +386,15 @@ class ProbabilitySurface:
 
         if vol_regime is None:
             vol_regime = "all"
+        if session is None:
+            session = "all"
 
         dev_min, dev_max = self._get_deviation_bucket(deviation_pct)
 
         if time_remaining not in self.time_bins:
             time_remaining = min(self.time_bins, key=lambda t: abs(t - time_remaining))
 
-        key = (dev_min, dev_max, time_remaining, vol_regime)
+        key = (dev_min, dev_max, time_remaining, vol_regime, session)
         return self.buckets.get(key)
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -396,8 +422,9 @@ class ProbabilitySurface:
             "deviation_bins": self.deviation_bins,
             "time_bins": self.time_bins,
             "vol_regimes": self.vol_regimes,
+            "sessions": self.sessions,
             "buckets": {
-                f"{k[0]}|{k[1]}|{k[2]}|{k[3]}": asdict(v)
+                f"{k[0]}|{k[1]}|{k[2]}|{k[3]}|{k[4]}": asdict(v)
                 for k, v in self.buckets.items()
             }
         }
@@ -422,17 +449,31 @@ class ProbabilitySurface:
 
         surface.deviation_bins = data["deviation_bins"]
         surface.time_bins = data["time_bins"]
-        surface.vol_regimes = data["vol_regimes"]
+        surface.vol_regimes = data.get("vol_regimes", VOL_REGIMES)
+        surface.sessions = data.get("sessions", SESSIONS)
 
         surface.buckets = {}
         for key_str, bucket_dict in data["buckets"].items():
             parts = key_str.split("|")
-            key = (
-                float(parts[0]) if parts[0] != "-inf" else float("-inf"),
-                float(parts[1]) if parts[1] != "inf" else float("inf"),
-                int(parts[2]),
-                parts[3]
-            )
+            # Handle both old format (4 parts) and new format (5 parts)
+            if len(parts) == 4:
+                # Old format without session
+                key = (
+                    float(parts[0]) if parts[0] != "-inf" else float("-inf"),
+                    float(parts[1]) if parts[1] != "inf" else float("inf"),
+                    int(parts[2]),
+                    parts[3],
+                    "all"  # Default session
+                )
+                bucket_dict["session"] = "all"
+            else:
+                key = (
+                    float(parts[0]) if parts[0] != "-inf" else float("-inf"),
+                    float(parts[1]) if parts[1] != "inf" else float("inf"),
+                    int(parts[2]),
+                    parts[3],
+                    parts[4]
+                )
             surface.buckets[key] = ProbabilityBucket(**bucket_dict)
 
         surface._fitted = True
@@ -447,26 +488,29 @@ class ProbabilitySurface:
 
         df = self.to_dataframe()
 
-        # Filter to "all" vol regime for aggregate stats
-        all_regime = df[df["vol_regime"] == "all"]
+        # Filter to "all" regime/session for aggregate stats
+        all_filter = (df["vol_regime"] == "all") & (df["session"] == "all")
+        all_df = df[all_filter]
 
         return {
             "total_buckets": len(self.buckets),
-            "reliable_buckets": df["is_reliable"].sum(),
-            "usable_buckets": df["is_usable"].sum(),
-            "mean_sample_size": df["sample_size"].mean(),
-            "median_sample_size": df["sample_size"].median(),
-            "mean_win_rate": all_regime["win_rate"].mean(),
-            "mean_ci_width": all_regime["ci_width"].mean(),
+            "reliable_buckets": int(df["is_reliable"].sum()),
+            "usable_buckets": int(df["is_usable"].sum()),
+            "mean_sample_size": float(df["sample_size"].mean()),
+            "median_sample_size": float(df["sample_size"].median()),
+            "mean_win_rate": float(all_df["win_rate"].mean()) if len(all_df) > 0 else 0.5,
+            "mean_ci_width": float(all_df["ci_width"].mean()) if len(all_df) > 0 else 1.0,
             "deviation_range": self.deviation_range,
             "time_bins": len(self.time_bins),
-            "vol_regimes": self.vol_regimes
+            "vol_regimes": self.vol_regimes,
+            "sessions": self.sessions
         }
 
 
 def analyze_probability_by_deviation(
     surface: ProbabilitySurface,
-    time_remaining: int = 7
+    time_remaining: int = 7,
+    session: str = "all"
 ) -> pd.DataFrame:
     """
     Analyze how probability varies with deviation at a fixed time.
@@ -475,10 +519,11 @@ def analyze_probability_by_deviation(
     """
     df = surface.to_dataframe()
 
-    # Filter to specific time and "all" regime
+    # Filter to specific time, "all" vol regime, and specified session
     filtered = df[
         (df["time_remaining"] == time_remaining) &
         (df["vol_regime"] == "all") &
+        (df["session"] == session) &
         (df["deviation_min"] > -0.02) &
         (df["deviation_max"] < 0.02)
     ].copy()
@@ -492,7 +537,8 @@ def analyze_probability_by_deviation(
 
 def analyze_probability_by_time(
     surface: ProbabilitySurface,
-    deviation_pct: float = 0.005
+    deviation_pct: float = 0.005,
+    session: str = "all"
 ) -> pd.DataFrame:
     """
     Analyze how probability varies with time at a fixed deviation.
@@ -505,9 +551,10 @@ def analyze_probability_by_time(
         prob, ci_lower, ci_upper, reliable = surface.get_probability(
             deviation_pct=deviation_pct,
             time_remaining=time_remaining,
-            vol_regime="all"
+            vol_regime="all",
+            session=session
         )
-        bucket = surface.get_bucket(deviation_pct, time_remaining, "all")
+        bucket = surface.get_bucket(deviation_pct, time_remaining, "all", session)
 
         results.append({
             "time_remaining": time_remaining,
@@ -521,12 +568,49 @@ def analyze_probability_by_time(
     return pd.DataFrame(results).sort_values("time_remaining", ascending=False)
 
 
+def analyze_probability_by_session(
+    surface: ProbabilitySurface,
+    deviation_pct: float = 0.005,
+    time_remaining: int = 7
+) -> pd.DataFrame:
+    """
+    Analyze how probability varies by trading session.
+
+    Useful for identifying session-specific patterns.
+    """
+    results = []
+
+    for session in surface.sessions:
+        if session == "all":
+            continue
+
+        prob, ci_lower, ci_upper, reliable = surface.get_probability(
+            deviation_pct=deviation_pct,
+            time_remaining=time_remaining,
+            vol_regime="all",
+            session=session
+        )
+        bucket = surface.get_bucket(deviation_pct, time_remaining, "all", session)
+
+        results.append({
+            "session": session,
+            "win_rate": prob,
+            "ci_lower": ci_lower,
+            "ci_upper": ci_upper,
+            "sample_size": bucket.sample_size if bucket else 0,
+            "is_reliable": reliable
+        })
+
+    return pd.DataFrame(results)
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
 
-    # Example usage
     print("ProbabilitySurface module loaded successfully")
     print("Use with FeatureExtractor output to build probability model")
+    print(f"Sessions: {SESSIONS}")
+    print(f"Volatility regimes: {VOL_REGIMES}")

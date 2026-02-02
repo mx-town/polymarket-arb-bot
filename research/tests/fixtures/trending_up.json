@@ -1,0 +1,30 @@
+{
+  "description": "Steady 1% increase over 15 minutes",
+  "window_start_ms": 1700000000000,
+  "window_end_ms": 1700000900000,
+  "open_price": 50000.0,
+  "close_price": 50500.0,
+  "expected_outcome": 1,
+  "candles": [
+    {"open_time": 1700000000000, "open": 50000.0, "high": 50035.0, "low": 50000.0, "close": 50033.33, "volume": 100.0},
+    {"open_time": 1700000060000, "open": 50033.33, "high": 50070.0, "low": 50033.33, "close": 50066.67, "volume": 100.0},
+    {"open_time": 1700000120000, "open": 50066.67, "high": 50105.0, "low": 50066.67, "close": 50100.0, "volume": 100.0},
+    {"open_time": 1700000180000, "open": 50100.0, "high": 50140.0, "low": 50100.0, "close": 50133.33, "volume": 100.0},
+    {"open_time": 1700000240000, "open": 50133.33, "high": 50175.0, "low": 50133.33, "close": 50166.67, "volume": 100.0},
+    {"open_time": 1700000300000, "open": 50166.67, "high": 50205.0, "low": 50166.67, "close": 50200.0, "volume": 100.0},
+    {"open_time": 1700000360000, "open": 50200.0, "high": 50240.0, "low": 50200.0, "close": 50233.33, "volume": 100.0},
+    {"open_time": 1700000420000, "open": 50233.33, "high": 50275.0, "low": 50233.33, "close": 50266.67, "volume": 100.0},
+    {"open_time": 1700000480000, "open": 50266.67, "high": 50305.0, "low": 50266.67, "close": 50300.0, "volume": 100.0},
+    {"open_time": 1700000540000, "open": 50300.0, "high": 50340.0, "low": 50300.0, "close": 50333.33, "volume": 100.0},
+    {"open_time": 1700000600000, "open": 50333.33, "high": 50375.0, "low": 50333.33, "close": 50366.67, "volume": 100.0},
+    {"open_time": 1700000660000, "open": 50366.67, "high": 50405.0, "low": 50366.67, "close": 50400.0, "volume": 100.0},
+    {"open_time": 1700000720000, "open": 50400.0, "high": 50440.0, "low": 50400.0, "close": 50433.33, "volume": 100.0},
+    {"open_time": 1700000780000, "open": 50433.33, "high": 50475.0, "low": 50433.33, "close": 50466.67, "volume": 100.0},
+    {"open_time": 1700000840000, "open": 50466.67, "high": 50510.0, "low": 50466.67, "close": 50500.0, "volume": 100.0}
+  ],
+  "expected_features": {
+    "deviation_pct_at_close": 0.01,
+    "velocity_positive": true,
+    "outcome": 1
+  }
+}
