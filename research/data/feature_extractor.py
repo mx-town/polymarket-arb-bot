@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 
 class TradingSession(Enum):
     """Trading session classification based on UTC hour."""
-    ASIA = "asia"           # 00:00 - 08:00 UTC (Tokyo/Hong Kong)
-    EU = "eu"               # 08:00 - 13:00 UTC (London)
-    US = "us"               # 13:00 - 21:00 UTC (New York)
-    OVERLAP_EU_US = "eu_us" # 13:00 - 17:00 UTC
-    NIGHT = "night"         # 21:00 - 00:00 UTC
+    ASIA = "asia"              # 00:00 - 08:00 UTC
+    EUROPE = "europe"          # 08:00 - 13:00 UTC
+    US_EU_OVERLAP = "us_eu_overlap"  # 13:00 - 17:00 UTC (peak volatility)
+    US = "us"                  # 17:00 - 21:00 UTC
+    LATE_US = "late_us"        # 21:00 - 00:00 UTC
 
 
 class VolatilityRegime(Enum):
@@ -50,6 +50,11 @@ class WindowFeatures:
     deviation_pct: float    # (current - open) / open
     time_remaining: int     # Minutes until window close
     realized_vol: float     # Trailing volatility
+
+    # Momentum features (new)
+    velocity: float         # Price change rate ($/sec over lookback)
+    acceleration: float     # Rate of velocity change
+    candle_phase: float     # Position in window (0.0 = open, 1.0 = close)
 
     # Categorical features
     session: TradingSession
@@ -101,16 +106,16 @@ class FeatureExtractor:
 
     def _get_session(self, hour_utc: int) -> TradingSession:
         """Classify hour into trading session."""
-        if 13 <= hour_utc < 17:
-            return TradingSession.OVERLAP_EU_US
-        elif 0 <= hour_utc < 8:
+        if 0 <= hour_utc < 8:
             return TradingSession.ASIA
         elif 8 <= hour_utc < 13:
-            return TradingSession.EU
-        elif 13 <= hour_utc < 21:
+            return TradingSession.EUROPE
+        elif 13 <= hour_utc < 17:
+            return TradingSession.US_EU_OVERLAP
+        elif 17 <= hour_utc < 21:
             return TradingSession.US
         else:
-            return TradingSession.NIGHT
+            return TradingSession.LATE_US
 
     def _calculate_volatility(
         self,
@@ -134,6 +139,93 @@ class FeatureExtractor:
 
         # Annualized volatility (but we keep it in per-minute units for interpretability)
         return returns.std()
+
+    def _calculate_velocity(
+        self,
+        prices: list[float],
+        timestamps: list[int],
+        lookback_sec: int = 300  # 5 minutes default
+    ) -> float:
+        """
+        Calculate price velocity ($/second) over lookback window.
+
+        Args:
+            prices: List of prices (most recent last)
+            timestamps: List of timestamps in ms (most recent last)
+            lookback_sec: Lookback window in seconds
+
+        Returns:
+            Velocity in $/second (positive = price rising)
+        """
+        if len(prices) < 2:
+            return 0.0
+
+        lookback_ms = lookback_sec * 1000
+        current_time = timestamps[-1]
+        current_price = prices[-1]
+
+        # Find price at start of lookback window
+        start_price = None
+        start_time = None
+        for i in range(len(timestamps) - 1, -1, -1):
+            if current_time - timestamps[i] >= lookback_ms:
+                start_price = prices[i]
+                start_time = timestamps[i]
+                break
+
+        if start_price is None or start_time is None:
+            # Use earliest available if lookback not fully available
+            start_price = prices[0]
+            start_time = timestamps[0]
+
+        time_delta_sec = (current_time - start_time) / 1000
+        if time_delta_sec <= 0:
+            return 0.0
+
+        return (current_price - start_price) / time_delta_sec
+
+    def _calculate_acceleration(
+        self,
+        velocities: list[float],
+        timestamps: list[int],
+        lookback_sec: int = 300
+    ) -> float:
+        """
+        Calculate acceleration (change in velocity over time).
+
+        Args:
+            velocities: List of velocity values (most recent last)
+            timestamps: List of timestamps in ms
+            lookback_sec: Lookback window in seconds
+
+        Returns:
+            Acceleration in $/sec^2
+        """
+        if len(velocities) < 2:
+            return 0.0
+
+        lookback_ms = lookback_sec * 1000
+        current_time = timestamps[-1]
+        current_velocity = velocities[-1]
+
+        # Find velocity at start of lookback window
+        start_velocity = None
+        start_time = None
+        for i in range(len(timestamps) - 1, -1, -1):
+            if current_time - timestamps[i] >= lookback_ms:
+                start_velocity = velocities[i]
+                start_time = timestamps[i]
+                break
+
+        if start_velocity is None or start_time is None:
+            start_velocity = velocities[0]
+            start_time = timestamps[0]
+
+        time_delta_sec = (current_time - start_time) / 1000
+        if time_delta_sec <= 0:
+            return 0.0
+
+        return (current_velocity - start_velocity) / time_delta_sec
 
     def _align_to_window_start(self, timestamp_ms: int) -> int:
         """Align timestamp to window boundary."""
@@ -206,10 +298,34 @@ class FeatureExtractor:
             session = self._get_session(start_dt.hour)
 
             # Extract features for each minute in the window
+            # Track prices and timestamps for velocity calculation
+            prices_so_far = []
+            times_so_far = []
+            velocities_so_far = []
+
             for i, (idx, row) in enumerate(window_df.iterrows()):
                 time_remaining = self.window_minutes - i - 1
                 current_price = row["close"]
+                current_time = row["open_time"]
                 deviation_pct = (current_price - window_open) / window_open
+
+                # Candle phase: 0.0 at open, 1.0 at close
+                candle_phase = i / max(1, self.window_minutes - 1)
+
+                # Track for velocity/acceleration
+                prices_so_far.append(current_price)
+                times_so_far.append(current_time)
+
+                # Calculate velocity (use 5-minute lookback, but adapt to available data)
+                velocity = self._calculate_velocity(
+                    prices_so_far, times_so_far, lookback_sec=300
+                )
+                velocities_so_far.append(velocity)
+
+                # Calculate acceleration
+                acceleration = self._calculate_acceleration(
+                    velocities_so_far, times_so_far, lookback_sec=300
+                )
 
                 # Get volatility from pre-computed column
                 realized_vol = row["vol"] if pd.notna(row["vol"]) else 0.0
@@ -222,6 +338,9 @@ class FeatureExtractor:
                     deviation_pct=deviation_pct,
                     time_remaining=time_remaining,
                     realized_vol=realized_vol,
+                    velocity=velocity,
+                    acceleration=acceleration,
+                    candle_phase=candle_phase,
                     session=session,
                     vol_regime=None,  # Set later after computing percentiles
                     outcome=outcome,
@@ -252,6 +371,9 @@ class FeatureExtractor:
                 "deviation_pct": f.deviation_pct,
                 "time_remaining": f.time_remaining,
                 "realized_vol": f.realized_vol,
+                "velocity": f.velocity,
+                "acceleration": f.acceleration,
+                "candle_phase": f.candle_phase,
                 "session": f.session.value,
                 "outcome": f.outcome,
                 "final_close": f.final_close,

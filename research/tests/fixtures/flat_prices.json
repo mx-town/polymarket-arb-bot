@@ -1,0 +1,30 @@
+{
+  "description": "15 minutes of zero price movement",
+  "window_start_ms": 1700000000000,
+  "window_end_ms": 1700000900000,
+  "open_price": 50000.0,
+  "close_price": 50000.0,
+  "expected_outcome": 1,
+  "candles": [
+    {"open_time": 1700000000000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000060000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000120000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000180000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000240000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000300000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000360000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000420000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000480000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000540000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000600000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000660000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000720000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000780000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0},
+    {"open_time": 1700000840000, "open": 50000.0, "high": 50000.0, "low": 50000.0, "close": 50000.0, "volume": 100.0}
+  ],
+  "expected_features": {
+    "deviation_pct_at_close": 0.0,
+    "velocity_at_close": 0.0,
+    "outcome": 1
+  }
+}
