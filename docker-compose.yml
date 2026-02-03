@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "8000:8000"
+    volumes:
+      # Source code - live reload
+      - ./src:/app/src
+      - ./research:/app/research
+      - ./config:/app/config
+
+      # Persistent research data
+      - research-data:/app/research/data
+      - research-models:/app/research/models
+      - research-output:/app/research/output
+
+      # IPC files
+      - /tmp:/tmp
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DRY_RUN=true
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./dashboard/src:/app/src
+    environment:
+      - VITE_API_URL=http://app:8000
+    depends_on:
+      - app
+
+volumes:
+  research-data:
+    driver: local
+  research-models:
+    driver: local
+  research-output:
+    driver: local

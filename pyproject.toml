@@ -1,3 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "research"]
+
 [project]
 name = "polymarket-arb-bot"
 version = "0.2.0"
@@ -11,6 +18,11 @@ dependencies = [
     "websocket-client",
     "fastapi",
     "uvicorn[standard]",
+    "pandas>=3.0.0",
+    "numpy>=2.4.2",
+    "scipy>=1.17.0",
+    "pyarrow>=23.0.0",
+    "web3>=6.0.0",
 ]
 
 [dependency-groups]
@@ -18,6 +30,12 @@ dev = [
     "ruff>=0.8.0",
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",
+]
+research = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pyarrow>=14.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -31,6 +49,8 @@ pythonpath = ["."]
 arb-bot = "src.main:main"
 arb-bot-legacy = "src.arb_bot:main"
 arb-api = "src.api.server:main"
+arb-research = "research.run_research:main"
+arb-capture = "src.data.capture.capture_cli:main"
 
 [tool.ruff]
 line-length = 100

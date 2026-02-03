@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
 :root {
+  /* Legacy CSS variables - maintained for existing components */
   --bg-primary: #0a0a0f;
   --bg-secondary: #12121a;
   --bg-card: #16161f;
@@ -129,7 +130,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Animations */
+/* Legacy animations - also available via Tailwind as animate-pulse and animate-slide-in */
 @keyframes pulse {
   0%,
   100% {

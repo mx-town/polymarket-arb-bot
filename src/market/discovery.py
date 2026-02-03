@@ -23,6 +23,15 @@ INTERVAL_TO_RECURRENCE = {
     "15m": "15m",
 }
 
+# Series IDs for direct lookup (most reliable method)
+# These are the Gamma API series IDs for updown markets
+SERIES_IDS = {
+    ("bitcoin", "15m"): "10192",
+    ("bitcoin", "1h"): "10191",
+    ("ethereum", "15m"): "10194",
+    ("ethereum", "1h"): "10193",
+}
+
 # Default crypto assets to track (14 major cryptos)
 DEFAULT_ASSETS = [
     "bitcoin",
@@ -103,6 +112,72 @@ def parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except (ValueError, TypeError):
         return None
+
+
+def fetch_markets_by_series(
+    asset: str = "bitcoin",
+    candle_interval: str = "15m",
+    max_markets: int = 5,
+) -> list[dict]:
+    """
+    Fetch Up/Down markets using series_id (most reliable method).
+
+    Args:
+        asset: Asset name (e.g., "bitcoin", "ethereum")
+        candle_interval: "1h" or "15m"
+        max_markets: Maximum markets to return
+
+    Returns:
+        List of market dicts with condition_id, slug, tokens, etc.
+    """
+    series_id = SERIES_IDS.get((asset.lower(), candle_interval))
+    if not series_id:
+        logger.warning("NO_SERIES_ID", f"asset={asset} interval={candle_interval}")
+        return []
+
+    logger.info(
+        "FETCH_BY_SERIES", f"series_id={series_id} asset={asset} interval={candle_interval}"
+    )
+
+    try:
+        resp = requests.get(
+            f"{GAMMA_HOST}/events",
+            params={
+                "series_id": series_id,
+                "closed": "false",
+                "limit": max_markets,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        events = resp.json()
+
+        markets = []
+        for event in events:
+            for m in event.get("markets", []):
+                clob_tokens = parse_json_field(m.get("clobTokenIds"))
+                if len(clob_tokens) != 2:
+                    continue
+
+                markets.append(
+                    {
+                        "condition_id": m.get("conditionId", ""),
+                        "question": m.get("question", event.get("title", "Unknown")),
+                        "slug": m.get("slug", event.get("slug", "")),
+                        "yes_token": clob_tokens[0],
+                        "no_token": clob_tokens[1],
+                        "end_date": m.get("endDate", event.get("endDate")),
+                        "outcomes": parse_json_field(m.get("outcomes")),
+                        "accepting_orders": m.get("acceptingOrders", True),
+                    }
+                )
+
+        logger.info("FETCH_BY_SERIES_COMPLETE", f"found={len(markets)}")
+        return markets
+
+    except requests.RequestException as e:
+        logger.error("FETCH_BY_SERIES_ERROR", str(e))
+        return []
 
 
 def fetch_updown_events(
