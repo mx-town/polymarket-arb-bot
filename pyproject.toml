@@ -15,6 +15,7 @@ dependencies = [
     "numpy>=2.4.2",
     "scipy>=1.17.0",
     "pyarrow>=23.0.0",
+    "web3>=6.0.0",
 ]
 
 [dependency-groups]
@@ -42,6 +43,7 @@ arb-bot = "src.main:main"
 arb-bot-legacy = "src.arb_bot:main"
 arb-api = "src.api.server:main"
 arb-research = "research.run_research:main"
+arb-capture = "src.data.capture.capture_cli:main"
 
 [tool.ruff]
 line-length = 100
