@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from engine.types import ModelOutput
 from trading.config import LagArbConfig, TradingConfig
 from trading.data.price_tracker import Direction, DirectionSignal
 from trading.market.state import MarketState
@@ -199,7 +200,11 @@ class LagArbStrategy(SignalDetector):
             del self.lag_windows[symbol]
         return None
 
-    def check_entry(self, market: MarketState) -> Signal | None:
+    def check_entry(
+        self,
+        market: MarketState,
+        model_output: ModelOutput | None = None,
+    ) -> Signal | None:
         """
         Check if market has lag arbitrage entry opportunity.
 
@@ -208,6 +213,10 @@ class LagArbStrategy(SignalDetector):
         2. combined_ask < max_combined_price (up to $1.00 for 0% fee markets)
         3. Fresh book data (not stale)
         4. Enough time to resolution
+
+        When model_output is provided:
+        - Skip marginal entries (combined > 0.99) if model shows no edge
+        - Attach model metadata (kelly_fraction, prob_up, edge) to opportunity
 
         We're buying BOTH sides, so direction doesn't affect sizing.
         We profit as long as combined < $1.00 at resolution.
@@ -258,9 +267,39 @@ class LagArbStrategy(SignalDetector):
         if net_profit <= 0:
             return None
 
+        # Model-based marginal entry filter
+        if (
+            model_output is not None
+            and model_output.edge_after_fees <= 0
+            and combined > 0.99
+        ):
+            logger.info(
+                "LAG_ENTRY_SKIP_MODEL",
+                f"market={market.slug} combined={combined:.4f} "
+                f"model_edge={model_output.edge_after_fees:.4f} "
+                f"reason=model_says_no_edge_on_marginal_trade",
+            )
+            self._emit_event(
+                "ENTRY_SKIP",
+                market.slug,
+                {
+                    "reason": "model_no_edge_marginal",
+                    "combined": combined,
+                    "model_edge": model_output.edge_after_fees,
+                },
+            )
+            return None
+
         # Create opportunity
         opp = ArbOpportunity.from_market(market, self.config.fee_rate)
         opp.confidence = window.signal.confidence
+
+        # Attach model metadata when available
+        if model_output is not None:
+            opp.metadata["kelly_fraction"] = model_output.kelly_fraction
+            opp.metadata["model_prob_up"] = model_output.prob_up
+            opp.metadata["model_edge"] = model_output.edge_after_fees
+            opp.metadata["model_reliable"] = model_output.is_reliable
 
         logger.info(
             "LAG_ENTRY_SIGNAL",
@@ -268,7 +307,8 @@ class LagArbStrategy(SignalDetector):
             f"gross={gross_profit:.4f} net={net_profit:.4f} "
             f"expected_winner={window.expected_winner} "
             f"move_from_open={window.signal.move_from_open:.4f} "
-            f"window_remaining_ms={window.remaining_ms:.0f}",
+            f"window_remaining_ms={window.remaining_ms:.0f}"
+            + (f" kelly={model_output.kelly_fraction:.3f}" if model_output else ""),
         )
 
         window.entry_made = True
@@ -287,6 +327,7 @@ class LagArbStrategy(SignalDetector):
         entry_down_price: float,
         entry_time: datetime | None = None,
         position=None,  # Position for partial exit tracking
+        model_output: ModelOutput | None = None,
     ) -> Signal | None:
         """
         Check if position should exit.
@@ -296,6 +337,8 @@ class LagArbStrategy(SignalDetector):
         2. Exit if one side pumps >= threshold (3% default)
            - If prioritize_pump_exit: sell pumped side only
            - Otherwise: full exit
+           - Model hint: if model has strong directional conviction aligned
+             with position, widen pump threshold slightly (hold longer)
         3. Exit if combined_bid > entry_cost (any profit available)
         4. Exit on price normalization (spread < threshold)
         5. Otherwise hold to resolution (guaranteed profit if entry < $1.00)
@@ -359,10 +402,17 @@ class LagArbStrategy(SignalDetector):
             # Hold remaining side to resolution
             return None
 
+        # Adjust pump threshold based on model conviction
+        # If model has strong directional conviction, widen threshold slightly (hold longer)
+        pump_threshold = self.config.pump_exit_threshold_pct
+        if model_output is not None:
+            if model_output.prob_up > 0.8 or model_output.prob_up < 0.2:
+                pump_threshold *= 1.2  # 20% wider when model is confident
+
         # 2. Check single-side pump (UP side)
         if entry_up_price > 0:
             up_change = (market.up_best_bid - entry_up_price) / entry_up_price
-            if up_change >= self.config.pump_exit_threshold_pct:
+            if up_change >= pump_threshold:
                 logger.info(
                     "LAG_EXIT_PUMP_UP",
                     f"market={market.slug} up_change={up_change:.2%} "
@@ -387,7 +437,7 @@ class LagArbStrategy(SignalDetector):
         # 3. Check single-side pump (DOWN side)
         if entry_down_price > 0:
             down_change = (market.down_best_bid - entry_down_price) / entry_down_price
-            if down_change >= self.config.pump_exit_threshold_pct:
+            if down_change >= pump_threshold:
                 logger.info(
                     "LAG_EXIT_PUMP_DOWN",
                     f"market={market.slug} down_change={down_change:.2%} "

@@ -356,24 +356,9 @@ class ArbBot:
         if not isinstance(self.strategy, LagArbStrategy):
             return
 
-        # Record signal for dashboard visibility using unified event stream
-        if signal.is_significant:
-            self.metrics.record_event(
-                "DIRECTION",
-                signal.symbol,
-                {
-                    "direction": signal.direction.value,
-                    "momentum": signal.momentum,
-                    "spot_price": signal.current_price,
-                    "candle_open": signal.candle_open,
-                    "expected_winner": signal.expected_winner,
-                    "confidence": signal.confidence,
-                },
-            )
-
         # Get unified signals from engine (if available)
         unified_signals = []
-        model_output = None
+        self._current_model_output = None
         if self.signal_evaluator and self.state_manager:
             # Build market context for each valid market
             for market in self.state_manager.get_valid_markets():
@@ -393,10 +378,32 @@ class ArbBot:
             # Get model output from best signal if available
             if unified_signals:
                 best_signal = unified_signals[0]
-                model_output = best_signal.model
+                self._current_model_output = best_signal.model
+
+        # Record signal for dashboard visibility using unified event stream
+        if signal.is_significant:
+            details = {
+                "direction": signal.direction.value,
+                "momentum": signal.momentum,
+                "spot_price": signal.current_price,
+                "candle_open": signal.candle_open,
+                "expected_winner": signal.expected_winner,
+                "confidence": signal.confidence,
+            }
+            # Add engine signal data when available
+            if unified_signals:
+                best = unified_signals[0]
+                details["signal_tier"] = best.tier.name
+                details["engine_edge"] = best.expected_edge
+                details["engine_confidence"] = best.confidence
+                if best.model:
+                    details["model_prob_up"] = best.model.prob_up
+                    details["model_edge"] = best.model.edge_after_fees
+                    details["kelly_fraction"] = best.model.kelly_fraction
+                    details["model_reliable"] = best.model.is_reliable
+            self.metrics.record_event("DIRECTION", signal.symbol, details)
 
         # Forward signal to lag arb strategy (opens lag window)
-        # Pass model output if available (strategy can use it for enhanced decision-making)
         self.strategy.on_direction_signal(signal)
 
         # Check all markets for lag arb opportunities
@@ -409,11 +416,12 @@ class ArbBot:
 
     def _check_lag_arb_opportunities(self):
         """Check all markets for lag arb entry opportunities"""
+        model_output = getattr(self, "_current_model_output", None)
         for market in self.state_manager.get_valid_markets():
             if self.position_manager.has_position(market.market_id):
                 continue
 
-            entry_signal = self.strategy.check_entry(market)
+            entry_signal = self.strategy.check_entry(market, model_output=model_output)
             if entry_signal and entry_signal.opportunity:
                 self._execute_entry(entry_signal.opportunity)
 
@@ -426,9 +434,11 @@ class ArbBot:
         if not market or not market.is_valid:
             return
 
+        model_output = getattr(self, "_current_model_output", None)
+
         # Check entry signal if no position
         if not self.position_manager.has_position(market_id):
-            signal = self.strategy.check_entry(market)
+            signal = self.strategy.check_entry(market, model_output=model_output)
             if signal and signal.opportunity:
                 self._execute_entry(signal.opportunity)
                 return
@@ -443,6 +453,7 @@ class ArbBot:
                     position.down_entry_price,
                     position.entry_time,
                     position,  # Pass position for partial exit tracking
+                    model_output=model_output,
                 )
                 if exit_signal:
                     self._execute_exit(
@@ -478,10 +489,20 @@ class ArbBot:
             )
             return
 
+        # Kelly-based position sizing when model data available
+        base_size = self.config.trading.max_position_size
+        kelly = opp.metadata.get("kelly_fraction")
+        if kelly:
+            # Cap Kelly at 25% of max, floor at 10% of max
+            kelly_capped = max(0.1, min(kelly, 0.25))
+            position_size = base_size * kelly_capped
+        else:
+            position_size = base_size  # Fallback: full size (current behavior)
+
         # Execute
         up_result, down_result = self.executor.execute_arb_entry(
             opp,
-            self.config.trading.max_position_size,
+            position_size,
         )
 
         if up_result.success and down_result.success:
@@ -498,17 +519,21 @@ class ArbBot:
                 "POSITION_OPENED",
                 f"market={opp.slug} cost=${opp.total_cost:.4f} net_profit=${opp.net_profit:.4f}",
             )
-            self.metrics.record_event(
-                "POSITION_OPENED",
-                opp.slug,
-                {
-                    "market_id": opp.market_id,
-                    "cost": opp.total_cost,
-                    "expected_profit": opp.net_profit,
-                    "up_price": opp.up_price,
-                    "down_price": opp.down_price,
-                },
-            )
+            entry_details = {
+                "market_id": opp.market_id,
+                "cost": opp.total_cost,
+                "expected_profit": opp.net_profit,
+                "up_price": opp.up_price,
+                "down_price": opp.down_price,
+                "position_size": position_size,
+            }
+            # Attach model metadata from opportunity
+            if opp.metadata.get("kelly_fraction"):
+                entry_details["kelly_fraction"] = opp.metadata["kelly_fraction"]
+                entry_details["model_prob_up"] = opp.metadata.get("model_prob_up")
+                entry_details["model_edge"] = opp.metadata.get("model_edge")
+                entry_details["model_reliable"] = opp.metadata.get("model_reliable")
+            self.metrics.record_event("POSITION_OPENED", opp.slug, entry_details)
         else:
             self.metrics.record_opportunity(taken=False)
             logger.warning("ENTRY_FAILED", f"market={opp.slug}")
@@ -754,6 +779,7 @@ class ArbBot:
 
     def _check_position_exits(self):
         """Check all positions for exit conditions"""
+        model_output = getattr(self, "_current_model_output", None)
         for position in self.position_manager.get_open_positions():
             market = self.state_manager.get_market(position.market_id)
             if not market or not market.is_valid:
@@ -765,6 +791,7 @@ class ArbBot:
                 position.down_entry_price,
                 position.entry_time,
                 position,  # Pass position for partial exit tracking
+                model_output=model_output,
             )
             if exit_signal:
                 self._execute_exit(

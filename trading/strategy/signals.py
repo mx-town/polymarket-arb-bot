@@ -49,6 +49,11 @@ class ArbOpportunity:
     # Optional metadata
     time_to_resolution: float | None = None
     confidence: float = 1.0  # For lag arb signals
+    metadata: dict = None  # Arbitrary metadata (model data, kelly, etc.)
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
     @property
     def profit_pct(self) -> float:
