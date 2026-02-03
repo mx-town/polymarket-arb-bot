@@ -249,6 +249,15 @@ class StreamSynchronizer:
                 record[f"clob_{short_id}_bid"] = book.best_bid
                 record[f"clob_{short_id}_ask"] = book.best_ask
 
+            # Add observation mode columns if present
+            record["model_prob_up"] = snap.model_prob_up
+            record["model_confidence"] = snap.model_confidence
+            record["edge_after_fees"] = snap.edge_after_fees
+            record["signal_detected"] = snap.signal_detected
+            record["signal_confidence"] = snap.signal_confidence
+            record["candle_open_price"] = snap.candle_open_price
+            record["time_remaining_sec"] = snap.time_remaining_sec
+
             records.append(record)
 
         df = pd.DataFrame(records)

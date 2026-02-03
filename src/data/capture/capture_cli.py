@@ -1,9 +1,12 @@
 """
-CLI entry point for data capture.
+CLI entry point for data capture and model management.
 
 Usage:
-    uv run arb-capture --verify          # 5-minute verification
-    uv run arb-capture --duration 86400  # 24-hour capture
+    arb-capture init                    # Download data + build model
+    arb-capture rebuild                 # Rebuild model from existing data
+    arb-capture observe [--duration N]  # Run live observation with model
+    arb-capture verify                  # 5-min stream health check
+    arb-capture --debug <command>       # Enable verbose logging
 """
 
 import argparse
@@ -12,7 +15,9 @@ import signal
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
+from src.data.capture.enricher import SnapshotEnricher
 from src.data.capture.synchronizer import StreamSynchronizer, SynchronizerConfig
 from src.data.capture.verify import print_results, verify_streams
 from src.data.streams.base import StreamSource
@@ -25,11 +30,192 @@ from src.utils.logging import get_logger, setup_logging
 
 logger = get_logger("capture_cli")
 
+# Default paths
+RAW_DATA_DIR = "research/data/raw"
+MODELS_DIR = "research/models"
+OBSERVATIONS_DIR = "research/data/observations"
+SURFACE_PATH = "research/models/probability_surface.json"
+CANDLE_PATH = "research/data/raw/BTCUSDT_1m.parquet"
+FEATURES_PATH = "research/data/raw/BTCUSDT_15m_features.parquet"
+
+
+# =============================================================================
+# Command: init
+# =============================================================================
+
+
+def cmd_init(args) -> int:
+    """Download data and build model (first-time setup)."""
+    logger.info("INIT_START", f"months={args.months}")
+
+    # 1. Create directories
+    for dir_path in [RAW_DATA_DIR, MODELS_DIR, OBSERVATIONS_DIR]:
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+        logger.info("DIR_CREATED", dir_path)
+
+    # 2. Download Binance data
+    logger.info("DOWNLOAD_START", "Fetching Binance 1-minute candles...")
+    try:
+        from research.data.binance_historical import BinanceHistoricalFetcher
+
+        fetcher = BinanceHistoricalFetcher(
+            symbols=["BTCUSDT"],
+            months_back=args.months,
+            data_dir=RAW_DATA_DIR,
+        )
+        df = fetcher.get_data("BTCUSDT")
+        if df is None or len(df) == 0:
+            logger.error("DOWNLOAD_FAILED", "No data returned")
+            return 1
+        logger.info("DOWNLOAD_COMPLETE", f"candles={len(df):,}")
+    except Exception as e:
+        logger.error("DOWNLOAD_ERROR", str(e))
+        return 1
+
+    # 3. Extract features
+    logger.info("EXTRACT_START", "Extracting 15-minute window features...")
+    try:
+        from research.data.feature_extractor import FeatureExtractor
+
+        extractor = FeatureExtractor(window_minutes=15)
+        features_df = extractor.extract_windows(df, "BTCUSDT")
+        features_df.to_parquet(FEATURES_PATH, index=False)
+        logger.info("EXTRACT_COMPLETE", f"observations={len(features_df):,} windows={features_df['window_start'].nunique():,}")
+    except Exception as e:
+        logger.error("EXTRACT_ERROR", str(e))
+        return 1
+
+    # 4. Build probability surface
+    logger.info("MODEL_START", "Building probability surface...")
+    try:
+        from research.models.probability_surface import ProbabilitySurface
+
+        surface = ProbabilitySurface()
+        surface.fit(features_df)
+        surface.save(SURFACE_PATH)
+        stats = surface.summary_stats()
+        logger.info("MODEL_COMPLETE", f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}")
+    except Exception as e:
+        logger.error("MODEL_ERROR", str(e))
+        return 1
+
+    print(f"\n{'='*60}")
+    print("INITIALIZATION COMPLETE")
+    print(f"{'='*60}")
+    print(f"  Raw data:     {CANDLE_PATH}")
+    print(f"  Features:     {FEATURES_PATH}")
+    print(f"  Model:        {SURFACE_PATH}")
+    print(f"\nRun 'arb-capture observe' to start live observation.")
+    print(f"{'='*60}\n")
+
+    return 0
+
+
+# =============================================================================
+# Command: rebuild
+# =============================================================================
+
+
+def cmd_rebuild(args) -> int:
+    """Rebuild model from existing data."""
+    import pandas as pd
+
+    # Check if raw data exists
+    if not Path(CANDLE_PATH).exists():
+        logger.error("NO_DATA", f"Raw data not found at {CANDLE_PATH}")
+        print("Run 'arb-capture init' first to download data.")
+        return 1
+
+    logger.info("REBUILD_START", "Rebuilding model from existing data...")
+
+    # 1. Load raw data
+    logger.info("LOAD_DATA", CANDLE_PATH)
+    df = pd.read_parquet(CANDLE_PATH)
+    logger.info("DATA_LOADED", f"candles={len(df):,}")
+
+    # 2. Extract features
+    logger.info("EXTRACT_START", "Extracting features...")
+    try:
+        from research.data.feature_extractor import FeatureExtractor
+
+        extractor = FeatureExtractor(window_minutes=15)
+        features_df = extractor.extract_windows(df, "BTCUSDT")
+        features_df.to_parquet(FEATURES_PATH, index=False)
+        logger.info("EXTRACT_COMPLETE", f"observations={len(features_df):,}")
+    except Exception as e:
+        logger.error("EXTRACT_ERROR", str(e))
+        return 1
+
+    # 3. Build model
+    logger.info("MODEL_START", "Building probability surface...")
+    try:
+        from research.models.probability_surface import ProbabilitySurface
+
+        surface = ProbabilitySurface()
+        surface.fit(features_df)
+        surface.save(SURFACE_PATH)
+        stats = surface.summary_stats()
+        logger.info("MODEL_COMPLETE", f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}")
+    except Exception as e:
+        logger.error("MODEL_ERROR", str(e))
+        return 1
+
+    print(f"\n{'='*60}")
+    print("MODEL REBUILT")
+    print(f"{'='*60}")
+    print(f"  Features:     {FEATURES_PATH}")
+    print(f"  Model:        {SURFACE_PATH}")
+    print(f"{'='*60}\n")
+
+    return 0
+
+
+# =============================================================================
+# Command: observe
+# =============================================================================
+
+
+def cmd_observe(args) -> int:
+    """Run live observation with model predictions."""
+    # Check if model exists
+    if not Path(SURFACE_PATH).exists():
+        logger.warning("NO_MODEL", f"Model not found at {SURFACE_PATH}")
+        print("Run 'arb-capture init' or 'arb-capture rebuild' first.")
+        print("Continuing without model predictions...\n")
+
+    return run_capture(
+        duration_sec=args.duration,
+        output_dir=args.output,
+        snapshot_interval_ms=args.interval,
+        observation_mode=True,
+        surface_path=SURFACE_PATH,
+    )
+
+
+# =============================================================================
+# Command: verify
+# =============================================================================
+
+
+def cmd_verify(args) -> int:
+    """Test stream connections."""
+    logger.info("VERIFY_START", f"duration={args.duration}s")
+    results = verify_streams(duration_sec=args.duration)
+    success = print_results(results)
+    return 0 if success else 1
+
+
+# =============================================================================
+# Internal: run_capture (used by observe)
+# =============================================================================
+
 
 def run_capture(
     duration_sec: int,
     output_dir: str,
     snapshot_interval_ms: int = 100,
+    observation_mode: bool = False,
+    surface_path: str | None = None,
 ) -> int:
     """
     Run data capture for specified duration.
@@ -38,25 +224,39 @@ def run_capture(
         duration_sec: How long to capture (seconds)
         output_dir: Directory for output files
         snapshot_interval_ms: Interval between snapshots
+        observation_mode: If True, enrich snapshots with model predictions
+        surface_path: Path to probability surface model (for observation mode)
 
     Returns:
         Exit code (0 for success)
     """
-    # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     parquet_path = os.path.join(output_dir, f"snapshots_{timestamp}.parquet")
     report_path = os.path.join(output_dir, f"lag_report_{timestamp}.txt")
 
-    logger.info("CAPTURE_START", f"duration={duration_sec}s output={output_dir}")
+    mode_str = "observation" if observation_mode else "raw"
+    logger.info("CAPTURE_START", f"duration={duration_sec}s output={output_dir} mode={mode_str}")
+
+    # Set up enricher for observation mode
+    enricher = None
+    if observation_mode:
+        enricher = SnapshotEnricher(surface_path=surface_path)
+        if enricher.surface is None:
+            logger.warning("OBSERVATION_MODE", "Running without model - no surface loaded")
+
+    # Snapshot callback with optional enrichment
+    def on_snapshot(snapshot):
+        if enricher is not None:
+            enricher.enrich(snapshot)
 
     # Set up synchronizer
     config = SynchronizerConfig(
         snapshot_interval_ms=snapshot_interval_ms,
-        ring_buffer_size=100000,  # Larger buffer for long captures
+        ring_buffer_size=100000,
     )
-    sync = StreamSynchronizer(config=config)
+    sync = StreamSynchronizer(config=config, on_snapshot=on_snapshot)
 
     # Connect streams
     binance_stream = BinanceDirectStream(on_update=sync.on_price_update)
@@ -106,7 +306,7 @@ def run_capture(
     # Run capture
     start_time = time.time()
     last_export_time = start_time
-    export_interval = 3600  # Export every hour
+    export_interval = 3600
 
     while not shutdown_requested and (time.time() - start_time) < duration_sec:
         elapsed = int(time.time() - start_time)
@@ -152,6 +352,7 @@ def run_capture(
         "LAG MEASUREMENT REPORT",
         f"Generated: {datetime.now().isoformat()}",
         f"Duration: {duration_sec}s",
+        f"Mode: {mode_str}",
         "=" * 60,
         "",
         "STREAM STATISTICS",
@@ -199,47 +400,100 @@ def run_capture(
     return 0
 
 
+# =============================================================================
+# Main entry point
+# =============================================================================
+
+
 def main():
     """CLI entry point."""
-    setup_logging(verbose=True)
+    parser = argparse.ArgumentParser(
+        description="Polymarket Arbitrage Data Tools",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Commands:
+  init      Download data and build probability model (first-time setup)
+  rebuild   Rebuild model from existing data
+  observe   Run live observation with model predictions
+  verify    Test stream connections (5-minute health check)
 
-    parser = argparse.ArgumentParser(description="Data capture for lag measurement")
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help="Run 5-minute verification",
+Examples:
+  arb-capture init                     # First-time setup
+  arb-capture observe --duration 3600  # 1-hour observation
+  arb-capture --debug verify           # Verbose stream test
+""",
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", metavar="command")
+
+    # init
+    init_parser = subparsers.add_parser("init", help="Download data and build model")
+    init_parser.add_argument(
+        "--months",
+        type=int,
+        default=6,
+        help="Months of historical data to download (default: 6)",
+    )
+
+    # rebuild
+    subparsers.add_parser("rebuild", help="Rebuild model from existing data")
+
+    # observe
+    observe_parser = subparsers.add_parser("observe", help="Run live observation with model")
+    observe_parser.add_argument(
         "--duration",
         type=int,
-        default=86400,
-        help="Capture duration in seconds (default: 86400 = 24 hours)",
+        default=3600,
+        help="Observation duration in seconds (default: 3600 = 1 hour)",
     )
-    parser.add_argument(
+    observe_parser.add_argument(
         "--output",
         type=str,
-        default="research/data/capture",
-        help="Output directory (default: research/data/capture)",
+        default=OBSERVATIONS_DIR,
+        help=f"Output directory (default: {OBSERVATIONS_DIR})",
     )
-    parser.add_argument(
+    observe_parser.add_argument(
         "--interval",
         type=int,
         default=100,
         help="Snapshot interval in ms (default: 100)",
     )
 
+    # verify
+    verify_parser = subparsers.add_parser("verify", help="Test stream connections")
+    verify_parser.add_argument(
+        "--duration",
+        type=int,
+        default=300,
+        help="Verification duration in seconds (default: 300 = 5 minutes)",
+    )
+
     args = parser.parse_args()
 
-    if args.verify:
-        results = verify_streams(duration_sec=300)
-        success = print_results(results)
-        return 0 if success else 1
+    # Set up logging
+    setup_logging(verbose=args.debug)
 
-    return run_capture(
-        duration_sec=args.duration,
-        output_dir=args.output,
-        snapshot_interval_ms=args.interval,
-    )
+    # Handle no command
+    if args.command is None:
+        parser.print_help()
+        return 1
+
+    # Dispatch to command
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "rebuild":
+        return cmd_rebuild(args)
+    elif args.command == "observe":
+        return cmd_observe(args)
+    elif args.command == "verify":
+        return cmd_verify(args)
+
+    return 1
 
 
 if __name__ == "__main__":

@@ -1238,7 +1238,7 @@ wheels = [
 [[package]]
 name = "polymarket-arb-bot"
 version = "0.2.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "numpy" },

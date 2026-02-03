@@ -203,6 +203,72 @@ cd dashboard && pnpm run dev
 
 ---
 
+## Research & Observation Tools
+
+The `arb-capture` CLI provides tools for data collection, model building, and live observation.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `uv run arb-capture init` | Download 6 months of Binance data and build probability model |
+| `uv run arb-capture rebuild` | Rebuild model from existing data |
+| `uv run arb-capture observe` | Run live observation with model predictions |
+| `uv run arb-capture verify` | 5-minute stream health check |
+
+### First-Time Setup
+
+```bash
+# Download data + build probability surface model (~5 min)
+uv run arb-capture init
+
+# Or if you already have data, just rebuild the model (~2 min)
+uv run arb-capture rebuild
+```
+
+### Live Observation
+
+Run observation mode to see what the bot would do without trading:
+
+```bash
+# 1-hour observation (default)
+uv run arb-capture observe
+
+# Custom duration (30 minutes)
+uv run arb-capture observe --duration 1800
+
+# With debug logging
+uv run arb-capture --debug observe --duration 300
+```
+
+Observation mode:
+- Connects to all price streams (Binance, Chainlink, CLOB)
+- Tracks 15-minute candle windows
+- Calculates model P(UP) predictions
+- Detects signals (Dutch Book, Lag Arb, Momentum)
+- Exports snapshots to Parquet for analysis
+
+### Verify Stream Connections
+
+```bash
+# 5-minute health check (default)
+uv run arb-capture verify
+
+# Shorter verification
+uv run arb-capture verify --duration 60
+```
+
+### Output Files
+
+| File | Location | Content |
+|------|----------|---------|
+| Raw candles | `research/data/raw/BTCUSDT_1m.parquet` | 1-minute Binance candles |
+| Features | `research/data/raw/BTCUSDT_15m_features.parquet` | Extracted window features |
+| Model | `research/models/probability_surface.json` | Probability surface buckets |
+| Observations | `research/data/observations/snapshots_*.parquet` | Live capture snapshots |
+
+---
+
 ## Configuration
 
 Configuration is loaded from multiple sources (priority: CLI > ENV > YAML > defaults).

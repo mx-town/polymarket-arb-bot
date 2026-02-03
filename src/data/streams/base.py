@@ -101,6 +101,15 @@ class SynchronizedSnapshot:
         chainlink_rpc: Latest Chainlink RPC price
         clob_books: Dict of token_id -> OrderBookUpdate
         lag_binance_to_chainlink_ms: Calculated lag
+
+    Observation Mode Fields (optional):
+        model_prob_up: Model's estimated P(UP) from probability surface
+        model_confidence: Confidence score from edge calculator (0-1)
+        edge_after_fees: Expected edge after accounting for fees
+        signal_detected: Signal type if detected (e.g., "dutch_book", "lag_arb_up")
+        signal_confidence: Confidence of the detected signal (0-1)
+        candle_open_price: 15-min candle open price for deviation calculation
+        time_remaining_sec: Seconds remaining until market resolution
     """
 
     timestamp_ms: int
@@ -109,6 +118,15 @@ class SynchronizedSnapshot:
     rtds_chainlink: PriceUpdate | None = None
     chainlink_rpc: PriceUpdate | None = None
     clob_books: dict[str, OrderBookUpdate] = field(default_factory=dict)
+
+    # Observation mode fields (optional)
+    model_prob_up: float | None = None
+    model_confidence: float | None = None
+    edge_after_fees: float | None = None
+    signal_detected: str | None = None
+    signal_confidence: float | None = None
+    candle_open_price: float | None = None
+    time_remaining_sec: int | None = None
 
     @property
     def binance_price(self) -> float | None:
