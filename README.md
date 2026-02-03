@@ -302,7 +302,6 @@ uv run arb-capture verify --duration 60
 | Observations | `research/data/observations/snapshots_*.parquet` | Live capture snapshots |
 
 ---
-
 ## Configuration
 
 Configuration is loaded from multiple sources (priority: CLI > ENV > YAML > defaults).
