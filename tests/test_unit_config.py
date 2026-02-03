@@ -10,7 +10,6 @@ from trading.config import (
     TradingConfig,
     PollingConfig,
     WebSocketConfig,
-    ConservativeConfig,
     LagArbConfig,
     RiskConfig,
     FilterConfig,
@@ -141,12 +140,3 @@ class TestRiskConfig:
         assert config.max_total_exposure == 1000
 
 
-class TestConservativeConfig:
-    """Tests for ConservativeConfig"""
-
-    def test_default_values(self):
-        """Test default conservative strategy values"""
-        config = ConservativeConfig()
-        assert config.max_combined_price == 0.99
-        assert config.min_time_to_resolution_sec == 300
-        assert config.exit_on_pump_threshold == 0.10

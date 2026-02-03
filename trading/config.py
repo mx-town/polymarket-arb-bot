@@ -45,15 +45,7 @@ class WebSocketConfig:
 
 
 @dataclass
-class ConservativeConfig:
-    max_combined_price: float = 0.99
-    min_time_to_resolution_sec: int = 300
-    exit_on_pump_threshold: float = 0.10
-
-
-@dataclass
 class LagArbConfig:
-    enabled: bool = False
     spot_momentum_window_sec: float = 10.0  # Rolling window for momentum confirmation
     spot_move_threshold_pct: float = 0.002  # 0.2% from candle open = clear direction
     max_combined_price: float = 0.995  # Entry threshold (0% fees on 1H markets)
@@ -68,16 +60,6 @@ class LagArbConfig:
     # Side-by-side exit (sell pumped side first)
     prioritize_pump_exit: bool = False  # Sell pumped side first, hold other
     secondary_exit_threshold_pct: float = 0.02  # Exit other side at +2%
-
-
-@dataclass
-class PureArbConfig:
-    """Pure arbitrage: enter on price threshold only (no momentum required)"""
-
-    enabled: bool = False
-    max_combined_price: float = 0.99  # Entry when combined < this
-    min_net_profit: float = 0.005  # Minimum profit after fees
-    fee_rate: float = 0.02  # Assume standard fees unless on 1H
 
 
 @dataclass
@@ -137,14 +119,11 @@ class BotConfig:
     trading: TradingConfig = field(default_factory=TradingConfig)
     polling: PollingConfig = field(default_factory=PollingConfig)
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
-    conservative: ConservativeConfig = field(default_factory=ConservativeConfig)
     lag_arb: LagArbConfig = field(default_factory=LagArbConfig)
-    pure_arb: PureArbConfig = field(default_factory=PureArbConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
     verbose: bool = False
-    strategy: str = "conservative"  # "conservative" or "lag_arb"
 
     # Credentials (from env only, never from YAML)
     private_key: str | None = field(default=None, repr=False)
@@ -188,12 +167,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--batch-size", type=int, default=None, help="Order books to fetch per API call"
-    )
-    parser.add_argument(
-        "--strategy",
-        choices=["conservative", "lag_arb"],
-        default=None,
-        help="Trading strategy to use",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed progress")
 
@@ -246,22 +219,9 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
             reconnect_delay=w.get("reconnect_delay", config.websocket.reconnect_delay),
         )
 
-    if "conservative" in yaml_config:
-        c = yaml_config["conservative"]
-        config.conservative = ConservativeConfig(
-            max_combined_price=c.get("max_combined_price", config.conservative.max_combined_price),
-            min_time_to_resolution_sec=c.get(
-                "min_time_to_resolution_sec", config.conservative.min_time_to_resolution_sec
-            ),
-            exit_on_pump_threshold=c.get(
-                "exit_on_pump_threshold", config.conservative.exit_on_pump_threshold
-            ),
-        )
-
     if "lag_arb" in yaml_config:
         la = yaml_config["lag_arb"]
         config.lag_arb = LagArbConfig(
-            enabled=la.get("enabled", config.lag_arb.enabled),
             spot_momentum_window_sec=la.get(
                 "spot_momentum_window_sec", config.lag_arb.spot_momentum_window_sec
             ),
@@ -286,15 +246,6 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
             secondary_exit_threshold_pct=la.get(
                 "secondary_exit_threshold_pct", config.lag_arb.secondary_exit_threshold_pct
             ),
-        )
-
-    if "pure_arb" in yaml_config:
-        pa = yaml_config["pure_arb"]
-        config.pure_arb = PureArbConfig(
-            enabled=pa.get("enabled", config.pure_arb.enabled),
-            max_combined_price=pa.get("max_combined_price", config.pure_arb.max_combined_price),
-            min_net_profit=pa.get("min_net_profit", config.pure_arb.min_net_profit),
-            fee_rate=pa.get("fee_rate", config.pure_arb.fee_rate),
         )
 
     if "risk" in yaml_config:
@@ -336,15 +287,6 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
         )
 
     # Apply top-level YAML settings
-    if "strategy" in yaml_config:
-        config.strategy = yaml_config["strategy"]
-        # Sync lag_arb.enabled with strategy choice
-        if config.strategy == "lag_arb":
-            config.lag_arb.enabled = True
-    elif config.lag_arb.enabled:
-        # Derive strategy from lag_arb.enabled if strategy not explicitly set
-        config.strategy = "lag_arb"
-
     if "verbose" in yaml_config:
         config.verbose = yaml_config["verbose"]
 
@@ -375,10 +317,6 @@ def build_config(args: argparse.Namespace | None = None) -> BotConfig:
         config.polling.max_markets = args.max_markets
     if args.batch_size is not None:
         config.polling.batch_size = args.batch_size
-    if args.strategy is not None:
-        config.strategy = args.strategy
-        if args.strategy == "lag_arb":
-            config.lag_arb.enabled = True
     if args.verbose:
         config.verbose = True
 

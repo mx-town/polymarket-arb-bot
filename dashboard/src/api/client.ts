@@ -113,7 +113,7 @@ export interface SignalEntry {
 export interface ConfigSummary {
   strategy: string;
   dry_run: boolean;
-  lag_arb_enabled: boolean;
+  model_loaded: boolean;
   market_types: string[];
   assets: string[];
   momentum_threshold: number;
@@ -190,13 +190,7 @@ export interface BotConfig {
     ping_interval: number;
     reconnect_delay: number;
   };
-  conservative: {
-    max_combined_price: number;
-    min_time_to_resolution_sec: number;
-    exit_on_pump_threshold: number;
-  };
   lag_arb: {
-    enabled: boolean;
     candle_interval: string;
     spot_momentum_window_sec: number;
     spot_move_threshold_pct: number;
@@ -210,12 +204,6 @@ export interface BotConfig {
     // Side-by-side exit
     prioritize_pump_exit: boolean;
     secondary_exit_threshold_pct: number;
-  };
-  pure_arb: {
-    enabled: boolean;
-    max_combined_price: number;
-    min_net_profit: number;
-    fee_rate: number;
   };
   risk: {
     max_consecutive_losses: number;

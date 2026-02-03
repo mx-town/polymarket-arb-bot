@@ -3,9 +3,9 @@ Polymarket Arbitrage Bot - Main Entry Point
 
 Orchestrates market discovery, real-time data feeds, and strategy execution.
 
-Strategies:
-- conservative: Buy both sides when combined < $0.99, hold to resolution
-- lag_arb: Predict Polymarket lag using Binance spot momentum
+Strategy: Lag Arbitrage
+- Simple mode: Momentum-first trigger from Binance spot price vs candle open
+- Enhanced mode: When P() model available, signals enriched with probability estimates
 """
 
 import os
@@ -29,9 +29,7 @@ from trading.market.discovery import (
     fetch_recent_updown_markets,
 )
 from trading.market.state import MarketState, MarketStateManager, MarketStatus
-from trading.strategy.conservative import ConservativeStrategy
 from trading.strategy.lag_arb import LagArbStrategy
-from trading.strategy.pure_arb import PureArbStrategy
 from trading.strategy.signals import ArbOpportunity
 from trading.utils.logging import get_logger, setup_logging
 from trading.utils.metrics import BotMetrics, remove_pid, write_pid
@@ -63,9 +61,8 @@ class ArbBot:
         # Market refresh thread
         self._refresh_thread: threading.Thread | None = None
 
-        # Strategy (set based on config)
-        self.strategy: ConservativeStrategy | LagArbStrategy | None = None
-        self.pure_arb_strategy: PureArbStrategy | None = None
+        # Strategy (always lag_arb)
+        self.strategy: LagArbStrategy | None = None
 
         # Engine components (optional model integration)
         self.model_bridge: ModelBridge | None = None
@@ -78,24 +75,23 @@ class ArbBot:
         """Print startup banner"""
         cfg = self.config
         print("=" * 60)
-        print("Polymarket Arbitrage Bot")
+        print("Polymarket Arbitrage Bot - Lag Arb Strategy")
         print("=" * 60)
         print(f"  Mode:            {'DRY RUN' if cfg.trading.dry_run else 'LIVE'}")
-        print(f"  Strategy:        {cfg.strategy}")
         print(f"  Min gross:       ${cfg.trading.min_spread} ({cfg.trading.min_spread * 100:.1f}%)")
         print(
             f"  Min net profit:  ${cfg.trading.min_net_profit} ({cfg.trading.min_net_profit * 100:.2f}%)"
         )
         print(f"  Max position:    ${cfg.trading.max_position_size}")
         print(f"  Market refresh:  {cfg.polling.market_refresh_interval}s")
-        if cfg.strategy == "lag_arb":
-            print("  Binance feed:    enabled (candle-based)")
-            print(f"  Candle interval: {cfg.lag_arb.candle_interval}")
-            print(f"  Move threshold:  {cfg.lag_arb.spot_move_threshold_pct * 100:.2f}% from open")
-            print(f"  Fee rate:        {cfg.lag_arb.fee_rate * 100:.1f}% (1H markets)")
+        print("  Binance feed:    enabled (candle-based)")
+        print(f"  Candle interval: {cfg.lag_arb.candle_interval}")
+        print(f"  Move threshold:  {cfg.lag_arb.spot_move_threshold_pct * 100:.2f}% from open")
+        print(f"  Fee rate:        {cfg.lag_arb.fee_rate * 100:.1f}%")
+        if self.model_bridge and self.model_bridge.is_loaded:
+            print("  P() model:       LOADED (enhanced mode)")
         else:
-            print(f"  Poll interval:   {cfg.polling.interval}s")
-            print(f"  Est. fee rate:   {cfg.trading.fee_rate * 100:.1f}%")
+            print("  P() model:       not loaded (simple mode)")
         print("=" * 60)
 
     def initialize(self):
@@ -125,19 +121,8 @@ class ArbBot:
 
         logger.info("MARKETS_LOADED", f"count={len(self.state_manager.markets)}")
 
-        # Initialize strategy
-        if self.config.strategy == "lag_arb":
-            self._init_lag_arb()
-        else:
-            self._init_conservative()
-
-        # Initialize pure arb if enabled (can run alongside main strategy)
-        if self.config.pure_arb.enabled:
-            self.pure_arb_strategy = PureArbStrategy(
-                self.config.trading,
-                self.config.pure_arb,
-            )
-            logger.info("STRATEGY", "Pure arb strategy enabled (no momentum required)")
+        # Initialize lag arb strategy (always)
+        self._init_lag_arb()
 
         # Connect Polymarket WebSocket (always enabled)
         self._init_polymarket_ws()
@@ -155,14 +140,6 @@ class ArbBot:
             logger.warning("PID_WRITE_FAILED", "Could not write PID file")
 
         logger.info("INIT_COMPLETE", "Bot initialized")
-
-    def _init_conservative(self):
-        """Initialize conservative strategy"""
-        self.strategy = ConservativeStrategy(
-            self.config.trading,
-            self.config.conservative,
-        )
-        logger.info("STRATEGY", "Conservative strategy initialized")
 
     def _init_lag_arb(self):
         """Initialize lag arbitrage strategy with Binance feed"""
@@ -192,7 +169,7 @@ class ArbBot:
             )
 
             self.signal_evaluator = SignalEvaluator(
-                model=self.model_bridge,
+                model_bridge=self.model_bridge,
                 config=signal_config,
             )
 
@@ -451,18 +428,10 @@ class ArbBot:
 
         # Check entry signal if no position
         if not self.position_manager.has_position(market_id):
-            # Check main strategy first
             signal = self.strategy.check_entry(market)
             if signal and signal.opportunity:
                 self._execute_entry(signal.opportunity)
                 return
-
-            # Check pure arb entry (if enabled)
-            if self.pure_arb_strategy:
-                signal = self.pure_arb_strategy.check_entry(market)
-                if signal and signal.opportunity:
-                    self._execute_entry(signal.opportunity)
-                    return
 
         # Check exit signal if has position
         else:
@@ -702,9 +671,9 @@ class ArbBot:
 
         # Config summary for dashboard
         config_summary = {
-            "strategy": self.config.strategy,
+            "strategy": "lag_arb",
             "dry_run": self.config.trading.dry_run,
-            "lag_arb_enabled": self.config.lag_arb.enabled,
+            "model_loaded": self.model_bridge.is_loaded if self.model_bridge else False,
             "market_types": self.config.filters.market_types,
             "assets": self.config.filters.assets,
             "momentum_threshold": self.config.lag_arb.momentum_trigger_threshold_pct,

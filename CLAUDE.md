@@ -36,8 +36,8 @@ Python arbitrage bot connecting to Polymarket CLOB and Binance via WebSocket for
 │         │               open, emits DirectionSignal when threshold      │
 │         │               crossed (0.1%)                                  │
 │         ▼                                                               │
-│  Strategy ───────────── Conservative: hold to resolution               │
-│         │               LagArb: aggressive exit on pump/timeout        │
+│  LagArbStrategy ─────── Momentum-first signal, aggressive exit        │
+│         │               + P() model enhancement when available         │
 │         ▼                                                               │
 │  OrderExecutor ──────── CLOB API orders (dry-run or live)              │
 │         │                                                               │
@@ -114,19 +114,10 @@ Configuration sources (priority: CLI > ENV > YAML > defaults):
 | `ping_interval` | int | `5` | Seconds between pings |
 | `reconnect_delay` | int | `5` | Delay before reconnect attempt |
 
-### Conservative Strategy (`config.conservative.*`)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `max_combined_price` | float | `0.99` | Entry threshold (YES + NO) |
-| `min_time_to_resolution_sec` | int | `300` | Minimum time to resolution |
-| `exit_on_pump_threshold` | float | `0.10` | Exit if one side pumps 10% |
-
 ### Lag Arbitrage Strategy (`config.lag_arb.*`)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable lag arb strategy |
 | `candle_interval` | str | `"1h"` | Use 1H candles (0% fees) |
 | `spot_momentum_window_sec` | int | `10` | Momentum calculation window |
 | `spot_move_threshold_pct` | float | `0.002` | 0.2% move for confirmation |
@@ -192,9 +183,7 @@ polymarket-arb-bot/
 │   │   ├── filters.py            # Market filtering logic
 │   │   └── state.py              # MarketState, MarketStateManager
 │   ├── strategy/
-│   │   ├── conservative.py       # Hold-to-resolution strategy
-│   │   ├── lag_arb.py            # Momentum-based lag arbitrage
-│   │   ├── pure_arb.py           # Pure arbitrage strategy
+│   │   ├── lag_arb.py            # Core strategy: momentum-based lag arbitrage
 │   │   └── signals.py            # Signal data structures
 │   ├── execution/
 │   │   ├── orders.py             # CLOB order execution

@@ -15,23 +15,15 @@ from pathlib import Path
 
 
 def cmd_trade(args: argparse.Namespace) -> int:
-    """Run the trading bot."""
+    """Run the trading bot (always uses lag_arb strategy)."""
     # Import here to avoid circular imports
-    from trading.bot import ArbBot, main as bot_main
-    from trading.config import build_config
-
-    # Build config from file + overrides
-    config = build_config(
-        config_path=args.config,
-        strategy=args.strategy,
-        dry_run=args.dry_run,
-    )
+    from trading.bot import main as bot_main
 
     if args.api_mode:
         # Emit stage markers for API subprocess parsing
         print("BOT_START", flush=True)
 
-    # Run the bot
+    # Run the bot (uses default config loading from build_config)
     return bot_main()
 
 
@@ -88,19 +80,12 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # trade command
-    trade_parser = subparsers.add_parser("trade", help="Run the trading bot")
+    trade_parser = subparsers.add_parser("trade", help="Run the trading bot (lag_arb strategy)")
     trade_parser.add_argument(
         "--config",
         type=str,
         default="config/default.yaml",
         help="Path to config file",
-    )
-    trade_parser.add_argument(
-        "--strategy",
-        type=str,
-        choices=["lag_arb", "conservative", "pure_arb"],
-        default="lag_arb",
-        help="Trading strategy to use",
     )
     trade_parser.add_argument(
         "--dry-run",
@@ -141,7 +126,6 @@ def main() -> int:
         # Default to trade if no command specified
         args.command = "trade"
         args.config = "config/default.yaml"
-        args.strategy = "lag_arb"
         args.dry_run = True
         args.live = False
         args.api_mode = False

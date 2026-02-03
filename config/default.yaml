@@ -1,4 +1,3 @@
-strategy: lag_arb
 trading:
   dry_run: true
   min_spread: 0.02
@@ -13,12 +12,7 @@ polling:
 websocket:
   ping_interval: 5
   reconnect_delay: 5
-conservative:
-  max_combined_price: 0.99
-  min_time_to_resolution_sec: 300
-  exit_on_pump_threshold: 0.1
 lag_arb:
-  enabled: true
   candle_interval: 15m
   spot_momentum_window_sec: 10
   spot_move_threshold_pct: 0.002
@@ -31,11 +25,6 @@ lag_arb:
   max_hold_time_sec: 300
   prioritize_pump_exit: false
   secondary_exit_threshold_pct: 0.02
-pure_arb:
-  enabled: false
-  max_combined_price: 0.99
-  min_net_profit: 0.005
-  fee_rate: 0.02
 risk:
   max_consecutive_losses: 3
   max_daily_loss_usd: 100
