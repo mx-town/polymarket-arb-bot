@@ -148,6 +148,7 @@ class SimpleCLOBStream:
         self.reconnect_count = 0
 
         self._latest_books: dict[str, OrderBookUpdate] = {}
+        self._first_book_logged: set[str] = set()  # Track first book per asset
 
     def connect(self) -> None:
         """Connect to CLOB WebSocket."""
@@ -191,10 +192,11 @@ class SimpleCLOBStream:
         self.connected = True
         logger.info("CONNECTED", "SimpleCLOB connected")
 
-        # Subscribe to tokens
-        msg = {"type": "market", "assets_ids": self.token_ids}
+        # Subscribe to tokens (type must be uppercase "MARKET")
+        msg = {"assets_ids": self.token_ids, "type": "MARKET"}
         ws.send(json.dumps(msg))
         logger.info("SUBSCRIBED", f"tokens={len(self.token_ids)}")
+        logger.debug("SUBSCRIBE_MSG", json.dumps(msg)[:200])
 
         # Start ping thread
         self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
@@ -217,29 +219,52 @@ class SimpleCLOBStream:
 
         try:
             if isinstance(message, bytes):
+                logger.debug("RAW_BYTES", f"len={len(message)}")
                 return
             if not message or not message.strip():
                 return
             if not message.startswith("{") and not message.startswith("["):
+                logger.debug("RAW_NON_JSON", message[:100])
                 return
+
+            # Log raw message for debugging
+            logger.debug("RAW_MSG", message[:300])
 
             data = json.loads(message)
-            if not isinstance(data, dict):
-                return
 
-            event_type = data.get("event_type")
-            timestamp_ms = int(time.time() * 1000)
+            # Handle batched events (array of messages)
+            messages = data if isinstance(data, list) else [data]
 
-            if event_type == "book":
-                self._handle_book(data, timestamp_ms)
-            elif event_type == "price_change":
-                self._handle_price_change(data, timestamp_ms)
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+
+                event_type = msg.get("event_type")
+                timestamp_ms = int(time.time() * 1000)
+
+                if event_type == "book":
+                    logger.debug("EVENT_BOOK", f"asset={msg.get('asset_id', '')[:16]}...")
+                    self._handle_book(msg, timestamp_ms)
+                elif event_type == "price_change":
+                    logger.debug("EVENT_PRICE_CHANGE", f"changes={len(msg.get('price_changes', []))}")
+                    self._handle_price_change(msg, timestamp_ms)
+                elif event_type == "last_trade_price":
+                    logger.debug("EVENT_TRADE", f"asset={msg.get('asset_id', '')[:16]}... price={msg.get('price')}")
+                elif event_type:
+                    logger.debug("EVENT_OTHER", f"type={event_type}")
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.debug("PARSE_ERROR", f"error={e}")
+            logger.debug("PARSE_ERROR", f"error={e} msg={message[:100]}")
 
     def _handle_book(self, data: dict, timestamp_ms: int) -> None:
-        """Handle book snapshot."""
+        """Handle book snapshot.
+
+        Book format from API:
+        {
+            "bids": [{"price": "0.48", "size": "30"}, ...],
+            "asks": [{"price": "0.52", "size": "25"}, ...]
+        }
+        """
         asset_id = data.get("asset_id")
         if not asset_id:
             return
@@ -250,10 +275,43 @@ class SimpleCLOBStream:
         if not isinstance(bids, list) or not isinstance(asks, list):
             return
 
-        best_bid = float(bids[0][0]) if bids and len(bids[0]) >= 2 else 0.0
-        best_ask = float(asks[0][0]) if asks and len(asks[0]) >= 2 else 0.0
-        bid_size = float(bids[0][1]) if bids and len(bids[0]) >= 2 else 0.0
-        ask_size = float(asks[0][1]) if asks and len(asks[0]) >= 2 else 0.0
+        # Parse best bid - handle both dict {"price": x} and list [price, size] formats
+        best_bid = 0.0
+        bid_size = 0.0
+        if bids:
+            lvl = bids[0]
+            if isinstance(lvl, dict):
+                best_bid = float(lvl.get("price", 0))
+                bid_size = float(lvl.get("size", 0))
+            elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
+                best_bid = float(lvl[0])
+                bid_size = float(lvl[1])
+
+        # Parse best ask
+        best_ask = 0.0
+        ask_size = 0.0
+        if asks:
+            lvl = asks[0]
+            if isinstance(lvl, dict):
+                best_ask = float(lvl.get("price", 0))
+                ask_size = float(lvl.get("size", 0))
+            elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
+                best_ask = float(lvl[0])
+                ask_size = float(lvl[1])
+
+        # Log first book for each asset at INFO level
+        if asset_id not in self._first_book_logged:
+            self._first_book_logged.add(asset_id)
+            logger.info(
+                "BOOK_RECEIVED",
+                f"asset={asset_id[:16]}... bid={best_bid:.3f} ask={best_ask:.3f}",
+            )
+        else:
+            logger.debug(
+                "BOOK_PARSED",
+                f"asset={asset_id[:16]}... bid={best_bid:.3f} ask={best_ask:.3f} "
+                f"bid_size={bid_size:.1f} ask_size={ask_size:.1f}",
+            )
 
         update = OrderBookUpdate(
             token_id=asset_id,
@@ -269,7 +327,15 @@ class SimpleCLOBStream:
             self.on_update(update)
 
     def _handle_price_change(self, data: dict, timestamp_ms: int) -> None:
-        """Handle price change."""
+        """Handle price change.
+
+        Price change format from API:
+        {
+            "price_changes": [
+                {"asset_id": "...", "best_bid": "0.5", "best_ask": "0.52", "side": "BUY", ...}
+            ]
+        }
+        """
         changes = data.get("price_changes", [])
         if not changes or not isinstance(changes, list):
             return
@@ -290,6 +356,12 @@ class SimpleCLOBStream:
                 prev = self._latest_books.get(asset_id)
                 bid_size = prev.bid_size if prev else 0.0
                 ask_size = prev.ask_size if prev else 0.0
+
+                logger.debug(
+                    "PRICE_CHANGE_PARSED",
+                    f"asset={asset_id[:16]}... bid={best_bid:.3f} ask={best_ask:.3f} "
+                    f"side={change.get('side', 'N/A')}",
+                )
 
                 update = OrderBookUpdate(
                     token_id=asset_id,

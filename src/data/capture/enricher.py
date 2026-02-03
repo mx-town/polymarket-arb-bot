@@ -119,9 +119,9 @@ class SnapshotEnricher:
             if binance_price is not None:
                 self.candle_open_price = binance_price
                 self.candle_start_ms = window_start
-                logger.debug(
+                logger.info(
                     "CANDLE_NEW",
-                    f"open={binance_price:.2f} window_start={window_start}",
+                    f"open=${binance_price:.2f} window_start={window_start}",
                 )
 
     def _get_time_remaining_sec(self, timestamp_ms: int) -> int:
@@ -239,6 +239,13 @@ class SnapshotEnricher:
                         if best:
                             snapshot.signal_detected = best.signal_type.value
                             snapshot.signal_confidence = best.confidence
+                            logger.info(
+                                "SIGNAL_DETECTED",
+                                f"type={best.signal_type.value} confidence={best.confidence:.2f} "
+                                f"edge={snapshot.edge_after_fees:.4f if snapshot.edge_after_fees else 'N/A'} "
+                                f"direction={best.direction.value if best.direction else 'N/A'} "
+                                f"time_remaining={snapshot.time_remaining_sec}s",
+                            )
 
         except Exception as e:
             logger.debug("ENRICH_ERROR", str(e))
