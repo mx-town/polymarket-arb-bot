@@ -16,7 +16,6 @@
 
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
 
 import { useResearchMetrics } from './hooks/useResearchMetrics';
 import { ProbabilitySurface } from './components/ProbabilitySurface';
@@ -25,6 +24,7 @@ import { EdgeCalculator } from './components/EdgeCalculator';
 import { LagAnalysis } from './components/LagAnalysis';
 import { BacktestResults } from './components/BacktestResults';
 import { LiveObserver } from './components/LiveObserver';
+import { PipelineStatusBar } from './components/PipelineControl';
 
 export function ResearchDashboard() {
   const {
@@ -36,6 +36,7 @@ export function ResearchDashboard() {
     isLoading,
     error,
     clearSignals,
+    refresh,
   } = useResearchMetrics();
 
   const [activeTab, setActiveTab] = useState('lag-analysis');
@@ -45,7 +46,7 @@ export function ResearchDashboard() {
     return (
       <div
         style={{
-          minHeight: '100vh',
+          minHeight: '400px',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -93,195 +94,45 @@ export function ResearchDashboard() {
     );
   }
 
-  // Error state
-  if (error && !surface && signals.length === 0) {
-    return (
-      <div
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '2rem',
-        }}
-      >
-        <div
-          style={{
-            background: 'var(--accent-red-dim)',
-            border: '1px solid var(--accent-red)',
-            borderRadius: 'var(--radius-md)',
-            padding: '2rem',
-            maxWidth: '480px',
-            textAlign: 'center',
-          }}
-        >
-          <div
-            style={{
-              fontSize: '2rem',
-              marginBottom: '1rem',
-            }}
-          >
-            &#x26A0;
-          </div>
-          <div
-            style={{
-              fontSize: '1rem',
-              fontWeight: 600,
-              color: 'var(--accent-red)',
-              marginBottom: '0.75rem',
-            }}
-          >
-            Failed to Load Research Data
-          </div>
-          <div
-            style={{
-              fontSize: '0.75rem',
-              color: 'var(--text-secondary)',
-              marginBottom: '1rem',
-            }}
-          >
-            {error}
-          </div>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              padding: '0.5rem 1rem',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--accent-blue)',
-              color: 'white',
-              fontSize: '0.75rem',
-              fontWeight: 500,
-              cursor: 'pointer',
-              border: 'none',
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Show warning banner instead of blocking error state
+  const showOfflineBanner = error && !isConnected;
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        padding: '1.5rem',
-      }}
-    >
-      {/* Header */}
-      <header
-        style={{
-          marginBottom: '1.5rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {/* Logo */}
-          <div
-            style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: 'var(--radius-sm)',
-              background:
-                'linear-gradient(135deg, var(--accent-amber) 0%, var(--accent-blue) 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '1rem',
-            }}
-          >
-            &#x1F52C;
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: '1rem',
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                Polymarket Research
-              </h1>
-              <Badge
-                variant="outline"
-                className="text-[10px] uppercase tracking-wider border-amber-500/50 text-amber-500 bg-amber-500/10"
-              >
-                Research Mode
-              </Badge>
-            </div>
-            <div
-              style={{
-                fontSize: '0.6875rem',
-                color: 'var(--text-muted)',
-                fontFamily: 'var(--font-mono)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}
-            >
-              Probability Analysis | Lag Measurement | Backtesting
-            </div>
-          </div>
-        </div>
-
-        {/* Connection Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {/* Signal count badge */}
-          {signals.length > 0 && (
-            <div
-              style={{
-                padding: '0.375rem 0.75rem',
-                background: 'var(--accent-green-dim)',
-                borderRadius: '9999px',
-                border: '1px solid var(--accent-green)',
-                fontSize: '0.6875rem',
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--accent-green)',
-              }}
-            >
-              {signals.length} signals
-            </div>
-          )}
-
-          {/* Connection indicator */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.375rem 0.75rem',
-              background: isConnected ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
-              borderRadius: '9999px',
-              border: `1px solid ${isConnected ? 'var(--accent-green)' : 'var(--accent-red)'}`,
-            }}
-          >
-            <div
-              style={{
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                background: isConnected ? 'var(--accent-green)' : 'var(--accent-red)',
-              }}
-            />
-            <span
-              style={{
-                fontSize: '0.6875rem',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 500,
-                color: isConnected ? 'var(--accent-green)' : 'var(--accent-red)',
-              }}
-            >
-              {isConnected ? 'LIVE' : 'OFFLINE'}
+    <div>
+      {/* Offline Banner */}
+      {showOfflineBanner && (
+        <div
+          style={{
+            background: 'var(--accent-amber-dim)',
+            border: '1px solid var(--accent-amber)',
+            borderRadius: 'var(--radius-md)',
+            padding: '0.75rem 1rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1rem' }}>&#x26A0;</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--accent-amber)' }}>
+              <strong>Offline Mode:</strong> Research API not connected. Showing UI preview with empty data.
             </span>
           </div>
+          <span
+            style={{
+              fontSize: '0.625rem',
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-muted)',
+            }}
+          >
+            Start API server to enable live data
+          </span>
         </div>
-      </header>
+      )}
+
+      {/* Pipeline Status Bar */}
+      <PipelineStatusBar onPipelineComplete={() => refresh()} />
 
       {/* Main Content - 3-column layout */}
       <div

@@ -465,10 +465,49 @@ def run_capture(
         if enricher.surface is None:
             logger.warning("OBSERVATION_MODE", "Running without model - no surface loaded")
 
-    # Snapshot callback with optional enrichment
+    # Snapshot callback with optional enrichment + JSON stdout for API consumption
+    snapshot_count = [0]
+
     def on_snapshot(snapshot):
         if enricher is not None:
             enricher.enrich(snapshot)
+
+        # Emit flattened JSON to stdout so ObservationController can parse it
+        snapshot_count[0] += 1
+        try:
+            flat = {
+                "timestamp_ms": snapshot.timestamp_ms,
+                "binance_price": snapshot.binance_direct.price if snapshot.binance_direct else None,
+                "chainlink_price": snapshot.chainlink_rpc.price if snapshot.chainlink_rpc else None,
+                "lag_ms": (
+                    snapshot.binance_direct.timestamp_ms - snapshot.chainlink_rpc.timestamp_ms
+                    if snapshot.binance_direct and snapshot.chainlink_rpc
+                    else None
+                ),
+                "divergence_pct": (
+                    (snapshot.binance_direct.price - snapshot.chainlink_rpc.price)
+                    / snapshot.chainlink_rpc.price
+                    * 100
+                    if snapshot.binance_direct
+                    and snapshot.chainlink_rpc
+                    and snapshot.chainlink_rpc.price
+                    else None
+                ),
+                "model_prob_up": snapshot.model_prob_up,
+                "model_confidence": snapshot.model_confidence,
+                "edge_after_fees": snapshot.edge_after_fees,
+                "signal_detected": snapshot.signal_detected,
+                "signal_confidence": snapshot.signal_confidence,
+                "candle_open_price": snapshot.candle_open_price,
+                "time_remaining_sec": snapshot.time_remaining_sec,
+            }
+            # Only emit every 10th snapshot to avoid flooding stdout
+            if snapshot_count[0] % 10 == 0:
+                import json as _json
+
+                print(_json.dumps(flat), flush=True)
+        except Exception:
+            pass  # Don't let serialization errors crash the capture loop
 
     # Set up synchronizer
     config = SynchronizerConfig(

@@ -9,3 +9,4 @@ node_modules/
 *.egg-info/
 research/data/raw/
 research/output/
+dashboard/.pnpm-store

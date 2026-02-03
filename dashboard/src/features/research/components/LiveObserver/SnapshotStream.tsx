@@ -6,27 +6,20 @@ interface Props {
   maxItems?: number;
 }
 
-/**
- * Scrolling feed of enriched snapshots
- * Displays: timestamp, BTC price, deviation %, P(UP), edge, signal (if any)
- */
 export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [newItemIds, setNewItemIds] = useState<Set<number>>(new Set());
   const prevLengthRef = useRef(snapshots.length);
 
-  // Limit displayed snapshots
   const displayedSnapshots = snapshots.slice(-maxItems);
 
-  // Track new items for animation - called when snapshots change
   const trackNewItem = useCallback((timestamp: number) => {
     setNewItemIds((prev) => {
       const updated = new Set(prev);
       updated.add(timestamp);
       return updated;
     });
-    // Clean up animation after 500ms
     setTimeout(() => {
       setNewItemIds((current) => {
         const cleaned = new Set(current);
@@ -36,18 +29,15 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
     }, 500);
   }, []);
 
-  // Auto-scroll to top when new items arrive (unless paused)
   useEffect(() => {
     if (!isPaused && containerRef.current && snapshots.length > 0) {
       containerRef.current.scrollTop = 0;
     }
   }, [snapshots.length, isPaused]);
 
-  // Track new items for animation (separate effect to avoid setState cascade)
   useEffect(() => {
     if (snapshots.length > prevLengthRef.current && snapshots.length > 0) {
       const latestTimestamp = snapshots[snapshots.length - 1].timestamp_ms;
-      // Use setTimeout to avoid synchronous setState in effect
       const timeoutId = setTimeout(() => trackNewItem(latestTimestamp), 0);
       prevLengthRef.current = snapshots.length;
       return () => clearTimeout(timeoutId);
@@ -83,27 +73,26 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
 
   const getDeviationColor = (deviation: number) => {
     const absDeviation = Math.abs(deviation);
-    if (absDeviation >= 0.005) return 'var(--color-accent-amber)';
-    if (absDeviation >= 0.002) return 'var(--color-accent-blue)';
-    return 'var(--color-text-muted)';
+    if (absDeviation >= 0.005) return '#ffaa00';
+    if (absDeviation >= 0.002) return '#3b82f6';
+    return 'var(--text-muted)';
   };
 
   const getEdgeColor = (edge: number) => {
-    if (edge >= 0.02) return 'var(--color-accent-green)';
-    if (edge >= 0.01) return 'var(--color-accent-blue)';
-    if (edge > 0) return 'var(--color-text-secondary)';
-    return 'var(--color-text-muted)';
+    if (edge >= 0.02) return '#00d4aa';
+    if (edge >= 0.01) return '#3b82f6';
+    if (edge > 0) return 'var(--text-secondary)';
+    return 'var(--text-muted)';
   };
 
-  // Reverse to show newest first
   const reversedSnapshots = [...displayedSnapshots].reverse();
 
   return (
     <div
       style={{
-        background: 'var(--color-bg-card)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--color-border-main)',
+        background: 'var(--bg-card)',
+        borderRadius: '6px',
+        border: '1px solid var(--border)',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
@@ -118,13 +107,13 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
           gridTemplateColumns: '70px 90px 80px 60px 70px 60px',
           gap: '0.5rem',
           padding: '0.5rem 0.75rem',
-          borderBottom: '1px solid var(--color-border-main)',
-          background: 'var(--color-bg-elevated)',
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--bg-elevated)',
           fontSize: '0.5625rem',
           fontWeight: 600,
           textTransform: 'uppercase',
           letterSpacing: '0.08em',
-          color: 'var(--color-text-muted)',
+          color: 'var(--text-muted)',
         }}
       >
         <span>Time</span>
@@ -139,14 +128,24 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
       {displayedSnapshots.length === 0 ? (
         <div
           style={{
-            padding: '2rem 1rem',
+            background: 'var(--bg-card)',
+            padding: '3rem 2rem',
             textAlign: 'center',
-            color: 'var(--color-text-muted)',
-            fontSize: '0.75rem',
           }}
         >
-          <div style={{ marginBottom: '0.25rem' }}>No snapshots yet</div>
-          <div style={{ fontSize: '0.6875rem' }}>Start observation to collect data...</div>
+          <div
+            style={{
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              color: 'var(--text-primary)',
+              marginBottom: '0.25rem',
+            }}
+          >
+            No Snapshots
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            Start observation to collect data
+          </div>
         </div>
       ) : (
         <div
@@ -169,7 +168,7 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
                   gridTemplateColumns: '70px 90px 80px 60px 70px 60px',
                   gap: '0.5rem',
                   padding: '0.375rem 0.75rem',
-                  borderBottom: '1px solid var(--color-border-subtle)',
+                  borderBottom: '1px solid var(--border-subtle)',
                   fontSize: '0.6875rem',
                   fontFamily: 'var(--font-mono)',
                   animation: isNew ? 'slideIn 0.2s ease-out' : 'none',
@@ -178,41 +177,30 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
                     : 'transparent',
                 }}
               >
-                {/* Timestamp */}
-                <span style={{ color: 'var(--color-text-muted)' }}>
+                <span style={{ color: 'var(--text-muted)' }}>
                   {formatTime(snapshot.timestamp_ms)}
                 </span>
-
-                {/* BTC Price */}
-                <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
                   ${formatPrice(snapshot.binance_price)}
                 </span>
-
-                {/* Deviation */}
                 <span style={{ color: getDeviationColor(snapshot.divergence_pct) }}>
                   {formatPercent(snapshot.divergence_pct)}
                 </span>
-
-                {/* P(UP) */}
                 <span
                   style={{
                     color:
                       snapshot.model_prob_up >= 0.55
-                        ? 'var(--color-accent-green)'
+                        ? '#00d4aa'
                         : snapshot.model_prob_up <= 0.45
-                          ? 'var(--color-accent-red)'
-                          : 'var(--color-text-secondary)',
+                          ? '#ff4757'
+                          : 'var(--text-secondary)',
                   }}
                 >
                   {formatProbability(snapshot.model_prob_up)}
                 </span>
-
-                {/* Edge */}
                 <span style={{ color: getEdgeColor(snapshot.edge_after_fees) }}>
                   {formatPercent(snapshot.edge_after_fees)}
                 </span>
-
-                {/* Signal indicator */}
                 <span>
                   {snapshot.signal_detected ? (
                     <span
@@ -221,7 +209,7 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
                         alignItems: 'center',
                         gap: '0.25rem',
                         padding: '0.125rem 0.375rem',
-                        background: 'var(--color-accent-amber)',
+                        background: '#ffaa00',
                         color: '#0a0a0f',
                         borderRadius: '9999px',
                         fontSize: '0.5625rem',
@@ -231,7 +219,7 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
                       SIG
                     </span>
                   ) : (
-                    <span style={{ color: 'var(--color-text-muted)' }}>-</span>
+                    <span style={{ color: 'var(--text-muted)' }}>-</span>
                   )}
                 </span>
               </div>
@@ -245,10 +233,10 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
         <div
           style={{
             padding: '0.25rem 0.75rem',
-            background: 'var(--color-bg-elevated)',
-            borderTop: '1px solid var(--color-border-main)',
+            background: 'var(--bg-elevated)',
+            borderTop: '1px solid var(--border)',
             fontSize: '0.5625rem',
-            color: 'var(--color-accent-amber)',
+            color: '#ffaa00',
             textAlign: 'center',
           }}
         >

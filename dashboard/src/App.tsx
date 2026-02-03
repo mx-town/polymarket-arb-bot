@@ -58,28 +58,48 @@ function App() {
               width: '32px',
               height: '32px',
               borderRadius: 'var(--radius-sm)',
-              background:
-                'linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%)',
+              background: mode === 'trading'
+                ? 'linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%)'
+                : 'linear-gradient(135deg, var(--accent-amber, #f59e0b) 0%, var(--accent-blue) 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: '1rem',
             }}
           >
-            ◈
+            {mode === 'trading' ? '◈' : '🔬'}
           </div>
           <div>
-            <h1
-              style={{
-                margin: 0,
-                fontSize: '1rem',
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                letterSpacing: '-0.01em',
-              }}
-            >
-              Polymarket Arb Bot
-            </h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: '1rem',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  letterSpacing: '-0.01em',
+                }}
+              >
+                {mode === 'trading' ? 'Polymarket Arb Bot' : 'Polymarket Research'}
+              </h1>
+              {mode === 'research' && (
+                <span
+                  style={{
+                    padding: '0.125rem 0.5rem',
+                    fontSize: '0.5625rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    color: 'var(--accent-amber, #f59e0b)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: '4px',
+                  }}
+                >
+                  Research Mode
+                </span>
+              )}
+            </div>
             <div
               style={{
                 fontSize: '0.6875rem',
@@ -89,7 +109,9 @@ function App() {
                 letterSpacing: '0.05em',
               }}
             >
-              {configSummary?.strategy || 'lag_arb'} | {configSummary?.dry_run ? 'DRY RUN' : 'LIVE'}
+              {mode === 'trading'
+                ? `${configSummary?.strategy || 'lag_arb'} | ${configSummary?.dry_run ? 'DRY RUN' : 'LIVE'}`
+                : 'Probability Analysis | Lag Measurement | Backtesting'}
             </div>
           </div>
         </div>

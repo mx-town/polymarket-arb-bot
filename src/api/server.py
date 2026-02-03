@@ -14,7 +14,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from src.api.routes import config, control, metrics
+import asyncio
+from datetime import datetime
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+from src.api.pipeline_controller import PipelineController
+from src.api.routes import config, control, metrics, research
+from src.api.research_state import ResearchStateManager
 
 # Create FastAPI app
 app = FastAPI(
@@ -33,6 +40,13 @@ app.add_middleware(
 )
 
 
+# Shutdown hook — kill any running pipeline subprocess
+@app.on_event("shutdown")
+async def shutdown_event():
+    controller = PipelineController.get_instance()
+    await controller.shutdown()
+
+
 # Health check endpoint (before routers to ensure it's accessible)
 @app.get("/api/health")
 async def health_check():
@@ -40,10 +54,58 @@ async def health_check():
     return {"status": "ok"}
 
 
+# Research WebSocket endpoint - mounted here to match /api/ws/research path
+@app.websocket("/api/ws/research")
+async def websocket_research(websocket: WebSocket):
+    """WebSocket endpoint for real-time research updates."""
+    await websocket.accept()
+
+    state = ResearchStateManager.get_instance()
+    state.register_websocket(websocket)
+
+    try:
+        # Send initial state (including pipeline status)
+        pipeline = PipelineController.get_instance()
+        pipeline_status = pipeline.get_pipeline_status()
+
+        await websocket.send_json(
+            {
+                "type": "initial",
+                "data": {
+                    "observation_status": state.get_observation_status(),
+                    "signals": state.get_signals(50),
+                    "pipeline_status": pipeline_status.model_dump(),
+                },
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+        # Keep connection alive and listen for messages
+        while True:
+            try:
+                # Wait for client messages (heartbeat/ping)
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+
+                if message == "ping":
+                    await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                await websocket.send_json({"type": "heartbeat", "timestamp": datetime.now().isoformat()})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        state.unregister_websocket(websocket)
+
+
 # Include routers
 app.include_router(config.router, prefix="/api", tags=["config"])
 app.include_router(metrics.router, prefix="/api", tags=["metrics"])
 app.include_router(control.router, prefix="/api", tags=["control"])
+app.include_router(research.router, prefix="/api/research", tags=["research"])
 
 # Serve static files (React dashboard) if built - MUST be last
 # Static files mounted at "/" will catch all non-API routes

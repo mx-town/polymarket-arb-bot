@@ -1,67 +1,8 @@
-/**
- * BacktestResults component
- * Main tab content displaying backtest performance metrics, equity curve, and trade history
- */
-
 import { useState, useEffect } from 'react';
 import { EquityCurve } from './EquityCurve';
 import { TradeTable } from './TradeTable';
 import { fetchBacktestResults } from '../../api/research-client';
 import type { BacktestResult } from '../../types/research.types';
-
-interface MetricCardProps {
-  label: string;
-  value: string;
-  color?: string;
-  subValue?: string;
-}
-
-function MetricCard({ label, value, color, subValue }: MetricCardProps) {
-  return (
-    <div
-      style={{
-        background: 'var(--bg-elevated)',
-        borderRadius: 'var(--radius-sm)',
-        padding: '0.75rem 1rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.25rem',
-      }}
-    >
-      <div
-        style={{
-          fontSize: '0.625rem',
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          color: 'var(--text-muted)',
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: '1.125rem',
-          fontWeight: 600,
-          fontFamily: 'var(--font-mono)',
-          color: color || 'var(--text-primary)',
-        }}
-      >
-        {value}
-      </div>
-      {subValue && (
-        <div
-          style={{
-            fontSize: '0.625rem',
-            color: 'var(--text-muted)',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
-          {subValue}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function BacktestResults() {
   const [results, setResults] = useState<BacktestResult | null>(null);
@@ -114,7 +55,7 @@ export function BacktestResults() {
             width: '32px',
             height: '32px',
             border: '2px solid var(--border)',
-            borderTopColor: 'var(--accent-blue)',
+            borderTopColor: '#3b82f6',
             borderRadius: '50%',
             animation: 'spin 1s linear infinite',
             marginBottom: '1rem',
@@ -136,9 +77,9 @@ export function BacktestResults() {
     return (
       <div
         style={{
-          background: 'var(--accent-red-dim)',
-          border: '1px solid var(--accent-red)',
-          borderRadius: 'var(--radius-md)',
+          background: 'rgba(255, 71, 87, 0.1)',
+          border: '1px solid #ff4757',
+          borderRadius: '6px',
           padding: '1.5rem',
           textAlign: 'center',
         }}
@@ -147,7 +88,7 @@ export function BacktestResults() {
           style={{
             fontSize: '0.875rem',
             fontWeight: 600,
-            color: 'var(--accent-red)',
+            color: '#ff4757',
             marginBottom: '0.5rem',
           }}
         >
@@ -164,30 +105,22 @@ export function BacktestResults() {
         style={{
           background: 'var(--bg-card)',
           border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '3rem',
+          borderRadius: '6px',
+          padding: '3rem 2rem',
           textAlign: 'center',
         }}
       >
         <div
           style={{
-            fontSize: '2rem',
-            marginBottom: '1rem',
-          }}
-        >
-          &#x1F4CA;
-        </div>
-        <div
-          style={{
             fontSize: '0.875rem',
-            fontWeight: 600,
+            fontWeight: 500,
             color: 'var(--text-primary)',
-            marginBottom: '0.5rem',
+            marginBottom: '0.25rem',
           }}
         >
           No Backtest Data
         </div>
-        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
           Run a backtest to see performance metrics and trade history
         </div>
       </div>
@@ -196,7 +129,6 @@ export function BacktestResults() {
 
   const { metrics, equity_curve, trades } = results;
 
-  // Format metric values
   const formatPnl = (value: number) => {
     const prefix = value >= 0 ? '+' : '';
     return `${prefix}$${value.toFixed(2)}`;
@@ -210,87 +142,79 @@ export function BacktestResults() {
     return value.toFixed(2);
   };
 
-  // Determine colors based on values
-  const pnlColor = metrics.total_pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-  const winRateColor = metrics.win_rate >= 50 ? 'var(--accent-green)' : 'var(--accent-amber)';
-  const sharpeColor = metrics.sharpe_ratio >= 1 ? 'var(--accent-green)' : metrics.sharpe_ratio >= 0 ? 'var(--accent-amber)' : 'var(--accent-red)';
-  const profitFactorColor = metrics.profit_factor >= 1.5 ? 'var(--accent-green)' : metrics.profit_factor >= 1 ? 'var(--accent-amber)' : 'var(--accent-red)';
+  const pnlColor = metrics.total_pnl >= 0 ? '#00d4aa' : '#ff4757';
+  const winRateColor = metrics.win_rate >= 50 ? '#00d4aa' : '#ffaa00';
+  const sharpeColor = metrics.sharpe_ratio >= 1 ? '#00d4aa' : metrics.sharpe_ratio >= 0 ? '#ffaa00' : '#ff4757';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      {/* Performance Metrics Row */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      {/* Compact Header Strip */}
       <div
         style={{
           background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-md)',
           border: '1px solid var(--border)',
-          padding: '1rem',
+          borderRadius: '6px',
+          padding: '0.625rem 1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1.5rem',
+          borderLeft: `3px solid ${pnlColor}`,
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            marginBottom: '0.75rem',
-          }}
-        >
-          <span style={{ fontSize: '1rem' }}>&#x1F3AF;</span>
+        {/* Hero metric: Total PnL */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.375rem' }}>
           <span
             style={{
-              fontSize: '0.75rem',
-              fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              color: 'var(--text-secondary)',
+              fontSize: '1.5rem',
+              fontWeight: 700,
+              fontFamily: 'var(--font-mono)',
+              color: pnlColor,
+              lineHeight: 1,
             }}
           >
-            Performance Metrics
+            {formatPnl(metrics.total_pnl)}
+          </span>
+          <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>
+            P&L
           </span>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(6, 1fr)',
-            gap: '0.75rem',
-          }}
-        >
-          <MetricCard
-            label="Total P&L"
-            value={formatPnl(metrics.total_pnl)}
-            color={pnlColor}
-            subValue={`${metrics.winning_trades}W / ${metrics.losing_trades}L`}
-          />
-          <MetricCard
-            label="Win Rate"
-            value={formatPercent(metrics.win_rate)}
-            color={winRateColor}
-            subValue={`Avg Win: $${metrics.avg_win.toFixed(2)}`}
-          />
-          <MetricCard
-            label="Sharpe Ratio"
-            value={formatRatio(metrics.sharpe_ratio)}
-            color={sharpeColor}
-            subValue={`Sortino: ${formatRatio(metrics.sortino_ratio)}`}
-          />
-          <MetricCard
-            label="Max Drawdown"
-            value={formatPercent(metrics.max_drawdown_pct)}
-            color="var(--accent-red)"
-            subValue={`Avg Loss: $${Math.abs(metrics.avg_loss).toFixed(2)}`}
-          />
-          <MetricCard
-            label="Profit Factor"
-            value={formatRatio(metrics.profit_factor)}
-            color={profitFactorColor}
-            subValue={`Expectancy: $${metrics.expectancy.toFixed(2)}`}
-          />
-          <MetricCard
-            label="Total Trades"
-            value={metrics.total_trades.toString()}
-            subValue={`Avg Return: ${formatPercent(metrics.avg_trade_return)}`}
-          />
+        {/* Separator */}
+        <div style={{ width: '1px', height: '24px', background: 'var(--border)' }} />
+
+        {/* Secondary metrics inline */}
+        <div style={{ display: 'flex', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Win Rate</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: winRateColor, fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.win_rate)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sharpe</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: sharpeColor, fontFamily: 'var(--font-mono)' }}>{formatRatio(metrics.sharpe_ratio)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Max DD</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ff4757', fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.max_drawdown_pct)}</span>
+          </div>
+        </div>
+
+        {/* Separator */}
+        <div style={{ width: '1px', height: '24px', background: 'var(--border)' }} />
+
+        {/* Trade counts */}
+        <div style={{ display: 'flex', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trades</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{metrics.total_trades}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Avg Trade</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.avg_trade_return)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>W/L</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{metrics.winning_trades}/{metrics.losing_trades}</span>
+          </div>
         </div>
       </div>
 

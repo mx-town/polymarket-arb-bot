@@ -1,8 +1,3 @@
-/**
- * TradeTable component
- * Scrollable table of backtest trades with sorting and filtering
- */
-
 import { useState, useMemo } from 'react';
 import type { BacktestTrade } from '../../types/research.types';
 
@@ -19,13 +14,11 @@ export function TradeTable({ trades }: Props) {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
 
-  // Filter trades by direction
   const filteredTrades = useMemo(() => {
     if (directionFilter === 'ALL') return trades;
     return trades.filter((t) => t.direction === directionFilter);
   }, [trades, directionFilter]);
 
-  // Sort trades
   const sortedTrades = useMemo(() => {
     const sorted = [...filteredTrades].sort((a, b) => {
       let comparison = 0;
@@ -96,8 +89,8 @@ export function TradeTable({ trades }: Props) {
     textAlign: key === 'direction' ? 'center' : 'right',
     cursor: 'pointer',
     userSelect: 'none',
-    padding: '0.5rem 0.75rem',
-    fontSize: '0.625rem',
+    padding: '0.375rem 0.625rem',
+    fontSize: '0.5625rem',
     fontWeight: sortKey === key ? 600 : 500,
     color: sortKey === key ? 'var(--text-primary)' : 'var(--text-muted)',
     textTransform: 'uppercase',
@@ -105,7 +98,6 @@ export function TradeTable({ trades }: Props) {
     whiteSpace: 'nowrap',
   });
 
-  // Count trades by direction
   const upCount = trades.filter((t) => t.direction === 'UP').length;
   const downCount = trades.filter((t) => t.direction === 'DOWN').length;
 
@@ -113,56 +105,55 @@ export function TradeTable({ trades }: Props) {
     <div
       style={{
         background: 'var(--bg-card)',
-        borderRadius: 'var(--radius-md)',
+        borderRadius: '6px',
         border: '1px solid var(--border)',
         overflow: 'hidden',
       }}
     >
-      {/* Header */}
+      {/* Compact single-row header with title + filter */}
       <div
         style={{
-          padding: '0.75rem 1rem',
+          padding: '0.5rem 1rem',
           borderBottom: '1px solid var(--border)',
           background: 'var(--bg-elevated)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <span style={{ fontSize: '1rem' }}>&#x1F4CB;</span>
-          <span
-            style={{
-              fontSize: '0.75rem',
-              fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            Trades
-          </span>
-          <span
-            style={{
-              marginLeft: 'auto',
-              fontSize: '0.6875rem',
-              padding: '0.125rem 0.5rem',
-              background: 'var(--accent-blue-dim)',
-              color: 'var(--accent-blue)',
-              borderRadius: '9999px',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {filteredTrades.length} trades
-          </span>
-        </div>
+        <span
+          style={{
+            fontSize: '0.5625rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          Trades
+        </span>
 
-        {/* Direction filter */}
+        <span
+          style={{
+            fontSize: '0.5625rem',
+            padding: '0.125rem 0.375rem',
+            background: 'rgba(59, 130, 246, 0.15)',
+            color: '#3b82f6',
+            borderRadius: '9999px',
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          {filteredTrades.length}
+        </span>
+
+        {/* Direction filter inline */}
         <div
           style={{
             display: 'flex',
             background: 'var(--bg-card)',
-            borderRadius: 'var(--radius-sm)',
+            borderRadius: '3px',
             padding: '0.125rem',
             border: '1px solid var(--border-subtle)',
-            width: 'fit-content',
           }}
         >
           {(['ALL', 'UP', 'DOWN'] as DirectionFilter[]).map((dir) => (
@@ -170,26 +161,26 @@ export function TradeTable({ trades }: Props) {
               key={dir}
               onClick={() => setDirectionFilter(dir)}
               style={{
-                padding: '0.25rem 0.625rem',
-                fontSize: '0.625rem',
+                padding: '0.125rem 0.5rem',
+                fontSize: '0.5625rem',
                 fontFamily: 'var(--font-mono)',
                 fontWeight: directionFilter === dir ? 600 : 400,
                 color:
                   directionFilter === dir
                     ? dir === 'UP'
-                      ? 'var(--accent-green)'
+                      ? '#00d4aa'
                       : dir === 'DOWN'
-                        ? 'var(--accent-red)'
+                        ? '#ff4757'
                         : 'var(--text-primary)'
                     : 'var(--text-muted)',
                 background: directionFilter === dir ? 'var(--bg-elevated)' : 'transparent',
                 border: 'none',
-                borderRadius: 'var(--radius-sm)',
+                borderRadius: '3px',
                 cursor: 'pointer',
                 textTransform: 'uppercase',
               }}
             >
-              {dir === 'ALL' ? `All (${trades.length})` : dir === 'UP' ? `Up (${upCount})` : `Down (${downCount})`}
+              {dir === 'ALL' ? `All (${trades.length})` : dir === 'UP' ? `Up (${upCount})` : `Dn (${downCount})`}
             </button>
           ))}
         </div>
@@ -199,14 +190,23 @@ export function TradeTable({ trades }: Props) {
       {trades.length === 0 ? (
         <div
           style={{
-            padding: '2rem 1rem',
+            padding: '3rem 2rem',
             textAlign: 'center',
-            color: 'var(--text-muted)',
-            fontSize: '0.75rem',
           }}
         >
-          <div style={{ marginBottom: '0.25rem' }}>No trades available</div>
-          <div style={{ fontSize: '0.6875rem' }}>Run a backtest to see trade history</div>
+          <div
+            style={{
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              color: 'var(--text-primary)',
+              marginBottom: '0.25rem',
+            }}
+          >
+            No Trades
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            Run a backtest to see trade history
+          </div>
         </div>
       ) : (
         <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
@@ -216,7 +216,7 @@ export function TradeTable({ trades }: Props) {
               display: 'grid',
               gridTemplateColumns: '40px 1fr 60px 70px 70px 70px 70px',
               borderBottom: '1px solid var(--border)',
-              background: 'var(--bg-secondary)',
+              background: 'var(--bg-elevated)',
               position: 'sticky',
               top: 0,
               zIndex: 1,
@@ -260,7 +260,7 @@ export function TradeTable({ trades }: Props) {
               >
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'center',
                     color: 'var(--text-muted)',
                   }}
@@ -269,7 +269,7 @@ export function TradeTable({ trades }: Props) {
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     color: 'var(--text-secondary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -280,18 +280,18 @@ export function TradeTable({ trades }: Props) {
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'center',
                   }}
                 >
                   <span
                     style={{
                       padding: '0.125rem 0.375rem',
-                      borderRadius: 'var(--radius-sm)',
+                      borderRadius: '3px',
                       fontSize: '0.5625rem',
                       fontWeight: 600,
-                      background: trade.direction === 'UP' ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)',
-                      color: trade.direction === 'UP' ? 'var(--accent-green)' : 'var(--accent-red)',
+                      background: trade.direction === 'UP' ? 'rgba(0, 212, 170, 0.15)' : 'rgba(255, 71, 87, 0.15)',
+                      color: trade.direction === 'UP' ? '#00d4aa' : '#ff4757',
                     }}
                   >
                     {trade.direction}
@@ -299,7 +299,7 @@ export function TradeTable({ trades }: Props) {
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'right',
                     color: 'var(--text-secondary)',
                   }}
@@ -308,7 +308,7 @@ export function TradeTable({ trades }: Props) {
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'right',
                     color: 'var(--text-secondary)',
                   }}
@@ -317,17 +317,17 @@ export function TradeTable({ trades }: Props) {
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'right',
                     fontWeight: 600,
-                    color: isWin ? 'var(--accent-green)' : 'var(--accent-red)',
+                    color: isWin ? '#00d4aa' : '#ff4757',
                   }}
                 >
                   {isWin ? '+' : ''}${trade.pnl.toFixed(2)}
                 </div>
                 <div
                   style={{
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.375rem 0.625rem',
                     textAlign: 'right',
                     color: 'var(--text-muted)',
                   }}
@@ -344,12 +344,12 @@ export function TradeTable({ trades }: Props) {
       {trades.length > 0 && (
         <div
           style={{
-            padding: '0.5rem 1rem',
+            padding: '0.375rem 1rem',
             borderTop: '1px solid var(--border)',
             background: 'var(--bg-elevated)',
             display: 'flex',
             justifyContent: 'space-between',
-            fontSize: '0.625rem',
+            fontSize: '0.5625rem',
             fontFamily: 'var(--font-mono)',
             color: 'var(--text-muted)',
           }}
@@ -362,8 +362,8 @@ export function TradeTable({ trades }: Props) {
             style={{
               color:
                 filteredTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0
-                  ? 'var(--accent-green)'
-                  : 'var(--accent-red)',
+                  ? '#00d4aa'
+                  : '#ff4757',
             }}
           >
             Total: {filteredTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0 ? '+' : ''}$

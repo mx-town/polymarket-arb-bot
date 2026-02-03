@@ -15,19 +15,20 @@ interface LagMeasurement {
 }
 
 interface LagTimeSeriesProps {
-  /** Array of lag measurements with timestamps */
   measurements: LagMeasurement[];
-  /** Median lag (P50) in milliseconds */
   p50: number;
-  /** 95th percentile lag in milliseconds */
   p95: number;
 }
 
-/**
- * Time series chart showing lag measurements over time
- * X-axis: timestamp
- * Y-axis: lag in milliseconds
- */
+const COLORS = {
+  green: '#00d4aa',
+  amber: '#ffaa00',
+  blue: '#3b82f6',
+  border: '#2a2a3a',
+  card: '#16161f',
+  muted: '#6b7280',
+};
+
 export function LagTimeSeries({ measurements, p50, p95 }: LagTimeSeriesProps) {
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -35,7 +36,6 @@ export function LagTimeSeries({ measurements, p50, p95 }: LagTimeSeriesProps) {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
     });
   };
 
@@ -48,91 +48,132 @@ export function LagTimeSeries({ measurements, p50, p95 }: LagTimeSeriesProps) {
   const hasData = chartData.length >= 2;
 
   return (
-    <div className="rounded-lg border bg-card">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b px-4 py-3 bg-muted/30">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Lag Over Time
+    <div
+      style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+      }}
+    >
+      {/* Minimal header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0.5rem 0.75rem',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            fontSize: '0.5625rem',
+            fontFamily: 'var(--font-mono)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            color: 'var(--text-muted)',
+          }}
+        >
+          Time Series
         </span>
-        <span className="ml-auto text-[11px] text-muted-foreground font-mono">
-          {chartData.length} points
+        <span
+          style={{
+            fontSize: '0.5625rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-muted)',
+          }}
+        >
+          {chartData.length}
         </span>
       </div>
 
-      {/* Chart */}
+      {/* Chart - maximize this */}
       {!hasData ? (
-        <div className="py-12 text-center text-muted-foreground text-sm">
-          <div className="mb-1">Collecting data...</div>
-          <div className="text-xs">Time series will appear after 2+ measurements</div>
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-muted)',
+            fontSize: '0.6875rem',
+          }}
+        >
+          Need 2+ points
         </div>
       ) : (
-        <div className="p-4 h-[280px]">
+        <div style={{ flex: 1, minHeight: 0, padding: '0.5rem' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 10, right: 20, left: -10, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
+            <LineChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} opacity={0.4} />
               <XAxis
                 dataKey="time"
-                tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
-                stroke="hsl(var(--border))"
+                tick={{ fontSize: 8, fill: COLORS.muted }}
+                stroke={COLORS.border}
                 tickLine={false}
-                axisLine={{ stroke: 'hsl(var(--border))' }}
+                axisLine={{ stroke: COLORS.border }}
                 interval="preserveStartEnd"
+                height={20}
               />
               <YAxis
-                tickFormatter={(v) => `${v}ms`}
-                tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
-                stroke="hsl(var(--border))"
+                tickFormatter={(v) => `${v}`}
+                tick={{ fontSize: 8, fill: COLORS.muted }}
+                stroke={COLORS.border}
                 tickLine={false}
-                axisLine={{ stroke: 'hsl(var(--border))' }}
+                axisLine={{ stroke: COLORS.border }}
                 domain={[0, 'auto']}
+                width={35}
               />
               <Tooltip
                 contentStyle={{
-                  background: 'hsl(var(--card))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: '6px',
-                  fontSize: '12px',
+                  background: COLORS.card,
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: '4px',
+                  fontSize: '10px',
                   fontFamily: 'var(--font-mono)',
+                  padding: '4px 8px',
                 }}
-                formatter={(value: number) => [`${value.toFixed(0)}ms`, 'Lag']}
-                labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
+                formatter={(value: number) => [`${value.toFixed(0)}ms`, 'lag']}
+                labelStyle={{ color: COLORS.muted }}
               />
-              {/* P50 reference line */}
               <ReferenceLine
                 y={p50}
-                stroke="#22c55e"
-                strokeDasharray="4 4"
-                strokeWidth={1.5}
+                stroke={COLORS.green}
+                strokeDasharray="3 3"
+                strokeWidth={1}
                 label={{
-                  value: `P50: ${p50.toFixed(0)}ms`,
+                  value: 'P50',
                   position: 'right',
-                  fill: '#22c55e',
-                  fontSize: 10,
+                  fill: COLORS.green,
+                  fontSize: 8,
                   fontFamily: 'var(--font-mono)',
                 }}
               />
-              {/* P95 reference line */}
               <ReferenceLine
                 y={p95}
-                stroke="#f59e0b"
-                strokeDasharray="4 4"
-                strokeWidth={1.5}
+                stroke={COLORS.amber}
+                strokeDasharray="3 3"
+                strokeWidth={1}
                 label={{
-                  value: `P95: ${p95.toFixed(0)}ms`,
+                  value: 'P95',
                   position: 'right',
-                  fill: '#f59e0b',
-                  fontSize: 10,
+                  fill: COLORS.amber,
+                  fontSize: 8,
                   fontFamily: 'var(--font-mono)',
                 }}
               />
               <Line
                 type="monotone"
                 dataKey="lag"
-                stroke="hsl(217.2 91.2% 59.8%)"
-                strokeWidth={2}
+                stroke={COLORS.blue}
+                strokeWidth={1.5}
                 dot={false}
-                activeDot={{ r: 4, fill: 'hsl(217.2 91.2% 59.8%)' }}
-                name="Lag"
+                activeDot={{ r: 3, fill: COLORS.blue }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -141,3 +182,5 @@ export function LagTimeSeries({ measurements, p50, p95 }: LagTimeSeriesProps) {
     </div>
   );
 }
+
+export default LagTimeSeries;

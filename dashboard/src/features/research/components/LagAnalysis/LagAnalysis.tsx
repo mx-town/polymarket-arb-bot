@@ -1,271 +1,318 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useMemo, useState } from 'react';
 import type { LagStats } from '../../types/research.types';
 import { LatencyHistogram } from './LatencyHistogram';
 import { LagTimeSeries } from './LagTimeSeries';
 
 interface LagAnalysisProps {
-  /** Lag statistics from the research API */
   lagStats: LagStats | null;
-  /** Raw lag measurements for histogram (optional, derived from snapshots) */
   lagMeasurements?: number[];
-  /** Time series data for lag over time (optional) */
   lagTimeSeries?: Array<{ timestamp: number; lag_ms: number }>;
-  /** Whether data is currently loading */
   isLoading?: boolean;
 }
 
-/**
- * Stat box component for displaying a single metric
- */
-function StatBox({
-  label,
-  value,
-  unit,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  unit: string;
-  color?: string;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center p-4 rounded-lg border bg-card">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
-        {label}
-      </span>
-      <span
-        className="text-2xl font-bold font-mono"
-        style={{ color: color || 'hsl(var(--foreground))' }}
-      >
-        {value}
-      </span>
-      <span className="text-xs text-muted-foreground">{unit}</span>
-    </div>
-  );
+function seededRandom(seed: number): () => number {
+  return function () {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
 }
 
-/**
- * Loading skeleton for the stats row
- */
-function StatsLoading() {
+function generateMockMeasurements(stats: LagStats): number[] {
+  const { sample_size, median_lag_ms, p95_lag_ms, p99_lag_ms, std_lag_ms } = stats;
+  const count = Math.min(sample_size, 500);
+  const measurements: number[] = [];
+  const seed = Math.floor(median_lag_ms + p95_lag_ms + p99_lag_ms);
+  const random = seededRandom(seed);
+
+  for (let i = 0; i < count; i++) {
+    const rand = random();
+    let value: number;
+    if (rand < 0.5) {
+      value = median_lag_ms * 0.5 + random() * median_lag_ms * 0.5;
+    } else if (rand < 0.95) {
+      value = median_lag_ms + random() * (p95_lag_ms - median_lag_ms);
+    } else if (rand < 0.99) {
+      value = p95_lag_ms + random() * (p99_lag_ms - p95_lag_ms);
+    } else {
+      value = p99_lag_ms + random() * std_lag_ms;
+    }
+    measurements.push(Math.max(0, value));
+  }
+  return measurements;
+}
+
+function generateMockTimeSeries(
+  stats: LagStats
+): Array<{ timestamp: number; lag_ms: number }> {
+  const { sample_size, median_lag_ms, p95_lag_ms, std_lag_ms } = stats;
+  const count = Math.min(sample_size, 100);
+  const baseTime = new Date().setHours(0, 0, 0, 0);
+  const intervalMs = 60000;
+  const timeSeries: Array<{ timestamp: number; lag_ms: number }> = [];
+  const seed = Math.floor(median_lag_ms + p95_lag_ms);
+  const random = seededRandom(seed);
+
+  for (let i = 0; i < count; i++) {
+    const timestamp = baseTime + i * intervalMs;
+    const variation = (random() - 0.5) * std_lag_ms * 2;
+    let lag = median_lag_ms + variation;
+    if (random() > 0.9) {
+      lag = p95_lag_ms + random() * (p95_lag_ms - median_lag_ms) * 0.5;
+    }
+    timeSeries.push({ timestamp, lag_ms: Math.max(50, lag) });
+  }
+  return timeSeries;
+}
+
+function getLagColor(lagMs: number): string {
+  if (lagMs < 1000) return '#00d4aa';
+  if (lagMs < 2000) return '#ffaa00';
+  return '#ff4757';
+}
+
+function getLagStatus(lagMs: number): string {
+  if (lagMs < 1000) return 'FAST';
+  if (lagMs < 2000) return 'MODERATE';
+  return 'SLOW';
+}
+
+function LoadingSkeleton() {
   return (
-    <div className="grid grid-cols-4 gap-4 mb-6">
-      {[...Array(4)].map((_, i) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div
+        style={{
+          height: '40px',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          animation: 'pulse 2s ease-in-out infinite',
+        }}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', flex: 1 }}>
         <div
-          key={i}
-          className="flex flex-col items-center justify-center p-4 rounded-lg border bg-card animate-pulse"
-        >
-          <div className="h-3 w-12 bg-muted rounded mb-2" />
-          <div className="h-8 w-20 bg-muted rounded mb-1" />
-          <div className="h-3 w-8 bg-muted rounded" />
-        </div>
-      ))}
+          style={{
+            height: '320px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            animation: 'pulse 2s ease-in-out infinite',
+          }}
+        />
+        <div
+          style={{
+            height: '320px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            animation: 'pulse 2s ease-in-out infinite',
+          }}
+        />
+      </div>
     </div>
   );
 }
 
-/**
- * Loading skeleton for charts
- */
-function ChartLoading() {
+function EmptyState() {
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="flex items-center gap-2 border-b px-4 py-3 bg-muted/30">
-        <div className="h-3 w-32 bg-muted rounded animate-pulse" />
+    <div
+      style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '3rem 2rem',
+        textAlign: 'center',
+      }}
+    >
+      <div
+        style={{
+          fontSize: '0.875rem',
+          fontWeight: 500,
+          color: 'var(--text-primary)',
+          marginBottom: '0.25rem',
+        }}
+      >
+        No Lag Data
       </div>
-      <div className="p-4 h-[280px] flex items-center justify-center">
-        <div className="text-muted-foreground text-sm">Loading chart data...</div>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+        Start data collection to measure latency
       </div>
     </div>
   );
 }
 
-/**
- * LagAnalysis component - Tab content for analyzing Binance vs Polymarket lag
- *
- * Displays:
- * - Stats row with P50, P95, P99, and sample count
- * - Latency histogram showing distribution
- * - Time series chart showing lag over time
- * - Methodology explanation
- */
 export function LagAnalysis({
   lagStats,
   lagMeasurements = [],
   lagTimeSeries = [],
   isLoading = false,
 }: LagAnalysisProps) {
-  // Extract stats or use defaults
+  const [showMethodology, setShowMethodology] = useState(false);
+
   const p50 = lagStats?.median_lag_ms ?? 0;
   const p95 = lagStats?.p95_lag_ms ?? 0;
   const p99 = lagStats?.p99_lag_ms ?? 0;
   const sampleCount = lagStats?.sample_size ?? 0;
 
-  // Generate mock measurements from stats if not provided
-  // In production, these would come from actual collected data
-  const measurements =
-    lagMeasurements.length > 0
-      ? lagMeasurements
-      : lagStats
-        ? generateMockMeasurements(lagStats)
-        : [];
+  const measurements = useMemo(() => {
+    if (lagMeasurements.length > 0) return lagMeasurements;
+    if (lagStats) return generateMockMeasurements(lagStats);
+    return [];
+  }, [lagStats, lagMeasurements]);
 
-  const timeSeries =
-    lagTimeSeries.length > 0
-      ? lagTimeSeries
-      : lagStats
-        ? generateMockTimeSeries(lagStats)
-        : [];
+  const timeSeries = useMemo(() => {
+    if (lagTimeSeries.length > 0) return lagTimeSeries;
+    if (lagStats) return generateMockTimeSeries(lagStats);
+    return [];
+  }, [lagStats, lagTimeSeries]);
 
-  if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <StatsLoading />
-        <div className="grid grid-cols-2 gap-6">
-          <ChartLoading />
-          <ChartLoading />
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <LoadingSkeleton />;
+  if (!lagStats) return <EmptyState />;
 
-  if (!lagStats) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Lag Analysis</CardTitle>
-          <CardDescription>No lag data available yet</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="py-12 text-center text-muted-foreground">
-            <p className="mb-2">Start data collection to analyze lag between Binance and Polymarket.</p>
-            <p className="text-sm">
-              Lag measurements help calibrate the trading strategy timing parameters.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const heroColor = getLagColor(p50);
+  const heroStatus = getLagStatus(p50);
 
   return (
-    <div className="space-y-6">
-      {/* Stats Row */}
-      <div className="grid grid-cols-4 gap-4">
-        <StatBox label="Median (P50)" value={p50.toFixed(0)} unit="ms" color="#22c55e" />
-        <StatBox label="P95" value={p95.toFixed(0)} unit="ms" color="#f59e0b" />
-        <StatBox label="P99" value={p99.toFixed(0)} unit="ms" color="#ef4444" />
-        <StatBox
-          label="Sample Count"
-          value={sampleCount.toLocaleString()}
-          unit="measurements"
-          color="hsl(217.2 91.2% 59.8%)"
-        />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', height: '100%' }}>
+      {/* Compact Header Strip - All key info in one dense row */}
+      <div
+        style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          padding: '0.625rem 1rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1.5rem',
+          borderLeft: `3px solid ${heroColor}`,
+        }}
+      >
+        {/* Primary metric */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.375rem' }}>
+          <span
+            style={{
+              fontSize: '1.5rem',
+              fontWeight: 700,
+              fontFamily: 'var(--font-mono)',
+              color: heroColor,
+              lineHeight: 1,
+            }}
+          >
+            {(p50 / 1000).toFixed(2)}
+          </span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            sec
+          </span>
+          <span
+            style={{
+              marginLeft: '0.5rem',
+              padding: '0.125rem 0.375rem',
+              background: `${heroColor}18`,
+              border: `1px solid ${heroColor}40`,
+              borderRadius: '3px',
+              fontSize: '0.5625rem',
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 600,
+              color: heroColor,
+              textTransform: 'uppercase',
+              letterSpacing: '0.03em',
+            }}
+          >
+            {heroStatus}
+          </span>
+        </div>
+
+        {/* Separator */}
+        <div style={{ width: '1px', height: '24px', background: 'var(--border)' }} />
+
+        {/* Percentile stats inline */}
+        <div style={{ display: 'flex', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P50</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#00d4aa', fontFamily: 'var(--font-mono)' }}>{p50.toFixed(0)}</span>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P95</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ffaa00', fontFamily: 'var(--font-mono)' }}>{p95.toFixed(0)}</span>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P99</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ff4757', fontFamily: 'var(--font-mono)' }}>{p99.toFixed(0)}</span>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
+          </div>
+        </div>
+
+        {/* Separator */}
+        <div style={{ width: '1px', height: '24px', background: 'var(--border)' }} />
+
+        {/* Sample count */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+          <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Samples</span>
+          <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{sampleCount.toLocaleString()}</span>
+        </div>
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Config values inline */}
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>expected_lag</span>
+            <code style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#00d4aa' }}>{Math.round(p50)}</code>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>max_window</span>
+            <code style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#ffaa00' }}>{Math.round(p95 * 1.1)}</code>
+          </div>
+          <button
+            onClick={() => setShowMethodology(!showMethodology)}
+            style={{
+              background: 'none',
+              border: 'none',
+              fontSize: '0.5625rem',
+              fontFamily: 'var(--font-mono)',
+              color: '#3b82f6',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              textUnderlineOffset: '2px',
+              padding: 0,
+            }}
+          >
+            {showMethodology ? 'hide' : 'info'}
+          </button>
+        </div>
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-2 gap-6">
+      {/* Methodology expandable (if shown) */}
+      {showMethodology && (
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            padding: '0.625rem 1rem',
+            fontSize: '0.6875rem',
+            color: 'var(--text-secondary)',
+            lineHeight: 1.5,
+            display: 'flex',
+            gap: '2rem',
+          }}
+        >
+          <div>
+            <strong style={{ color: 'var(--text-primary)' }}>Measurement:</strong> Time between Binance momentum signal and Polymarket order book adjustment.
+          </div>
+          <div>
+            <strong style={{ color: 'var(--text-primary)' }}>Config:</strong> Set <code style={{ color: '#3b82f6' }}>expected_lag_ms</code> to P50, <code style={{ color: '#3b82f6' }}>max_lag_window_ms</code> to P95+10%.
+          </div>
+        </div>
+      )}
+
+      {/* Charts - THE MAIN EVENT */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', height: '360px' }}>
         <LatencyHistogram lagMeasurements={measurements} p50={p50} p95={p95} p99={p99} />
         <LagTimeSeries measurements={timeSeries} p50={p50} p95={p95} />
       </div>
-
-      {/* Methodology Explanation */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm">Lag Measurement Methodology</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>
-            <strong>Definition:</strong> Lag is measured as the time difference between when a price
-            movement is detected on Binance and when the corresponding Polymarket order book reflects
-            that movement.
-          </p>
-          <p>
-            <strong>Measurement Process:</strong> When Binance BTC price moves significantly (crossing
-            momentum thresholds), we record the timestamp. We then monitor Polymarket order books for
-            price adjustments, recording when the combined ask price changes by more than 0.5%.
-          </p>
-          <p>
-            <strong>Trading Implications:</strong> The P50 lag informs the expected window for capturing
-            arbitrage opportunities. P95/P99 values help set conservative timeout parameters to avoid
-            holding stale positions.
-          </p>
-          <p>
-            <strong>Configuration:</strong> Use these statistics to calibrate{' '}
-            <code className="px-1 py-0.5 bg-muted rounded text-xs font-mono">expected_lag_ms</code> and{' '}
-            <code className="px-1 py-0.5 bg-muted rounded text-xs font-mono">max_lag_window_ms</code> in
-            the lag arbitrage strategy settings.
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
-}
-
-/**
- * Generate mock measurements from stats for visualization
- * This simulates a distribution matching the provided percentiles
- */
-function generateMockMeasurements(stats: LagStats): number[] {
-  const { sample_size, median_lag_ms, p95_lag_ms, p99_lag_ms, std_lag_ms } = stats;
-  const count = Math.min(sample_size, 500); // Cap at 500 for performance
-  const measurements: number[] = [];
-
-  for (let i = 0; i < count; i++) {
-    // Generate values following approximate distribution
-    const rand = Math.random();
-    let value: number;
-
-    if (rand < 0.5) {
-      // Below median - use normal distribution centered at median/2
-      value = median_lag_ms * 0.5 + Math.random() * median_lag_ms * 0.5;
-    } else if (rand < 0.95) {
-      // Between P50 and P95
-      value = median_lag_ms + Math.random() * (p95_lag_ms - median_lag_ms);
-    } else if (rand < 0.99) {
-      // Between P95 and P99
-      value = p95_lag_ms + Math.random() * (p99_lag_ms - p95_lag_ms);
-    } else {
-      // Above P99 - tail
-      value = p99_lag_ms + Math.random() * std_lag_ms;
-    }
-
-    measurements.push(Math.max(0, value));
-  }
-
-  return measurements;
-}
-
-/**
- * Generate mock time series from stats for visualization
- */
-function generateMockTimeSeries(
-  stats: LagStats
-): Array<{ timestamp: number; lag_ms: number }> {
-  const { sample_size, median_lag_ms, p95_lag_ms, std_lag_ms } = stats;
-  const count = Math.min(sample_size, 100); // Cap at 100 points
-  const now = Date.now();
-  const intervalMs = 60000; // 1 minute intervals
-
-  const timeSeries: Array<{ timestamp: number; lag_ms: number }> = [];
-
-  for (let i = 0; i < count; i++) {
-    const timestamp = now - (count - i) * intervalMs;
-
-    // Generate lag with some random variation around median
-    const variation = (Math.random() - 0.5) * std_lag_ms * 2;
-    let lag = median_lag_ms + variation;
-
-    // Occasionally spike to P95 range
-    if (Math.random() > 0.9) {
-      lag = p95_lag_ms + Math.random() * (p95_lag_ms - median_lag_ms) * 0.5;
-    }
-
-    timeSeries.push({
-      timestamp,
-      lag_ms: Math.max(50, lag), // Minimum 50ms
-    });
-  }
-
-  return timeSeries;
 }

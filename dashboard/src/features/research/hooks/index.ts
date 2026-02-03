@@ -14,3 +14,4 @@ export {
   type UseSignalStreamOptions,
 } from './useSignalStream';
 export { useLagAnalysis, type UseLagAnalysisReturn } from './useLagAnalysis';
+export { usePipelineStatus, type UsePipelineStatusReturn } from './usePipelineStatus';

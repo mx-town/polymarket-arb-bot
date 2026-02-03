@@ -13,6 +13,9 @@ import type {
   EnrichedSnapshot,
   TradingOpportunity,
   ResearchWebSocketMessage,
+  PipelineStatus,
+  PipelineJobStatus,
+  PipelineProgressEvent,
 } from '../types/research.types';
 
 const API_BASE = '/api/research';
@@ -119,6 +122,59 @@ export async function getObservationStatus(): Promise<ObservationStatus> {
   return data.status;
 }
 
+// =============================================================================
+// Pipeline Control API
+// =============================================================================
+
+/**
+ * Fetch pipeline filesystem status (model, data, observations)
+ */
+export async function fetchPipelineStatus(): Promise<PipelineStatus> {
+  const data = await fetchJson<{ status: PipelineStatus }>(
+    `${API_BASE}/pipeline/status`
+  );
+  return data.status;
+}
+
+/**
+ * Start a pipeline command (init, rebuild, observe, verify, analyse)
+ */
+export async function startPipelineCommand(
+  command: string,
+  args: Record<string, unknown> = {}
+): Promise<PipelineJobStatus> {
+  const data = await fetchJson<{ job: PipelineJobStatus }>(
+    `${API_BASE}/pipeline/start`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, args }),
+    }
+  );
+  return data.job;
+}
+
+/**
+ * Stop the currently running pipeline command
+ */
+export async function stopPipelineCommand(): Promise<PipelineJobStatus | null> {
+  const data = await fetchJson<{ job: PipelineJobStatus | null }>(
+    `${API_BASE}/pipeline/stop`,
+    { method: 'POST' }
+  );
+  return data.job;
+}
+
+/**
+ * Get current pipeline job details
+ */
+export async function getPipelineJob(): Promise<PipelineJobStatus | null> {
+  const data = await fetchJson<{ job: PipelineJobStatus | null }>(
+    `${API_BASE}/pipeline/job`
+  );
+  return data.job;
+}
+
 /**
  * Callback types for WebSocket events
  */
@@ -128,6 +184,9 @@ export interface ResearchWebSocketCallbacks {
   onOpportunity?: (opportunity: TradingOpportunity) => void;
   onSurfaceUpdate?: (surface: ProbabilitySurface) => void;
   onObservationStatus?: (status: ObservationStatus) => void;
+  onPipelineProgress?: (event: PipelineProgressEvent) => void;
+  onPipelineComplete?: (job: PipelineJobStatus) => void;
+  onInitial?: (data: { observation_status: ObservationStatus; signals: Signal[]; pipeline_status: PipelineStatus }) => void;
   onError?: (error: Error) => void;
   onClose?: (event: CloseEvent) => void;
   onOpen?: () => void;
@@ -206,6 +265,9 @@ export class ResearchWebSocket {
       const message = JSON.parse(event.data) as ResearchWebSocketMessage;
 
       switch (message.type) {
+        case 'initial':
+          this.callbacks.onInitial?.(message.data as { observation_status: ObservationStatus; signals: Signal[]; pipeline_status: PipelineStatus });
+          break;
         case 'snapshot':
           this.callbacks.onSnapshot?.(message.data as EnrichedSnapshot);
           break;
@@ -221,8 +283,15 @@ export class ResearchWebSocket {
         case 'observation_status':
           this.callbacks.onObservationStatus?.(message.data as ObservationStatus);
           break;
+        case 'pipeline_progress':
+          this.callbacks.onPipelineProgress?.(message.data as PipelineProgressEvent);
+          break;
+        case 'pipeline_complete':
+          this.callbacks.onPipelineComplete?.(message.data as PipelineJobStatus);
+          break;
         default:
-          console.warn('Unknown research WebSocket message type:', message.type);
+          // heartbeat / pong — ignore silently
+          break;
       }
     } catch (error) {
       console.error('Failed to parse research WebSocket message:', error);

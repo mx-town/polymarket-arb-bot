@@ -273,6 +273,62 @@ export interface BacktestResult {
   metrics: BacktestMetrics;
 }
 
+// =============================================================================
+// Pipeline Control Types
+// =============================================================================
+
+/**
+ * A progress event from a pipeline command execution
+ */
+export interface PipelineProgressEvent {
+  /** Stage marker name (e.g., INIT_START, DOWNLOAD_COMPLETE) */
+  stage: string;
+  /** Human-readable progress message */
+  message: string;
+  /** Additional detail from CLI output */
+  detail: string;
+  /** ISO datetime when stage was reached */
+  timestamp: string;
+}
+
+/**
+ * Status of a running or completed pipeline job
+ */
+export interface PipelineJobStatus {
+  /** CLI command being executed */
+  command: string;
+  /** Arguments passed to the command */
+  args: Record<string, unknown>;
+  /** Job status: running, completed, failed, cancelled */
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /** ISO datetime when job started */
+  started_at: string;
+  /** Seconds elapsed since start */
+  elapsed_sec: number;
+  /** Stage progress trail */
+  progress: PipelineProgressEvent[];
+  /** Process exit code (null if still running) */
+  exit_code: number | null;
+}
+
+/**
+ * Filesystem state check — what data/models exist
+ */
+export interface PipelineStatus {
+  /** Whether probability_surface.json exists */
+  has_model: boolean;
+  /** Hours since model was last modified */
+  model_age_hours: number | null;
+  /** Whether raw candle data exists */
+  has_raw_data: boolean;
+  /** Number of observation parquet files */
+  observation_files: number;
+  /** Total size of observation files in MB */
+  observation_size_mb: number;
+  /** Currently running job, if any */
+  current_job: PipelineJobStatus | null;
+}
+
 /**
  * Status of the observation/data collection process
  */
@@ -315,7 +371,9 @@ export type ResearchWebSocketMessageType =
   | 'signal'
   | 'opportunity'
   | 'surface_update'
-  | 'observation_status';
+  | 'observation_status'
+  | 'pipeline_progress'
+  | 'pipeline_complete';
 
 /**
  * Base WebSocket message structure
@@ -353,3 +411,13 @@ export type SurfaceUpdateMessage = ResearchWebSocketMessage<ProbabilitySurface>;
  * Observation status WebSocket message
  */
 export type ObservationStatusMessage = ResearchWebSocketMessage<ObservationStatus>;
+
+/**
+ * Pipeline progress WebSocket message
+ */
+export type PipelineProgressMessage = ResearchWebSocketMessage<PipelineProgressEvent>;
+
+/**
+ * Pipeline complete WebSocket message
+ */
+export type PipelineCompleteMessage = ResearchWebSocketMessage<PipelineJobStatus>;
