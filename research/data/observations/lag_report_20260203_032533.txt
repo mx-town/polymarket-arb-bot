@@ -1,0 +1,48 @@
+============================================================
+LAG MEASUREMENT REPORT
+Generated: 2026-02-03T04:25:44.150498
+Duration: 3600s
+Mode: observation
+============================================================
+
+STREAM STATISTICS
+----------------------------------------
+BINANCE_DIRECT:
+  Updates: 384779
+  Rate: 106.69/sec
+  Price range: $77644.09 - $78794.42
+
+RTDS_BINANCE:
+  Updates: 3608
+  Rate: 1.00/sec
+  Price range: $77655.82 - $78794.41
+
+RTDS_CHAINLINK:
+  Updates: 3576
+  Rate: 0.99/sec
+  Price range: $77590.57 - $78725.25
+
+CHAINLINK_RPC:
+  Updates: 110
+  Rate: 0.03/sec
+  Price range: $77593.25 - $78770.75
+
+CLOB:
+  Updates: 0
+
+CLOB STATISTICS
+----------------------------------------
+Updates: 636
+
+LAG STATISTICS (Binance -> Chainlink)
+----------------------------------------
+Sample count: 34806
+P50: 1281ms
+P95: 2041ms
+P99: 2439ms
+Min: -1818ms
+Max: 9259ms
+
+============================================================
+Exported 34813 snapshots to research/data/observations/snapshots_20260203_032533.parquet
+============================================================
