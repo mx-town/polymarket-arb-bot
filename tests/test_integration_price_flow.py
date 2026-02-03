@@ -17,7 +17,7 @@ import websocket
 import sys
 sys.path.insert(0, "/Users/thedoc/conductor/workspaces/polymarket-arb-bot/milan")
 
-from src.market.state import MarketState, MarketStateManager, MarketStatus
+from trading.market.state import MarketState, MarketStateManager, MarketStatus
 
 POLYMARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 

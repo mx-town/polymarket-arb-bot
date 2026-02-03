@@ -6,7 +6,7 @@ Tests config parsing, defaults, and validation.
 
 import pytest
 
-from src.config import (
+from trading.config import (
     TradingConfig,
     PollingConfig,
     WebSocketConfig,

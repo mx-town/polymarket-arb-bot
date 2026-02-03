@@ -8,7 +8,7 @@ import pytest
 from datetime import datetime, timedelta, UTC
 from unittest.mock import patch, MagicMock
 
-from src.market.discovery import (
+from trading.market.discovery import (
     parse_json_field,
     parse_datetime,
     fetch_updown_events,
@@ -155,7 +155,7 @@ class TestFetchUpdownEvents:
             },
         ]
 
-    @patch("src.market.discovery.requests.get")
+    @patch("trading.market.discovery.requests.get")
     def test_filters_by_candle_interval_1h(self, mock_get, mock_events_response):
         """Test that 1h interval only returns hourly markets"""
         mock_response = MagicMock()
@@ -169,7 +169,7 @@ class TestFetchUpdownEvents:
         assert markets[0]["slug"] == "bitcoin-up-or-down-january-26-1pm-et"
         assert markets[0]["condition_id"] == "0xabc123"
 
-    @patch("src.market.discovery.requests.get")
+    @patch("trading.market.discovery.requests.get")
     def test_filters_by_candle_interval_15m(self, mock_get, mock_events_response):
         """Test that 15m interval only returns 15m markets"""
         mock_response = MagicMock()
@@ -182,7 +182,7 @@ class TestFetchUpdownEvents:
         assert len(markets) == 1
         assert "15m" in markets[0]["slug"]
 
-    @patch("src.market.discovery.requests.get")
+    @patch("trading.market.discovery.requests.get")
     def test_filters_by_asset(self, mock_get, mock_events_response):
         """Test that only requested assets are returned"""
         mock_response = MagicMock()
@@ -195,7 +195,7 @@ class TestFetchUpdownEvents:
         assert len(markets) == 1
         assert "ethereum" in markets[0]["slug"]
 
-    @patch("src.market.discovery.requests.get")
+    @patch("trading.market.discovery.requests.get")
     def test_extracts_token_ids(self, mock_get, mock_events_response):
         """Test that token IDs are correctly extracted"""
         mock_response = MagicMock()
@@ -208,7 +208,7 @@ class TestFetchUpdownEvents:
         assert markets[0]["yes_token"] == "token1"
         assert markets[0]["no_token"] == "token2"
 
-    @patch("src.market.discovery.requests.get")
+    @patch("trading.market.discovery.requests.get")
     def test_handles_api_error(self, mock_get):
         """Test graceful handling of API errors"""
         import requests
@@ -223,7 +223,7 @@ class TestFetchUpdownEvents:
 class TestFetchRecentUpdownMarkets:
     """Tests for fetch_recent_updown_markets"""
 
-    @patch("src.market.discovery.fetch_updown_events")
+    @patch("trading.market.discovery.fetch_updown_events")
     def test_converts_legacy_market_types(self, mock_fetch):
         """Test that legacy market_types are converted to assets"""
         mock_fetch.return_value = []
@@ -237,7 +237,7 @@ class TestFetchRecentUpdownMarkets:
         assert "bitcoin" in call_args.kwargs["assets"]
         assert "ethereum" in call_args.kwargs["assets"]
 
-    @patch("src.market.discovery.fetch_updown_events")
+    @patch("trading.market.discovery.fetch_updown_events")
     def test_passes_candle_interval(self, mock_fetch):
         """Test that candle_interval is passed through"""
         mock_fetch.return_value = []
@@ -247,7 +247,7 @@ class TestFetchRecentUpdownMarkets:
         call_args = mock_fetch.call_args
         assert call_args.kwargs["candle_interval"] == "15m"
 
-    @patch("src.market.discovery.fetch_updown_events")
+    @patch("trading.market.discovery.fetch_updown_events")
     def test_filters_expired_markets(self, mock_fetch):
         """Test that expired markets are filtered out"""
         now = datetime.now(UTC)
@@ -285,7 +285,7 @@ class TestFetchRecentUpdownMarkets:
         assert len(manager.markets) == 1
         assert "active" in list(manager.markets.keys())[0]
 
-    @patch("src.market.discovery.fetch_updown_events")
+    @patch("trading.market.discovery.fetch_updown_events")
     def test_filters_by_volume(self, mock_fetch):
         """Test that low volume markets are filtered out"""
         now = datetime.now(UTC)

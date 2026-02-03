@@ -44,8 +44,15 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy source code
-COPY src/ ./src/
+# Copy source code (all packages)
+COPY engine/ ./engine/
+COPY trading/ ./trading/
+COPY api/ ./api/
+COPY research/ ./research/
+COPY legacy/ ./legacy/
+
+# Set PYTHONPATH to include /app for local package imports
+ENV PYTHONPATH=/app
 
 # Copy default config
 COPY config/ ./config/

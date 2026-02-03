@@ -162,53 +162,131 @@ Configuration sources (priority: CLI > ENV > YAML > defaults):
 ## File Structure
 
 ```
-src/
-├── main.py                 # Bot orchestrator, signal handlers
-├── config.py               # Configuration loading (YAML + ENV + CLI)
-├── api/
-│   ├── server.py           # FastAPI app, static file serving
+polymarket-arb-bot/
+│
+├── engine/                       # SHARED: signal evaluation + data streams
+│   ├── __init__.py
+│   ├── types.py                  # UnifiedSignal, Direction, SignalTier, MarketContext, ModelOutput
+│   ├── config.py                 # SignalEvaluatorConfig, EngineConfig
+│   ├── model_bridge.py           # ProbabilitySurface + EdgeCalculator wrapper
+│   ├── signal_evaluator.py       # Multi-tier signal detection (stateless)
+│   ├── events.py                 # EngineEvent, EventBus
+│   └── streams/                  # Shared stream adapters
+│       ├── base.py               # SynchronizedSnapshot, PriceUpdate
+│       ├── binance_direct.py
+│       ├── chainlink_rpc.py
+│       ├── clob_adapter.py
+│       └── rtds.py
+│
+├── trading/                      # TRADING BOT
+│   ├── __init__.py
+│   ├── cli.py                    # arb-bot CLI (trade, status, stop)
+│   ├── bot.py                    # ArbBot class (main orchestrator)
+│   ├── config.py                 # BotConfig, EngineConfig, build_config()
+│   ├── data/
+│   │   ├── binance_ws.py         # Binance aggTrade WebSocket
+│   │   ├── polymarket_ws.py      # Polymarket CLOB WebSocket
+│   │   └── price_tracker.py      # Momentum calculation, DirectionSignal
+│   ├── market/
+│   │   ├── discovery.py          # Gamma API market fetching
+│   │   ├── filters.py            # Market filtering logic
+│   │   └── state.py              # MarketState, MarketStateManager
+│   ├── strategy/
+│   │   ├── conservative.py       # Hold-to-resolution strategy
+│   │   ├── lag_arb.py            # Momentum-based lag arbitrage
+│   │   ├── pure_arb.py           # Pure arbitrage strategy
+│   │   └── signals.py            # Signal data structures
+│   ├── execution/
+│   │   ├── orders.py             # CLOB order execution
+│   │   ├── position.py           # Position tracking
+│   │   └── risk.py               # Risk management
+│   └── utils/
+│       ├── logging.py            # Component-based logging
+│       └── metrics.py            # Metrics tracking + file export
+│
+├── research/                     # RESEARCH (models, analysis, observation)
+│   ├── __init__.py
+│   ├── cli.py                    # arb-research CLI
+│   ├── observation/              # Data capture for research
+│   │   ├── enricher.py
+│   │   ├── synchronizer.py
+│   │   └── verify.py
+│   ├── models/
+│   │   ├── edge_calculator.py
+│   │   ├── probability_surface.py
+│   │   └── probability_surface.json
+│   ├── signals/
+│   │   └── detectors.py
+│   ├── analysis/
+│   │   ├── lag_analysis.py
+│   │   ├── session_analysis.py
+│   │   ├── validation.py
+│   │   └── volatility_analysis.py
+│   └── data/
+│       ├── binance_historical.py
+│       ├── feature_extractor.py
+│       └── observations/
+│
+├── api/                          # API SERVER
+│   ├── __init__.py
+│   ├── server.py                 # FastAPI app
+│   ├── cli.py                    # arb-api CLI
+│   ├── research_state.py
+│   ├── controllers/
+│   │   ├── bot_controller.py     # Manages trading bot subprocess
+│   │   └── pipeline_controller.py # Manages research subprocesses
+│   ├── models/
+│   │   ├── pipeline.py
+│   │   └── research.py
 │   └── routes/
-│       ├── config.py       # GET/PUT /api/config
-│       ├── metrics.py      # GET /api/metrics, WS /api/ws/metrics
-│       └── control.py      # POST /api/restart, /api/refresh-markets
-├── data/
-│   ├── polymarket_ws.py    # Polymarket CLOB WebSocket client
-│   ├── binance_ws.py       # Binance aggTrade WebSocket client
-│   └── price_tracker.py    # Momentum calc, DirectionSignal emission
-├── market/
-│   ├── discovery.py        # Gamma API market fetching
-│   ├── state.py            # MarketState, MarketStateManager
-│   └── filters.py          # Market filtering logic
-├── strategy/
-│   ├── signals.py          # Signal data structures
-│   ├── conservative.py     # Hold-to-resolution strategy
-│   └── lag_arb.py          # Momentum-based lag arbitrage
-├── execution/
-│   ├── orders.py           # CLOB order execution
-│   ├── position.py         # Position tracking
-│   └── risk.py             # Risk management
-└── utils/
-    ├── logging.py          # Component-based logging
-    └── metrics.py          # Metrics tracking + file export
+│       ├── config.py             # GET/PUT /api/config
+│       ├── control.py            # POST /api/restart, /api/refresh-markets
+│       ├── metrics.py            # GET /api/metrics, WS /api/ws/metrics
+│       ├── research.py           # Research endpoints
+│       └── trading.py            # POST /api/trading/start|stop|restart
+│
+├── dashboard/                    # React frontend
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   └── api/
+│   └── package.json
+│
+├── legacy/                       # Archived v1 code
+│   ├── arb_bot.py
+│   └── analyze_spreads.py
+│
+├── config/
+│   └── default.yaml
+├── docker/
+├── pyproject.toml
+└── CLAUDE.md
+```
 
-dashboard/
-├── src/
-│   ├── App.tsx             # Main layout (3-column grid)
-│   ├── components/
-│   │   ├── MetricsDisplay.tsx
-│   │   ├── ControlPanel.tsx
-│   │   ├── ConfigPanel.tsx
-│   │   ├── MarketsPanel.tsx
-│   │   ├── LagWindowsPanel.tsx
-│   │   ├── SignalFeed.tsx
-│   │   ├── PnlChart.tsx
-│   │   └── ActivityChart.tsx
-│   ├── hooks/
-│   │   └── useMetrics.ts   # WebSocket connection to /api/ws/metrics
-│   └── api/
-│       └── client.ts       # HTTP/WS API client
-├── package.json
-└── vite.config.ts
+### Dependency Graph
+
+```
+engine/  ←── trading/     (trading imports engine)
+   ↑         ↑
+   |         |
+   ←── research/          (research imports engine)
+         ↑
+api/ ────┘                 (api imports all three, manages processes)
+```
+
+### CLI Entry Points
+
+```
+arb-bot trade [OPTIONS]    # Run trading bot
+arb-bot status             # Check if running
+arb-bot stop [--force]     # Stop the bot
+
+arb-research observe       # Live observation mode
+arb-research init          # Download historical data
+arb-research rebuild       # Rebuild probability surface
+
+arb-api                    # Run API server
 ```
 
 ## Coding Conventions

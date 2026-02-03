@@ -7,9 +7,9 @@ Simulates Binance trades to verify momentum-based direction signals work.
 
 import time
 from datetime import datetime
-from src.config import LagArbConfig
-from src.data.price_tracker import PriceTracker, DirectionSignal, Direction
-from src.data.binance_ws import AggTrade
+from trading.config import LagArbConfig
+from trading.data.price_tracker import PriceTracker, DirectionSignal, Direction
+from trading.data.binance_ws import AggTrade
 
 
 def on_signal(signal: DirectionSignal):

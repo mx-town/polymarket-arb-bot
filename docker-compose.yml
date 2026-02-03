@@ -10,6 +10,9 @@ services:
     volumes:
       # Source code - live reload
       - ./src:/app/src
+      - ./engine:/app/engine
+      - ./trading:/app/trading
+      - ./api:/app/api
       - ./research:/app/research
       - ./config:/app/config
 
@@ -22,6 +25,7 @@ services:
       - /tmp:/tmp
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
       - DRY_RUN=true
     restart: unless-stopped
 

@@ -51,3 +51,12 @@ filters:
   market_types:
   - bitcoin
   - ethereum
+# Engine configuration (shared signal evaluation)
+engine:
+  surface_path: "research/models/probability_surface.json"
+  use_model: true
+  min_edge_threshold: 0.03
+  min_confidence_score: 0.5
+  require_reliable: true
+  use_conservative_edge: true
+  dutch_book_threshold: 0.99

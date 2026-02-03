@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src", "research"]
+packages = ["research", "engine", "trading", "api", "legacy"]
 
 [project]
 name = "polymarket-arb-bot"
@@ -46,11 +46,12 @@ addopts = "-v --tb=short"
 pythonpath = ["."]
 
 [project.scripts]
-arb-bot = "src.main:main"
-arb-bot-legacy = "src.arb_bot:main"
-arb-api = "src.api.server:main"
-arb-research = "research.run_research:main"
-arb-capture = "src.data.capture.capture_cli:main"
+arb-bot = "trading.cli:main"
+arb-bot-direct = "trading.bot:main"
+arb-bot-legacy = "legacy.arb_bot:main"
+arb-api = "api.server:main"
+arb-research = "research.cli:main"
+arb-capture = "research.cli:main"
 
 [tool.ruff]
 line-length = 100
@@ -75,7 +76,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["src"]
+known-first-party = ["trading", "api", "engine", "research"]
 
 [tool.ruff.format]
 quote-style = "double"

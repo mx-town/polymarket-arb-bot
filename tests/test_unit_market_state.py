@@ -7,7 +7,7 @@ Tests MarketState and MarketStateManager without network calls.
 import pytest
 from datetime import datetime, timedelta, UTC
 
-from src.market.state import MarketState, MarketStateManager, MarketStatus
+from trading.market.state import MarketState, MarketStateManager, MarketStatus
 
 
 class TestMarketState:
