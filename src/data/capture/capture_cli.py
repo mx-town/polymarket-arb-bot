@@ -21,7 +21,7 @@ from src.data.streams.chainlink_rpc import ChainlinkRPCPoller
 from src.data.streams.clob_adapter import SimpleCLOBStream
 from src.data.streams.rtds import RTDSStream
 from src.market.discovery import fetch_updown_events
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, setup_logging
 
 logger = get_logger("capture_cli")
 
@@ -201,6 +201,8 @@ def run_capture(
 
 def main():
     """CLI entry point."""
+    setup_logging(verbose=True)
+
     parser = argparse.ArgumentParser(description="Data capture for lag measurement")
     parser.add_argument(
         "--verify",

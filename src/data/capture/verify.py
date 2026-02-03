@@ -14,7 +14,7 @@ from src.data.streams.chainlink_rpc import ChainlinkRPCPoller
 from src.data.streams.clob_adapter import SimpleCLOBStream
 from src.data.streams.rtds import RTDSStream
 from src.market.discovery import fetch_markets_by_series
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, setup_logging
 
 logger = get_logger("verify")
 
@@ -237,6 +237,7 @@ def print_results(results: list[VerificationResult]) -> bool:
 
 def main():
     """Run verification."""
+    setup_logging(verbose=True)
     results = verify_streams(duration_sec=300)
     success = print_results(results)
     return 0 if success else 1
