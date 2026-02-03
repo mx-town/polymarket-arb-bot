@@ -31,14 +31,8 @@ export interface UseSignalStreamReturn {
   error: string | null;
 }
 
-export function useSignalStream(
-  options: UseSignalStreamOptions = {}
-): UseSignalStreamReturn {
-  const {
-    maxSignals = 100,
-    fetchInitial = true,
-    initialLimit = 50,
-  } = options;
+export function useSignalStream(options: UseSignalStreamOptions = {}): UseSignalStreamReturn {
+  const { maxSignals = 100, fetchInitial = true, initialLimit = 50 } = options;
 
   const [signals, setSignals] = useState<Signal[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -82,7 +76,6 @@ export function useSignalStream(
 
   // Set up WebSocket for live signal updates (separate effect)
   useEffect(() => {
-
     const ws = new ResearchWebSocket({
       onOpen: () => {
         setIsConnected(true);

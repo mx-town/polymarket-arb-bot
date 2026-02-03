@@ -93,7 +93,7 @@ def verify_streams(duration_sec: int = 300) -> list[VerificationResult]:
     logger.info(
         "CONNECTION_STATUS",
         f"binance={binance_stream.is_connected} rtds={rtds_stream.is_connected} "
-        f"chainlink={chainlink_poller.is_connected} clob={clob_stream.is_connected if clob_stream else 'N/A'}"
+        f"chainlink={chainlink_poller.is_connected} clob={clob_stream.is_connected if clob_stream else 'N/A'}",
     )
 
     # Run for duration

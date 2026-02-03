@@ -144,7 +144,8 @@ export function BacktestResults() {
 
   const pnlColor = metrics.total_pnl >= 0 ? '#00d4aa' : '#ff4757';
   const winRateColor = metrics.win_rate >= 50 ? '#00d4aa' : '#ffaa00';
-  const sharpeColor = metrics.sharpe_ratio >= 1 ? '#00d4aa' : metrics.sharpe_ratio >= 0 ? '#ffaa00' : '#ff4757';
+  const sharpeColor =
+    metrics.sharpe_ratio >= 1 ? '#00d4aa' : metrics.sharpe_ratio >= 0 ? '#ffaa00' : '#ff4757';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -174,7 +175,14 @@ export function BacktestResults() {
           >
             {formatPnl(metrics.total_pnl)}
           </span>
-          <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>
+          <span
+            style={{
+              fontSize: '0.5625rem',
+              color: 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)',
+              textTransform: 'uppercase',
+            }}
+          >
             P&L
           </span>
         </div>
@@ -185,16 +193,73 @@ export function BacktestResults() {
         {/* Secondary metrics inline */}
         <div style={{ display: 'flex', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Win Rate</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: winRateColor, fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.win_rate)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Win Rate
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: winRateColor,
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {formatPercent(metrics.win_rate)}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sharpe</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: sharpeColor, fontFamily: 'var(--font-mono)' }}>{formatRatio(metrics.sharpe_ratio)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Sharpe
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: sharpeColor,
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {formatRatio(metrics.sharpe_ratio)}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Max DD</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ff4757', fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.max_drawdown_pct)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Max DD
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: '#ff4757',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {formatPercent(metrics.max_drawdown_pct)}
+            </span>
           </div>
         </div>
 
@@ -204,16 +269,73 @@ export function BacktestResults() {
         {/* Trade counts */}
         <div style={{ display: 'flex', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trades</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{metrics.total_trades}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Trades
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                color: 'var(--text-secondary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {metrics.total_trades}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Avg Trade</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{formatPercent(metrics.avg_trade_return)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Avg Trade
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                color: 'var(--text-secondary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {formatPercent(metrics.avg_trade_return)}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>W/L</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{metrics.winning_trades}/{metrics.losing_trades}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              W/L
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                color: 'var(--text-secondary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {metrics.winning_trades}/{metrics.losing_trades}
+            </span>
           </div>
         </div>
       </div>

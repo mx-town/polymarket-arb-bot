@@ -161,7 +161,12 @@ export function EquityCurve({ data }: Props) {
                 }}
                 labelStyle={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}
               />
-              <ReferenceLine yAxisId="drawdown" y={0} stroke="var(--border)" strokeDasharray="3 3" />
+              <ReferenceLine
+                yAxisId="drawdown"
+                y={0}
+                stroke="var(--border)"
+                strokeDasharray="3 3"
+              />
               <Area
                 yAxisId="drawdown"
                 type="monotone"

@@ -152,7 +152,9 @@ class ChainlinkRPCPoller:
                 # Check for rate limit errors
                 if "rate limit" in error_str.lower() or "-32090" in error_str:
                     backoff = min(30, 10 * consecutive_errors)  # Exponential backoff, max 30s
-                    logger.warning("RATE_LIMITED", f"backoff={backoff}s errors={consecutive_errors}")
+                    logger.warning(
+                        "RATE_LIMITED", f"backoff={backoff}s errors={consecutive_errors}"
+                    )
                 else:
                     logger.error("POLL_ERROR", error_str)
                     # Try to reconnect on non-rate-limit errors
@@ -185,7 +187,9 @@ class ChainlinkRPCPoller:
                 self._poll_count = 0
             self._poll_count += 1
             if self._poll_count <= 3:
-                logger.info("POLL_RESULT", f"count={self._poll_count} price=${price:.2f} round={round_id}")
+                logger.info(
+                    "POLL_RESULT", f"count={self._poll_count} price=${price:.2f} round={round_id}"
+                )
 
             self._latest_price = price
             self._latest_timestamp_ms = timestamp_ms

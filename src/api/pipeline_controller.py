@@ -10,6 +10,7 @@ Replaces ObservationController. Handles:
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -75,9 +76,9 @@ class PipelineController:
         if self._initialized:
             return
 
-        self._process: Optional[asyncio.subprocess.Process] = None
-        self._reader_task: Optional[asyncio.Task] = None
-        self._current_job: Optional[PipelineJobStatus] = None
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task | None = None
+        self._current_job: PipelineJobStatus | None = None
         self._state = ResearchStateManager.get_instance()
         self._initialized = True
 
@@ -208,7 +209,7 @@ class PipelineController:
             self._current_job = None
             raise
 
-    async def stop_command(self) -> Optional[PipelineJobStatus]:
+    async def stop_command(self) -> PipelineJobStatus | None:
         """Stop the currently running command."""
         if self._process is None:
             logger.warning("NOT_RUNNING", "no_command_to_stop")
@@ -220,17 +221,15 @@ class PipelineController:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("KILL_REQUIRED", "process_did_not_terminate")
                 self._process.kill()
                 await self._process.wait()
 
             if self._reader_task and not self._reader_task.done():
                 self._reader_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._reader_task
-                except asyncio.CancelledError:
-                    pass
 
         except Exception as e:
             logger.error("STOP_ERROR", str(e))
@@ -262,7 +261,8 @@ class PipelineController:
             self._reader_task = None
 
             logger.info("COMMAND_STOPPED", f"exit_code={result.exit_code if result else 'unknown'}")
-            return result
+
+        return result
 
     # =========================================================================
     # Stdout reader
@@ -365,7 +365,7 @@ class PipelineController:
 
         stage = match.group(1)
         # Extract the part after the marker as detail
-        detail = line[match.end():].strip().lstrip("|").strip()
+        detail = line[match.end() :].strip().lstrip("|").strip()
 
         event = PipelineProgressEvent(
             stage=stage,
@@ -385,7 +385,9 @@ class PipelineController:
     # Reset (no subprocess — direct file deletion)
     # =========================================================================
 
-    async def reset(self, target_dir: str = "research/data/observations", force: bool = True) -> dict:
+    async def reset(
+        self, target_dir: str = "research/data/observations", force: bool = True
+    ) -> dict:
         """Delete observation files directly (no subprocess needed)."""
         target = Path(target_dir)
         if not target.exists():
@@ -422,5 +424,5 @@ class PipelineController:
         return self._process is not None and self._process.returncode is None
 
     @property
-    def current_job(self) -> Optional[PipelineJobStatus]:
+    def current_job(self) -> PipelineJobStatus | None:
         return self._current_job

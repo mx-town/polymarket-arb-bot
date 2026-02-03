@@ -41,9 +41,7 @@ function generateMockMeasurements(stats: LagStats): number[] {
   return measurements;
 }
 
-function generateMockTimeSeries(
-  stats: LagStats
-): Array<{ timestamp: number; lag_ms: number }> {
+function generateMockTimeSeries(stats: LagStats): Array<{ timestamp: number; lag_ms: number }> {
   const { sample_size, median_lag_ms, p95_lag_ms, std_lag_ms } = stats;
   const count = Math.min(sample_size, 100);
   const baseTime = new Date().setHours(0, 0, 0, 0);
@@ -199,7 +197,13 @@ export function LagAnalysis({
           >
             {(p50 / 1000).toFixed(2)}
           </span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <span
+            style={{
+              fontSize: '0.7rem',
+              color: 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
             sec
           </span>
           <span
@@ -227,18 +231,75 @@ export function LagAnalysis({
         {/* Percentile stats inline */}
         <div style={{ display: 'flex', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P50</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#00d4aa', fontFamily: 'var(--font-mono)' }}>{p50.toFixed(0)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              P50
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: '#00d4aa',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {p50.toFixed(0)}
+            </span>
             <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P95</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ffaa00', fontFamily: 'var(--font-mono)' }}>{p95.toFixed(0)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              P95
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: '#ffaa00',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {p95.toFixed(0)}
+            </span>
             <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>P99</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#ff4757', fontFamily: 'var(--font-mono)' }}>{p99.toFixed(0)}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              P99
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: '#ff4757',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {p99.toFixed(0)}
+            </span>
             <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)' }}>ms</span>
           </div>
         </div>
@@ -248,8 +309,27 @@ export function LagAnalysis({
 
         {/* Sample count */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-          <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Samples</span>
-          <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{sampleCount.toLocaleString()}</span>
+          <span
+            style={{
+              fontSize: '0.5625rem',
+              color: 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}
+          >
+            Samples
+          </span>
+          <span
+            style={{
+              fontSize: '0.8125rem',
+              fontWeight: 500,
+              color: 'var(--text-secondary)',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {sampleCount.toLocaleString()}
+          </span>
         </div>
 
         {/* Spacer */}
@@ -258,12 +338,46 @@ export function LagAnalysis({
         {/* Config values inline */}
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>expected_lag</span>
-            <code style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#00d4aa' }}>{Math.round(p50)}</code>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              expected_lag
+            </span>
+            <code
+              style={{
+                fontSize: '0.75rem',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                color: '#00d4aa',
+              }}
+            >
+              {Math.round(p50)}
+            </code>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>max_window</span>
-            <code style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#ffaa00' }}>{Math.round(p95 * 1.1)}</code>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              max_window
+            </span>
+            <code
+              style={{
+                fontSize: '0.75rem',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                color: '#ffaa00',
+              }}
+            >
+              {Math.round(p95 * 1.1)}
+            </code>
           </div>
           <button
             onClick={() => setShowMethodology(!showMethodology)}
@@ -300,16 +414,21 @@ export function LagAnalysis({
           }}
         >
           <div>
-            <strong style={{ color: 'var(--text-primary)' }}>Measurement:</strong> Time between Binance momentum signal and Polymarket order book adjustment.
+            <strong style={{ color: 'var(--text-primary)' }}>Measurement:</strong> Time between
+            Binance momentum signal and Polymarket order book adjustment.
           </div>
           <div>
-            <strong style={{ color: 'var(--text-primary)' }}>Config:</strong> Set <code style={{ color: '#3b82f6' }}>expected_lag_ms</code> to P50, <code style={{ color: '#3b82f6' }}>max_lag_window_ms</code> to P95+10%.
+            <strong style={{ color: 'var(--text-primary)' }}>Config:</strong> Set{' '}
+            <code style={{ color: '#3b82f6' }}>expected_lag_ms</code> to P50,{' '}
+            <code style={{ color: '#3b82f6' }}>max_lag_window_ms</code> to P95+10%.
           </div>
         </div>
       )}
 
       {/* Charts - THE MAIN EVENT */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', height: '360px' }}>
+      <div
+        style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', height: '360px' }}
+      >
         <LatencyHistogram lagMeasurements={measurements} p50={p50} p95={p95} p99={p99} />
         <LagTimeSeries measurements={timeSeries} p50={p50} p95={p95} />
       </div>

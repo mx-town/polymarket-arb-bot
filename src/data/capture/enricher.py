@@ -5,9 +5,7 @@ Adds model predictions, edge calculations, and signal detections to
 synchronized snapshots during live data capture.
 """
 
-import time
 from pathlib import Path
-from typing import Optional
 
 from src.data.streams.base import SynchronizedSnapshot
 from src.utils.logging import get_logger
@@ -57,7 +55,7 @@ class SnapshotEnricher:
 
     def __init__(
         self,
-        surface_path: Optional[str] = None,
+        surface_path: str | None = None,
         fee_rate: float = 0.03,  # 3% for 15m markets
     ):
         """
@@ -83,8 +81,8 @@ class SnapshotEnricher:
     def _load_models(self, surface_path: str) -> None:
         """Load probability surface and initialize calculators."""
         try:
-            from research.models.probability_surface import ProbabilitySurface
             from research.models.edge_calculator import EdgeCalculator
+            from research.models.probability_surface import ProbabilitySurface
             from research.signals.detectors import SignalArbiter
 
             self.surface = ProbabilitySurface.load(surface_path)
@@ -131,9 +129,7 @@ class SnapshotEnricher:
         remaining_ms = max(0, window_end - timestamp_ms)
         return remaining_ms // 1000
 
-    def _get_clob_prices(
-        self, snapshot: SynchronizedSnapshot
-    ) -> tuple[float | None, float | None]:
+    def _get_clob_prices(self, snapshot: SynchronizedSnapshot) -> tuple[float | None, float | None]:
         """
         Extract UP and DOWN prices from CLOB books.
 
@@ -198,9 +194,7 @@ class SnapshotEnricher:
                 deviation_pct=deviation_pct,
                 time_remaining=time_remaining_min,
                 vol_regime="all",
-                session=get_session_from_hour(
-                    (snapshot.timestamp_ms // 1000 // 3600) % 24
-                ),
+                session=get_session_from_hour((snapshot.timestamp_ms // 1000 // 3600) % 24),
             )
             snapshot.model_prob_up = prob_up
 

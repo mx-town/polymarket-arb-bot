@@ -58,9 +58,10 @@ function App() {
               width: '32px',
               height: '32px',
               borderRadius: 'var(--radius-sm)',
-              background: mode === 'trading'
-                ? 'linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%)'
-                : 'linear-gradient(135deg, var(--accent-amber, #f59e0b) 0%, var(--accent-blue) 100%)',
+              background:
+                mode === 'trading'
+                  ? 'linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%)'
+                  : 'linear-gradient(135deg, var(--accent-amber, #f59e0b) 0%, var(--accent-blue) 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',

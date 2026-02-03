@@ -80,7 +80,10 @@ def cmd_init(args) -> int:
         extractor = FeatureExtractor(window_minutes=15)
         features_df = extractor.extract_windows(df, "BTCUSDT")
         features_df.to_parquet(FEATURES_PATH, index=False)
-        logger.info("EXTRACT_COMPLETE", f"observations={len(features_df):,} windows={features_df['window_start'].nunique():,}")
+        logger.info(
+            "EXTRACT_COMPLETE",
+            f"observations={len(features_df):,} windows={features_df['window_start'].nunique():,}",
+        )
     except Exception as e:
         logger.error("EXTRACT_ERROR", str(e))
         return 1
@@ -94,19 +97,22 @@ def cmd_init(args) -> int:
         surface.fit(features_df)
         surface.save(SURFACE_PATH)
         stats = surface.summary_stats()
-        logger.info("MODEL_COMPLETE", f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}")
+        logger.info(
+            "MODEL_COMPLETE",
+            f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}",
+        )
     except Exception as e:
         logger.error("MODEL_ERROR", str(e))
         return 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("INITIALIZATION COMPLETE")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Raw data:     {CANDLE_PATH}")
     print(f"  Features:     {FEATURES_PATH}")
     print(f"  Model:        {SURFACE_PATH}")
-    print(f"\nRun 'arb-capture observe' to start live observation.")
-    print(f"{'='*60}\n")
+    print("\nRun 'arb-capture observe' to start live observation.")
+    print(f"{'=' * 60}\n")
 
     return 0
 
@@ -155,17 +161,20 @@ def cmd_rebuild(args) -> int:
         surface.fit(features_df)
         surface.save(SURFACE_PATH)
         stats = surface.summary_stats()
-        logger.info("MODEL_COMPLETE", f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}")
+        logger.info(
+            "MODEL_COMPLETE",
+            f"buckets={stats['total_buckets']} reliable={stats['reliable_buckets']}",
+        )
     except Exception as e:
         logger.error("MODEL_ERROR", str(e))
         return 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("MODEL REBUILT")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Features:     {FEATURES_PATH}")
     print(f"  Model:        {SURFACE_PATH}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return 0
 
@@ -214,7 +223,6 @@ def cmd_analyse(args) -> int:
     """Analyse captured observation data."""
     import glob
 
-    import numpy as np
     import pandas as pd
 
     # Find observation files
@@ -232,9 +240,9 @@ def cmd_analyse(args) -> int:
     else:
         parquet_path = files[-1]  # Most recent
 
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("OBSERVATION ANALYSIS")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"File: {parquet_path}")
     print()
 
@@ -245,32 +253,32 @@ def cmd_analyse(args) -> int:
     duration_ms = df["timestamp_ms"].max() - df["timestamp_ms"].min()
     duration_sec = duration_ms / 1000
 
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("CAPTURE SUMMARY")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Total snapshots:    {len(df):,}")
-    print(f"  Valid (with price): {len(valid):,} ({len(valid)/len(df)*100:.1f}%)")
-    print(f"  Duration:           {duration_sec/60:.1f} minutes")
-    print(f"  Snapshot rate:      {len(df)/duration_sec:.1f}/sec")
+    print(f"  Valid (with price): {len(valid):,} ({len(valid) / len(df) * 100:.1f}%)")
+    print(f"  Duration:           {duration_sec / 60:.1f} minutes")
+    print(f"  Snapshot rate:      {len(df) / duration_sec:.1f}/sec")
     print()
 
     # Price movement
     btc = valid["binance_direct_price"]
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("BTC PRICE MOVEMENT")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Start:  ${btc.iloc[0]:,.2f}")
     print(f"  End:    ${btc.iloc[-1]:,.2f}")
     print(f"  Min:    ${btc.min():,.2f}")
     print(f"  Max:    ${btc.max():,.2f}")
-    print(f"  Range:  ${btc.max() - btc.min():,.2f} ({(btc.max()/btc.min()-1)*100:.3f}%)")
+    print(f"  Range:  ${btc.max() - btc.min():,.2f} ({(btc.max() / btc.min() - 1) * 100:.3f}%)")
     print()
 
     # Lag analysis
     lag = valid["lag_ms"].dropna()
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("LAG DISTRIBUTION (Binance → Chainlink)")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Samples:  {len(lag):,}")
     print(f"  Mean:     {lag.mean():.0f}ms")
     print(f"  Std:      {lag.std():.0f}ms")
@@ -284,36 +292,52 @@ def cmd_analyse(args) -> int:
     # Model predictions
     if "model_prob_up" in valid.columns:
         prob = valid["model_prob_up"].dropna()
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("MODEL PREDICTIONS")
-        print(f"{'='*70}")
-        print(f"  Coverage:        {len(prob):,} / {len(valid):,} ({len(prob)/len(valid)*100:.1f}%)")
+        print(f"{'=' * 70}")
+        print(
+            f"  Coverage:        {len(prob):,} / {len(valid):,} ({len(prob) / len(valid) * 100:.1f}%)"
+        )
         print(f"  Mean P(UP):      {prob.mean():.3f}")
         print(f"  Std:             {prob.std():.3f}")
-        print(f"  Distribution:")
-        print(f"    < 0.2 (Strong DOWN):  {(prob < 0.2).sum():>6,} ({(prob < 0.2).mean()*100:>5.1f}%)")
-        print(f"    0.2-0.4 (Lean DOWN):  {((prob >= 0.2) & (prob < 0.4)).sum():>6,} ({((prob >= 0.2) & (prob < 0.4)).mean()*100:>5.1f}%)")
-        print(f"    0.4-0.6 (Neutral):    {((prob >= 0.4) & (prob < 0.6)).sum():>6,} ({((prob >= 0.4) & (prob < 0.6)).mean()*100:>5.1f}%)")
-        print(f"    0.6-0.8 (Lean UP):    {((prob >= 0.6) & (prob < 0.8)).sum():>6,} ({((prob >= 0.6) & (prob < 0.8)).mean()*100:>5.1f}%)")
-        print(f"    > 0.8 (Strong UP):    {(prob >= 0.8).sum():>6,} ({(prob >= 0.8).mean()*100:>5.1f}%)")
+        print("  Distribution:")
+        print(
+            f"    < 0.2 (Strong DOWN):  {(prob < 0.2).sum():>6,} ({(prob < 0.2).mean() * 100:>5.1f}%)"
+        )
+        print(
+            f"    0.2-0.4 (Lean DOWN):  {((prob >= 0.2) & (prob < 0.4)).sum():>6,} ({((prob >= 0.2) & (prob < 0.4)).mean() * 100:>5.1f}%)"
+        )
+        print(
+            f"    0.4-0.6 (Neutral):    {((prob >= 0.4) & (prob < 0.6)).sum():>6,} ({((prob >= 0.4) & (prob < 0.6)).mean() * 100:>5.1f}%)"
+        )
+        print(
+            f"    0.6-0.8 (Lean UP):    {((prob >= 0.6) & (prob < 0.8)).sum():>6,} ({((prob >= 0.6) & (prob < 0.8)).mean() * 100:>5.1f}%)"
+        )
+        print(
+            f"    > 0.8 (Strong UP):    {(prob >= 0.8).sum():>6,} ({(prob >= 0.8).mean() * 100:>5.1f}%)"
+        )
         print()
 
     # Candle tracking
     if "candle_open_price" in valid.columns:
         candle_opens = valid["candle_open_price"].dropna()
         unique_opens = candle_opens.nunique()
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("CANDLE TRACKING (15-minute windows)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"  Windows tracked:  {unique_opens}")
         print(f"  Open prices:      {sorted(candle_opens.unique())}")
         # Deviation from candle open
-        deviation = (valid["binance_direct_price"] - valid["candle_open_price"]) / valid["candle_open_price"] * 100
-        print(f"  Deviation from open:")
+        deviation = (
+            (valid["binance_direct_price"] - valid["candle_open_price"])
+            / valid["candle_open_price"]
+            * 100
+        )
+        print("  Deviation from open:")
         print(f"    Mean:   {deviation.mean():+.4f}%")
         print(f"    Min:    {deviation.min():+.4f}%")
         print(f"    Max:    {deviation.max():+.4f}%")
-        print(f"  Signal thresholds (±0.1%):")
+        print("  Signal thresholds (±0.1%):")
         print(f"    UP triggers:    {(deviation > 0.1).sum():,}")
         print(f"    DOWN triggers:  {(deviation < -0.1).sum():,}")
         print()
@@ -321,9 +345,9 @@ def cmd_analyse(args) -> int:
     # Signal detections
     if "signal_detected" in valid.columns:
         signals = valid[valid["signal_detected"].notna()]
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("SIGNAL DETECTIONS")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"  Total signals:  {len(signals)}")
         if len(signals) > 0:
             for sig_type, count in signals["signal_detected"].value_counts().items():
@@ -335,13 +359,13 @@ def cmd_analyse(args) -> int:
     # Edge analysis
     if "edge_after_fees" in valid.columns:
         edge = valid["edge_after_fees"].dropna()
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print("EDGE ANALYSIS")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"  Coverage:       {len(edge):,} snapshots")
-        print(f"  Mean edge:      {edge.mean()*100:.2f}%")
-        print(f"  Max edge:       {edge.max()*100:.2f}%")
-        print(f"  Positive edge:  {(edge > 0).sum():,} ({(edge > 0).mean()*100:.1f}%)")
+        print(f"  Mean edge:      {edge.mean() * 100:.2f}%")
+        print(f"  Max edge:       {edge.max() * 100:.2f}%")
+        print(f"  Positive edge:  {(edge > 0).sum():,} ({(edge > 0).mean() * 100:.1f}%)")
         print(f"  Edge > 1%:      {(edge > 0.01).sum():,}")
         print(f"  Edge > 2%:      {(edge > 0.02).sum():,}")
         print(f"  Edge > 5%:      {(edge > 0.05).sum():,}")
@@ -350,10 +374,10 @@ def cmd_analyse(args) -> int:
     # CLOB markets
     clob_cols = [c for c in df.columns if c.startswith("clob_")]
     if clob_cols:
-        market_ids = list(set(c.split("_")[1] for c in clob_cols))
-        print(f"{'='*70}")
+        market_ids = list({c.split("_")[1] for c in clob_cols})
+        print(f"{'=' * 70}")
         print(f"CLOB MARKETS ({len(market_ids)} tracked)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         for mid in sorted(market_ids)[:5]:  # Show first 5
             bid_col = f"clob_{mid}_bid"
             ask_col = f"clob_{mid}_ask"
@@ -361,14 +385,16 @@ def cmd_analyse(args) -> int:
             asks = valid[ask_col].dropna()
             if len(bids) > 0:
                 combined = (bids + asks).mean()
-                print(f"  {mid}: bid={bids.mean():.3f} ask={asks.mean():.3f} combined={combined:.3f}")
+                print(
+                    f"  {mid}: bid={bids.mean():.3f} ask={asks.mean():.3f} combined={combined:.3f}"
+                )
         if len(market_ids) > 5:
             print(f"  ... and {len(market_ids) - 5} more markets")
         print()
 
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("ANALYSIS COMPLETE")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     return 0
 

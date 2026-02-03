@@ -246,10 +246,15 @@ class SimpleCLOBStream:
                     logger.debug("EVENT_BOOK", f"asset={msg.get('asset_id', '')[:16]}...")
                     self._handle_book(msg, timestamp_ms)
                 elif event_type == "price_change":
-                    logger.debug("EVENT_PRICE_CHANGE", f"changes={len(msg.get('price_changes', []))}")
+                    logger.debug(
+                        "EVENT_PRICE_CHANGE", f"changes={len(msg.get('price_changes', []))}"
+                    )
                     self._handle_price_change(msg, timestamp_ms)
                 elif event_type == "last_trade_price":
-                    logger.debug("EVENT_TRADE", f"asset={msg.get('asset_id', '')[:16]}... price={msg.get('price')}")
+                    logger.debug(
+                        "EVENT_TRADE",
+                        f"asset={msg.get('asset_id', '')[:16]}... price={msg.get('price')}",
+                    )
                 elif event_type:
                     logger.debug("EVENT_OTHER", f"type={event_type}")
 

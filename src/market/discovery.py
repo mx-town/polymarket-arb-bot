@@ -135,7 +135,9 @@ def fetch_markets_by_series(
         logger.warning("NO_SERIES_ID", f"asset={asset} interval={candle_interval}")
         return []
 
-    logger.info("FETCH_BY_SERIES", f"series_id={series_id} asset={asset} interval={candle_interval}")
+    logger.info(
+        "FETCH_BY_SERIES", f"series_id={series_id} asset={asset} interval={candle_interval}"
+    )
 
     try:
         resp = requests.get(
@@ -157,16 +159,18 @@ def fetch_markets_by_series(
                 if len(clob_tokens) != 2:
                     continue
 
-                markets.append({
-                    "condition_id": m.get("conditionId", ""),
-                    "question": m.get("question", event.get("title", "Unknown")),
-                    "slug": m.get("slug", event.get("slug", "")),
-                    "yes_token": clob_tokens[0],
-                    "no_token": clob_tokens[1],
-                    "end_date": m.get("endDate", event.get("endDate")),
-                    "outcomes": parse_json_field(m.get("outcomes")),
-                    "accepting_orders": m.get("acceptingOrders", True),
-                })
+                markets.append(
+                    {
+                        "condition_id": m.get("conditionId", ""),
+                        "question": m.get("question", event.get("title", "Unknown")),
+                        "slug": m.get("slug", event.get("slug", "")),
+                        "yes_token": clob_tokens[0],
+                        "no_token": clob_tokens[1],
+                        "end_date": m.get("endDate", event.get("endDate")),
+                        "outcomes": parse_json_field(m.get("outcomes")),
+                        "accepting_orders": m.get("acceptingOrders", True),
+                    }
+                )
 
         logger.info("FETCH_BY_SERIES_COMPLETE", f"found={len(markets)}")
         return markets

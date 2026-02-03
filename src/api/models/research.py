@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 # === Probability Surface Models ===
 
 
@@ -175,7 +174,9 @@ class ObservationStatus(BaseModel):
     """Status of the live observation process."""
 
     is_running: bool = Field(description="Whether observation is currently running")
-    started_at: str | None = Field(default=None, description="ISO datetime when observation started")
+    started_at: str | None = Field(
+        default=None, description="ISO datetime when observation started"
+    )
     duration_sec: int | None = Field(
         default=None, description="How long observation has been running"
     )

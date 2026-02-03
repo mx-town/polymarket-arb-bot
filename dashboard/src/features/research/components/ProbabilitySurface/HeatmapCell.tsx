@@ -100,9 +100,7 @@ export function HeatmapCell({
         transition: 'transform 0.1s ease, box-shadow 0.1s ease',
         transform: isHovered ? 'scale(1.1)' : 'scale(1)',
         zIndex: isHovered ? 10 : 1,
-        boxShadow: isHovered
-          ? '0 2px 8px rgba(0, 0, 0, 0.4)'
-          : 'none',
+        boxShadow: isHovered ? '0 2px 8px rgba(0, 0, 0, 0.4)' : 'none',
         borderRadius: '1px',
         animation: isSelected ? 'cellPulse 1.5s ease-in-out infinite' : 'none',
         outline: isSelected ? '2px solid var(--accent-amber)' : 'none',
@@ -159,8 +157,8 @@ export function HeatmapCell({
               marginBottom: '2px',
             }}
           >
-            <span style={{ color: 'var(--text-muted)' }}>CI: </span>
-            [{formatPercent(ciLower)} - {formatPercent(ciUpper)}]
+            <span style={{ color: 'var(--text-muted)' }}>CI: </span>[{formatPercent(ciLower)} -{' '}
+            {formatPercent(ciUpper)}]
           </div>
           <div
             style={{
@@ -175,9 +173,7 @@ export function HeatmapCell({
               {sampleSize}
             </span>
             {!isReliable && (
-              <span style={{ color: 'var(--accent-amber)', marginLeft: '4px' }}>
-                (low)
-              </span>
+              <span style={{ color: 'var(--accent-amber)', marginLeft: '4px' }}>(low)</span>
             )}
           </div>
           {deviationLabel && (

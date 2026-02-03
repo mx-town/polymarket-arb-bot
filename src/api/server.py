@@ -7,21 +7,18 @@ Runs independently from the bot, communicates via:
 - config/default.yaml (configuration)
 """
 
+import asyncio
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-import asyncio
-from datetime import datetime
-
-from fastapi import WebSocket, WebSocketDisconnect
-
 from src.api.pipeline_controller import PipelineController
-from src.api.routes import config, control, metrics, research
 from src.api.research_state import ResearchStateManager
+from src.api.routes import config, control, metrics, research
 
 # Create FastAPI app
 app = FastAPI(
@@ -87,11 +84,15 @@ async def websocket_research(websocket: WebSocket):
                 message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
 
                 if message == "ping":
-                    await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+                    await websocket.send_json(
+                        {"type": "pong", "timestamp": datetime.now().isoformat()}
+                    )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send heartbeat
-                await websocket.send_json({"type": "heartbeat", "timestamp": datetime.now().isoformat()})
+                await websocket.send_json(
+                    {"type": "heartbeat", "timestamp": datetime.now().isoformat()}
+                )
 
     except WebSocketDisconnect:
         pass

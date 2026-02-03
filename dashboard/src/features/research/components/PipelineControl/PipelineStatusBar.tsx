@@ -22,39 +22,43 @@ function formatElapsed(seconds: number): string {
 }
 
 export function PipelineStatusBar({ onPipelineComplete }: PipelineStatusBarProps) {
-  const { status, currentJob, startCommand, stopCommand, isStarting, error } =
-    usePipelineStatus();
+  const { status, currentJob, startCommand, stopCommand, isStarting, error } = usePipelineStatus();
   const [months, setMonths] = useState(6);
   const [elapsed, setElapsed] = useState(0);
   const prevJobRef = useRef(currentJob?.status);
 
   // Track elapsed time when running
+  const jobStatus = currentJob?.status;
+  const jobStartedAt = currentJob?.started_at;
+  const isJobRunning = jobStatus === 'running' && !!jobStartedAt;
+
+  // Reset elapsed when job stops (derived state, no effect needed)
+  const computedElapsed = isJobRunning ? elapsed : 0;
+
   useEffect(() => {
-    if (!currentJob || currentJob.status !== 'running') {
-      setElapsed(0);
+    if (!isJobRunning || !jobStartedAt) {
       return;
     }
 
-    const startedAt = new Date(currentJob.started_at).getTime();
+    const startedAt = new Date(jobStartedAt).getTime();
     const tick = () => setElapsed((Date.now() - startedAt) / 1000);
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [currentJob?.status, currentJob?.started_at]);
+  }, [isJobRunning, jobStartedAt]);
 
   // Fire onPipelineComplete when job transitions to completed/failed
   useEffect(() => {
     const prevStatus = prevJobRef.current;
-    const newStatus = currentJob?.status;
-    prevJobRef.current = newStatus;
+    prevJobRef.current = jobStatus;
 
     if (
       prevStatus === 'running' &&
-      (newStatus === 'completed' || newStatus === 'failed' || newStatus === 'cancelled')
+      (jobStatus === 'completed' || jobStatus === 'failed' || jobStatus === 'cancelled')
     ) {
       onPipelineComplete?.();
     }
-  }, [currentJob?.status, onPipelineComplete]);
+  }, [jobStatus, onPipelineComplete]);
 
   if (!status) {
     return null; // Still loading
@@ -141,10 +145,8 @@ export function PipelineStatusBar({ onPipelineComplete }: PipelineStatusBarProps
       {isRunning && currentJob && (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-            <span style={labelStyle}>
-              {currentJob.command.toUpperCase()} RUNNING
-            </span>
-            <span style={valueStyle}>{formatElapsed(elapsed)}</span>
+            <span style={labelStyle}>{currentJob.command.toUpperCase()} RUNNING</span>
+            <span style={valueStyle}>{formatElapsed(computedElapsed)}</span>
           </div>
 
           <div style={separatorStyle} />
@@ -176,9 +178,7 @@ export function PipelineStatusBar({ onPipelineComplete }: PipelineStatusBarProps
       {!isRunning && !status.has_model && (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
-            <span style={{ ...labelStyle, color: 'var(--accent-amber)' }}>
-              SETUP REQUIRED
-            </span>
+            <span style={{ ...labelStyle, color: 'var(--accent-amber)' }}>SETUP REQUIRED</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
               No probability model found
             </span>
@@ -242,9 +242,7 @@ export function PipelineStatusBar({ onPipelineComplete }: PipelineStatusBarProps
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
             <span style={labelStyle}>Model</span>
             <span style={valueStyle}>
-              {status.model_age_hours != null
-                ? `${status.model_age_hours}h ago`
-                : '--'}
+              {status.model_age_hours != null ? `${status.model_age_hours}h ago` : '--'}
             </span>
           </div>
 
@@ -257,14 +255,14 @@ export function PipelineStatusBar({ onPipelineComplete }: PipelineStatusBarProps
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', marginLeft: 'auto' }}>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', marginLeft: 'auto' }}
+          >
             {['init', 'rebuild', 'verify', 'analyse'].map((cmd) => (
               <button
                 key={cmd}
                 style={buttonStyle}
-                onClick={() =>
-                  startCommand(cmd, cmd === 'init' ? { months } : {})
-                }
+                onClick={() => startCommand(cmd, cmd === 'init' ? { months } : {})}
                 disabled={isStarting}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--bg-elevated)';

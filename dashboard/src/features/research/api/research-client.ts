@@ -47,9 +47,7 @@ export async function fetchProbabilitySurface(): Promise<ProbabilitySurface> {
  * @returns Array of recent signals
  */
 export async function fetchSignals(limit: number = 50): Promise<Signal[]> {
-  const data = await fetchJson<{ signals: Signal[] }>(
-    `${API_BASE}/signals?limit=${limit}`
-  );
+  const data = await fetchJson<{ signals: Signal[] }>(`${API_BASE}/signals?limit=${limit}`);
   return data.signals;
 }
 
@@ -86,14 +84,11 @@ export async function fetchResearchMetrics(): Promise<ResearchMetrics> {
  * @returns Updated observation status
  */
 export async function startObservation(duration_sec: number): Promise<ObservationStatus> {
-  const data = await fetchJson<{ status: ObservationStatus }>(
-    `${API_BASE}/observation/start`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ duration_sec }),
-    }
-  );
+  const data = await fetchJson<{ status: ObservationStatus }>(`${API_BASE}/observation/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ duration_sec }),
+  });
   return data.status;
 }
 
@@ -102,12 +97,9 @@ export async function startObservation(duration_sec: number): Promise<Observatio
  * @returns Final observation status
  */
 export async function stopObservation(): Promise<ObservationStatus> {
-  const data = await fetchJson<{ status: ObservationStatus }>(
-    `${API_BASE}/observation/stop`,
-    {
-      method: 'POST',
-    }
-  );
+  const data = await fetchJson<{ status: ObservationStatus }>(`${API_BASE}/observation/stop`, {
+    method: 'POST',
+  });
   return data.status;
 }
 
@@ -116,9 +108,7 @@ export async function stopObservation(): Promise<ObservationStatus> {
  * @returns Current observation status
  */
 export async function getObservationStatus(): Promise<ObservationStatus> {
-  const data = await fetchJson<{ status: ObservationStatus }>(
-    `${API_BASE}/observation/status`
-  );
+  const data = await fetchJson<{ status: ObservationStatus }>(`${API_BASE}/observation/status`);
   return data.status;
 }
 
@@ -130,9 +120,7 @@ export async function getObservationStatus(): Promise<ObservationStatus> {
  * Fetch pipeline filesystem status (model, data, observations)
  */
 export async function fetchPipelineStatus(): Promise<PipelineStatus> {
-  const data = await fetchJson<{ status: PipelineStatus }>(
-    `${API_BASE}/pipeline/status`
-  );
+  const data = await fetchJson<{ status: PipelineStatus }>(`${API_BASE}/pipeline/status`);
   return data.status;
 }
 
@@ -143,14 +131,11 @@ export async function startPipelineCommand(
   command: string,
   args: Record<string, unknown> = {}
 ): Promise<PipelineJobStatus> {
-  const data = await fetchJson<{ job: PipelineJobStatus }>(
-    `${API_BASE}/pipeline/start`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, args }),
-    }
-  );
+  const data = await fetchJson<{ job: PipelineJobStatus }>(`${API_BASE}/pipeline/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, args }),
+  });
   return data.job;
 }
 
@@ -158,10 +143,9 @@ export async function startPipelineCommand(
  * Stop the currently running pipeline command
  */
 export async function stopPipelineCommand(): Promise<PipelineJobStatus | null> {
-  const data = await fetchJson<{ job: PipelineJobStatus | null }>(
-    `${API_BASE}/pipeline/stop`,
-    { method: 'POST' }
-  );
+  const data = await fetchJson<{ job: PipelineJobStatus | null }>(`${API_BASE}/pipeline/stop`, {
+    method: 'POST',
+  });
   return data.job;
 }
 
@@ -169,9 +153,7 @@ export async function stopPipelineCommand(): Promise<PipelineJobStatus | null> {
  * Get current pipeline job details
  */
 export async function getPipelineJob(): Promise<PipelineJobStatus | null> {
-  const data = await fetchJson<{ job: PipelineJobStatus | null }>(
-    `${API_BASE}/pipeline/job`
-  );
+  const data = await fetchJson<{ job: PipelineJobStatus | null }>(`${API_BASE}/pipeline/job`);
   return data.job;
 }
 
@@ -186,7 +168,11 @@ export interface ResearchWebSocketCallbacks {
   onObservationStatus?: (status: ObservationStatus) => void;
   onPipelineProgress?: (event: PipelineProgressEvent) => void;
   onPipelineComplete?: (job: PipelineJobStatus) => void;
-  onInitial?: (data: { observation_status: ObservationStatus; signals: Signal[]; pipeline_status: PipelineStatus }) => void;
+  onInitial?: (data: {
+    observation_status: ObservationStatus;
+    signals: Signal[];
+    pipeline_status: PipelineStatus;
+  }) => void;
   onError?: (error: Error) => void;
   onClose?: (event: CloseEvent) => void;
   onOpen?: () => void;
@@ -266,7 +252,13 @@ export class ResearchWebSocket {
 
       switch (message.type) {
         case 'initial':
-          this.callbacks.onInitial?.(message.data as { observation_status: ObservationStatus; signals: Signal[]; pipeline_status: PipelineStatus });
+          this.callbacks.onInitial?.(
+            message.data as {
+              observation_status: ObservationStatus;
+              signals: Signal[];
+              pipeline_status: PipelineStatus;
+            }
+          );
           break;
         case 'snapshot':
           this.callbacks.onSnapshot?.(message.data as EnrichedSnapshot);
@@ -375,8 +367,6 @@ export class ResearchWebSocket {
  * @param callbacks - Event callbacks for different message types
  * @returns ResearchWebSocket instance
  */
-export function createResearchWebSocket(
-  callbacks: ResearchWebSocketCallbacks
-): ResearchWebSocket {
+export function createResearchWebSocket(callbacks: ResearchWebSocketCallbacks): ResearchWebSocket {
   return new ResearchWebSocket(callbacks);
 }

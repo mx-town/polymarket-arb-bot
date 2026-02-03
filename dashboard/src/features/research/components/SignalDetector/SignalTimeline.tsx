@@ -42,9 +42,7 @@ function groupSignalsIntoBuckets(signals: Signal[], nowMs: number): Bucket[] {
     buckets.push({
       startMs: bucketStart,
       endMs: bucketEnd,
-      signals: signals.filter(
-        (s) => s.timestamp_ms >= bucketStart && s.timestamp_ms < bucketEnd
-      ),
+      signals: signals.filter((s) => s.timestamp_ms >= bucketStart && s.timestamp_ms < bucketEnd),
     });
   }
 
@@ -140,8 +138,7 @@ export function SignalTimeline({ signals }: SignalTimelineProps) {
             {/* Signal tick marks */}
             {bucket.signals.map((signal, signalIdx) => {
               // Position within bucket (0-1)
-              const positionInBucket =
-                (signal.timestamp_ms - bucket.startMs) / BUCKET_SIZE_MS;
+              const positionInBucket = (signal.timestamp_ms - bucket.startMs) / BUCKET_SIZE_MS;
               return (
                 <div
                   key={signalIdx}

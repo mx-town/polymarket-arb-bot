@@ -172,9 +172,7 @@ export function SnapshotStream({ snapshots, maxItems = 100 }: Props) {
                   fontSize: '0.6875rem',
                   fontFamily: 'var(--font-mono)',
                   animation: isNew ? 'slideIn 0.2s ease-out' : 'none',
-                  background: snapshot.signal_detected
-                    ? 'rgba(255, 170, 0, 0.08)'
-                    : 'transparent',
+                  background: snapshot.signal_detected ? 'rgba(255, 170, 0, 0.08)' : 'transparent',
                 }}
               >
                 <span style={{ color: 'var(--text-muted)' }}>

@@ -9,8 +9,8 @@ Handles:
 """
 
 import asyncio
+import contextlib
 import json
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -41,8 +41,8 @@ class ObservationController:
         if self._initialized:
             return
 
-        self._process: Optional[asyncio.subprocess.Process] = None
-        self._reader_task: Optional[asyncio.Task] = None
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task | None = None
         self._state = ResearchStateManager.get_instance()
         self._initialized = True
 
@@ -129,7 +129,7 @@ class ObservationController:
             # Wait for process to exit (with timeout)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("KILL_REQUIRED", "process_did_not_terminate")
                 self._process.kill()
                 await self._process.wait()
@@ -137,10 +137,8 @@ class ObservationController:
             # Cancel reader task
             if self._reader_task and not self._reader_task.done():
                 self._reader_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._reader_task
-                except asyncio.CancelledError:
-                    pass
 
             logger.info("OBSERVATION_STOPPED", f"exit_code={self._process.returncode}")
 

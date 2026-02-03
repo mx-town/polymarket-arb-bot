@@ -1,7 +1,15 @@
 import { useState, useMemo, useCallback } from 'react';
-import type { ProbabilityBucket, ProbabilitySurface as ProbabilitySurfaceType } from '../../types/research.types';
+import type {
+  ProbabilityBucket,
+  ProbabilitySurface as ProbabilitySurfaceType,
+} from '../../types/research.types';
 import { HeatmapCell } from './HeatmapCell';
-import { SurfaceControls, type VolatilityFilter, type SessionFilter, type ZoomLevel } from './SurfaceControls';
+import {
+  SurfaceControls,
+  type VolatilityFilter,
+  type SessionFilter,
+  type ZoomLevel,
+} from './SurfaceControls';
 
 /** Number of deviation buckets (columns) */
 const DEVIATION_BUCKETS = 80;
@@ -43,19 +51,20 @@ function findBucket(
   // Convert time to seconds for comparison
   const timeRemainingSec = timeRemainingMin * 60;
 
-  return buckets.find((bucket) => {
-    const matchesDeviation =
-      deviation >= bucket.deviation_min && deviation < bucket.deviation_max;
-    const matchesTime =
-      timeRemainingSec >= bucket.time_remaining - 30 &&
-      timeRemainingSec < bucket.time_remaining + 30;
-    const matchesVolatility =
-      volatilityFilter === 'all' || bucket.vol_regime === volatilityFilter;
-    const matchesSession =
-      sessionFilter === 'all' || bucket.session === sessionFilter;
+  return (
+    buckets.find((bucket) => {
+      const matchesDeviation =
+        deviation >= bucket.deviation_min && deviation < bucket.deviation_max;
+      const matchesTime =
+        timeRemainingSec >= bucket.time_remaining - 30 &&
+        timeRemainingSec < bucket.time_remaining + 30;
+      const matchesVolatility =
+        volatilityFilter === 'all' || bucket.vol_regime === volatilityFilter;
+      const matchesSession = sessionFilter === 'all' || bucket.session === sessionFilter;
 
-    return matchesDeviation && matchesTime && matchesVolatility && matchesSession;
-  }) || null;
+      return matchesDeviation && matchesTime && matchesVolatility && matchesSession;
+    }) || null
+  );
 }
 
 /**
@@ -345,8 +354,7 @@ export function ProbabilitySurface({
                 row.map((bucket, colIdx) => {
                   const isCurrentPosition =
                     currentPositionCell?.row === rowIdx && currentPositionCell?.col === colIdx;
-                  const isSelected =
-                    selectedCell?.row === rowIdx && selectedCell?.col === colIdx;
+                  const isSelected = selectedCell?.row === rowIdx && selectedCell?.col === colIdx;
 
                   const deviation = -deviationRange + colIdx * deviationStep;
                   const timeRemainingMin = TIME_BUCKETS - rowIdx;

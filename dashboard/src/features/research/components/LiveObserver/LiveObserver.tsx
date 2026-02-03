@@ -202,16 +202,73 @@ export function LiveObserver() {
         {/* Inline stats */}
         <div style={{ display: 'flex', gap: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Elapsed</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{displayDuration}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Elapsed
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {displayDuration}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Snapshots</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{observationStatus.snapshots_collected.toLocaleString()}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Snapshots
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {observationStatus.snapshots_collected.toLocaleString()}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Signals</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: observationStatus.signals_detected > 0 ? '#ffaa00' : 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{observationStatus.signals_detected}</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Signals
+            </span>
+            <span
+              style={{
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: observationStatus.signals_detected > 0 ? '#ffaa00' : 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {observationStatus.signals_detected}
+            </span>
           </div>
         </div>
 
@@ -221,16 +278,67 @@ export function LiveObserver() {
         {/* Enrichment indicators */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: observationStatus.is_running ? '#00d4aa' : '#444' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: observationStatus.is_running ? '#00d4aa' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>MODEL</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: observationStatus.is_running ? '#00d4aa' : '#444',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: observationStatus.is_running ? '#00d4aa' : 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+              }}
+            >
+              MODEL
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: observationStatus.is_running ? '#00d4aa' : '#444' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: observationStatus.is_running ? '#00d4aa' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>EDGE</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: observationStatus.is_running ? '#00d4aa' : '#444',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: observationStatus.is_running ? '#00d4aa' : 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+              }}
+            >
+              EDGE
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: observationStatus.is_running ? '#ffaa00' : '#444' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: observationStatus.is_running ? '#ffaa00' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>SIGNAL</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: observationStatus.is_running ? '#ffaa00' : '#444',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: observationStatus.is_running ? '#ffaa00' : 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+              }}
+            >
+              SIGNAL
+            </span>
           </div>
         </div>
 
@@ -240,16 +348,64 @@ export function LiveObserver() {
         {/* Stream health as compact dots */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: streamHealth.binanceConnected ? '#00d4aa' : '#ff4757' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>BIN</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: streamHealth.binanceConnected ? '#00d4aa' : '#ff4757',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+              }}
+            >
+              BIN
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: streamHealth.chainlinkConnected ? '#00d4aa' : '#ff4757' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>CL</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: streamHealth.chainlinkConnected ? '#00d4aa' : '#ff4757',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+              }}
+            >
+              CL
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: streamHealth.clobConnected ? '#00d4aa' : '#ff4757' }} />
-            <span style={{ fontSize: '0.5625rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>CLOB</span>
+            <div
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                background: streamHealth.clobConnected ? '#00d4aa' : '#ff4757',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+              }}
+            >
+              CLOB
+            </span>
           </div>
         </div>
 
@@ -259,7 +415,16 @@ export function LiveObserver() {
         {/* Controls - right aligned */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>Dur</span>
+            <span
+              style={{
+                fontSize: '0.5625rem',
+                color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                textTransform: 'uppercase',
+              }}
+            >
+              Dur
+            </span>
             <input
               type="number"
               value={durationInput}

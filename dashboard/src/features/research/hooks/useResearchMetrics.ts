@@ -11,10 +11,7 @@ import type {
   LagStats,
   ObservationStatus,
 } from '../types/research.types';
-import {
-  fetchResearchMetrics,
-  ResearchWebSocket,
-} from '../api/research-client';
+import { fetchResearchMetrics, ResearchWebSocket } from '../api/research-client';
 
 export interface UseResearchMetricsReturn {
   /** Probability surface data */

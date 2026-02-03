@@ -165,7 +165,10 @@ export function EdgeCalculator({ opportunities }: Props) {
                 }}
               >
                 {otherOpportunities.map((opportunity, idx) => (
-                  <OpportunityRow key={`${opportunity.direction}-${idx}`} opportunity={opportunity} />
+                  <OpportunityRow
+                    key={`${opportunity.direction}-${idx}`}
+                    opportunity={opportunity}
+                  />
                 ))}
               </div>
             </div>

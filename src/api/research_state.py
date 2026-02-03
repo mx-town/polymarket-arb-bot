@@ -172,7 +172,10 @@ class ResearchStateManager:
                 self.websocket_connections.discard(ws)
 
         if disconnected:
-            logger.info("WS_CLEANUP", f"removed={len(disconnected)} remaining={len(self.websocket_connections)}")
+            logger.info(
+                "WS_CLEANUP",
+                f"removed={len(disconnected)} remaining={len(self.websocket_connections)}",
+            )
 
     def reset(self) -> None:
         """Reset state for testing."""

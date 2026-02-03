@@ -95,10 +95,8 @@ export function SurfaceControls({
                 fontFamily: 'var(--font-mono)',
                 fontWeight: 600,
                 border: 'none',
-                background:
-                  volatilityFilter === opt.value ? 'var(--accent-blue)' : 'transparent',
-                color:
-                  volatilityFilter === opt.value ? '#0a0a0f' : 'var(--text-muted)',
+                background: volatilityFilter === opt.value ? 'var(--accent-blue)' : 'transparent',
+                color: volatilityFilter === opt.value ? '#0a0a0f' : 'var(--text-muted)',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
               }}
@@ -203,14 +201,9 @@ export function SurfaceControls({
                   padding: '0.5rem 0.625rem',
                   fontSize: '0.6875rem',
                   fontFamily: 'var(--font-mono)',
-                  color:
-                    sessionFilter === opt.value
-                      ? 'var(--accent-blue)'
-                      : 'var(--text-primary)',
+                  color: sessionFilter === opt.value ? 'var(--accent-blue)' : 'var(--text-primary)',
                   background:
-                    sessionFilter === opt.value
-                      ? 'var(--accent-blue-dim)'
-                      : 'transparent',
+                    sessionFilter === opt.value ? 'var(--accent-blue-dim)' : 'transparent',
                   border: 'none',
                   borderBottom: '1px solid var(--border-subtle)',
                   cursor: 'pointer',

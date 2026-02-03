@@ -180,7 +180,11 @@ export function TradeTable({ trades }: Props) {
                 textTransform: 'uppercase',
               }}
             >
-              {dir === 'ALL' ? `All (${trades.length})` : dir === 'UP' ? `Up (${upCount})` : `Dn (${downCount})`}
+              {dir === 'ALL'
+                ? `All (${trades.length})`
+                : dir === 'UP'
+                  ? `Up (${upCount})`
+                  : `Dn (${downCount})`}
             </button>
           ))}
         </div>
@@ -223,7 +227,10 @@ export function TradeTable({ trades }: Props) {
             }}
           >
             <div style={{ ...headerStyle('entry_time'), textAlign: 'center' }}>#</div>
-            <div style={{ ...headerStyle('entry_time'), textAlign: 'left' }} onClick={() => handleSort('entry_time')}>
+            <div
+              style={{ ...headerStyle('entry_time'), textAlign: 'left' }}
+              onClick={() => handleSort('entry_time')}
+            >
               Time{getSortIndicator('entry_time')}
             </div>
             <div style={headerStyle('direction')} onClick={() => handleSort('direction')}>
@@ -290,7 +297,10 @@ export function TradeTable({ trades }: Props) {
                       borderRadius: '3px',
                       fontSize: '0.5625rem',
                       fontWeight: 600,
-                      background: trade.direction === 'UP' ? 'rgba(0, 212, 170, 0.15)' : 'rgba(255, 71, 87, 0.15)',
+                      background:
+                        trade.direction === 'UP'
+                          ? 'rgba(0, 212, 170, 0.15)'
+                          : 'rgba(255, 71, 87, 0.15)',
                       color: trade.direction === 'UP' ? '#00d4aa' : '#ff4757',
                     }}
                   >
@@ -355,15 +365,12 @@ export function TradeTable({ trades }: Props) {
           }}
         >
           <span>
-            {filteredTrades.filter((t) => t.pnl >= 0).length} wins | {filteredTrades.filter((t) => t.pnl < 0).length}{' '}
-            losses
+            {filteredTrades.filter((t) => t.pnl >= 0).length} wins |{' '}
+            {filteredTrades.filter((t) => t.pnl < 0).length} losses
           </span>
           <span
             style={{
-              color:
-                filteredTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0
-                  ? '#00d4aa'
-                  : '#ff4757',
+              color: filteredTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0 ? '#00d4aa' : '#ff4757',
             }}
           >
             Total: {filteredTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0 ? '+' : ''}$

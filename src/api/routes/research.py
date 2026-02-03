@@ -15,10 +15,8 @@ Serves research data to the frontend dashboard:
 
 import asyncio
 import json
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -38,7 +36,6 @@ from src.api.models.research import (
     ResearchMetrics,
     Signal,
     SurfaceMetadata,
-    TradingOpportunity,
 )
 from src.api.pipeline_controller import PipelineController
 from src.api.research_state import ResearchStateManager
@@ -59,7 +56,7 @@ REPORTS_DIR = Path("research/output/reports")
 # =============================================================================
 
 
-def load_probability_surface() -> Optional[dict]:
+def load_probability_surface() -> dict | None:
     """Load probability surface from JSON file."""
     if not SURFACE_PATH.exists():
         logger.warning("SURFACE_NOT_FOUND", str(SURFACE_PATH))
@@ -77,7 +74,7 @@ def parse_surface_to_response(raw_data: dict) -> ProbabilitySurfaceResponse:
     """Parse raw surface JSON to response model."""
     buckets = []
 
-    for key_str, bucket_dict in raw_data.get("buckets", {}).items():
+    for _key_str, bucket_dict in raw_data.get("buckets", {}).items():
         # Handle inf values in deviation bounds
         dev_min = bucket_dict.get("deviation_min", 0)
         dev_max = bucket_dict.get("deviation_max", 0)
@@ -110,7 +107,9 @@ def parse_surface_to_response(raw_data: dict) -> ProbabilitySurfaceResponse:
     # Calculate metadata
     reliable_count = sum(1 for b in buckets if b.is_reliable)
     usable_count = sum(1 for b in buckets if b.is_usable)
-    total_observations = sum(b.sample_size for b in buckets if b.vol_regime == "all" and b.session == "all")
+    total_observations = sum(
+        b.sample_size for b in buckets if b.vol_regime == "all" and b.session == "all"
+    )
 
     metadata = SurfaceMetadata(
         last_updated=datetime.now().isoformat(),
@@ -124,7 +123,7 @@ def parse_surface_to_response(raw_data: dict) -> ProbabilitySurfaceResponse:
     return ProbabilitySurfaceResponse(buckets=buckets, metadata=metadata)
 
 
-def compute_lag_stats() -> Optional[LagStats]:
+def compute_lag_stats() -> LagStats | None:
     """Compute lag statistics from most recent observation parquet."""
     if not OBSERVATIONS_DIR.exists():
         return None
@@ -155,7 +154,7 @@ def compute_lag_stats() -> Optional[LagStats]:
         return None
 
 
-def load_backtest_results() -> Optional[BacktestResult]:
+def load_backtest_results() -> BacktestResult | None:
     """Load backtest results from reports directory."""
     if not REPORTS_DIR.exists():
         return None
@@ -414,11 +413,15 @@ async def websocket_research(websocket: WebSocket):
                 message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
 
                 if message == "ping":
-                    await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+                    await websocket.send_json(
+                        {"type": "pong", "timestamp": datetime.now().isoformat()}
+                    )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send heartbeat
-                await websocket.send_json({"type": "heartbeat", "timestamp": datetime.now().isoformat()})
+                await websocket.send_json(
+                    {"type": "heartbeat", "timestamp": datetime.now().isoformat()}
+                )
 
     except WebSocketDisconnect:
         logger.info("WS_DISCONNECTED", "client_disconnected")

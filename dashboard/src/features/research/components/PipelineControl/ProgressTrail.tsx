@@ -29,9 +29,7 @@ function getStageStatus(
   );
   if (hasComplete) return 'completed';
 
-  const hasStart = progress.some(
-    (p) => p.stage === `${stageName}_START` || p.stage === stageName
-  );
+  const hasStart = progress.some((p) => p.stage === `${stageName}_START` || p.stage === stageName);
   if (hasStart) return 'active';
 
   return 'pending';
@@ -68,8 +66,7 @@ export function ProgressTrail({ progress, command }: ProgressTrailProps) {
                 style={{
                   width: '8px',
                   height: '1px',
-                  background:
-                    status === 'pending' ? 'var(--text-muted)' : 'var(--accent-green)',
+                  background: status === 'pending' ? 'var(--text-muted)' : 'var(--accent-green)',
                   opacity: status === 'pending' ? 0.3 : 0.6,
                 }}
               />

@@ -367,6 +367,7 @@ export interface ResearchMetrics {
  * WebSocket message types for real-time updates
  */
 export type ResearchWebSocketMessageType =
+  | 'initial'
   | 'snapshot'
   | 'signal'
   | 'opportunity'

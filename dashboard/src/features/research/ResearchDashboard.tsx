@@ -116,7 +116,8 @@ export function ResearchDashboard() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontSize: '1rem' }}>&#x26A0;</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--accent-amber)' }}>
-              <strong>Offline Mode:</strong> Research API not connected. Showing UI preview with empty data.
+              <strong>Offline Mode:</strong> Research API not connected. Showing UI preview with
+              empty data.
             </span>
           </div>
           <span
