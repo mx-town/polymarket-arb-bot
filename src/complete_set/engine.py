@@ -446,10 +446,12 @@ class Engine:
             )
             return
 
-        # Lag fill must be strictly before lead fill (or absent)
+        # Lag fill must be before lead fill (or absent), but ignore fills
+        # that resulted from our own top-up (lag_fill_at >= last_top_up_at).
         if lag_fill_at is not None and lag_fill_at >= lead_fill_at:
-            log.debug("FAST_TOP_UP_SKIP %s lag fill after lead fill", market.slug)
-            return
+            if inv.last_top_up_at is None or lag_fill_at < inv.last_top_up_at:
+                log.debug("FAST_TOP_UP_SKIP %s lag fill after lead fill", market.slug)
+                return
 
         if lagging_book.best_bid is None or lagging_book.best_ask is None:
             log.debug("FAST_TOP_UP_SKIP %s no book for lagging side", market.slug)
