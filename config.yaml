@@ -4,16 +4,52 @@ trading:
 
 late_entry:
   entry_window_sec: 90      # Enter in last 4 minutes
-  exit_buffer_sec: 30        # Exit 30s before resolution
+  exit_buffer_sec: 15        # Exit 30s before resolution
   min_favorite_spread: 0.10  # Favorite must lead by 10%+
   max_favorite_price: 0.95   # Don't buy above 0.90
   take_profit_pct: 0.15      # Take profit at 15% gain
 
 polling:
-  interval_sec: 5
+  interval_sec: 1
 
 assets:
   - bitcoin
   - ethereum
   - solana
   - xrp
+
+# Complete-set arbitrage strategy (Gabagool replica)
+complete_set:
+  enabled: true
+  dry_run: true
+  refresh_millis: 500          # Tick interval
+  min_replace_millis: 5000     # Min age before order replacement
+  improve_ticks: 2             # Ticks above best bid for maker quote
+  assets: [bitcoin, ethereum]
+  min_seconds_to_end: 0
+  max_seconds_to_end: 900
+
+  # Edge & skew
+  min_edge: 0.01               # 1% minimum complete-set edge
+  max_skew_ticks: 1
+  imbalance_for_max_skew: 200
+
+  # Bankroll
+  bankroll_usd: 100
+  max_order_bankroll_fraction: 0.05
+  max_total_bankroll_fraction: 0.50
+
+  # Top-up
+  top_up_enabled: true
+  top_up_seconds_to_end: 60
+  top_up_min_shares: 10
+  fast_top_up_enabled: true
+  fast_top_up_min_seconds: 3
+  fast_top_up_max_seconds: 120
+  fast_top_up_cooldown_millis: 15000
+  fast_top_up_min_edge: 0.01
+
+  # Taker mode (disabled by default)
+  taker_enabled: false
+  taker_max_edge: 0.015
+  taker_max_spread: 0.02

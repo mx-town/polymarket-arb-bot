@@ -1,0 +1,456 @@
+"""Strategy tick loop — the brain of the complete-set arbitrage.
+
+Translates GabagoolDirectionalEngine.java.
+Runs a tick every refresh_millis (default 500ms), evaluating each active market.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from decimal import Decimal
+
+from complete_set.config import CompleteSetConfig
+from complete_set.inventory import InventoryTracker
+from complete_set.market_data import discover_markets, get_top_of_book
+from complete_set.models import Direction, GabagoolMarket, ReplaceDecision, TopOfBook
+from complete_set.order_mgr import OrderManager
+from complete_set.quote_calc import (
+    calculate_entry_price,
+    calculate_exposure,
+    calculate_shares,
+    calculate_skew_ticks,
+    has_minimum_edge,
+)
+
+log = logging.getLogger("cs.engine")
+
+ZERO = Decimal("0")
+ONE = Decimal("1")
+TICK_SIZE = Decimal("0.01")  # Default Polymarket tick size
+
+
+class Engine:
+    def __init__(self, client, cfg: CompleteSetConfig):
+        self._client = client
+        self._cfg = cfg
+        self._order_mgr = OrderManager(dry_run=cfg.dry_run)
+        self._inventory = InventoryTracker()
+        self._active_markets: list[GabagoolMarket] = []
+        self._last_discovery: float = 0.0
+
+    async def run(self) -> None:
+        """Main event loop."""
+        mode = "DRY RUN" if self._cfg.dry_run else "LIVE"
+        log.info("=" * 56)
+        log.info("  Complete-Set Arb Engine v0.1.0  [%s]", mode)
+        log.info("=" * 56)
+        log.info("  Assets          : %s", ", ".join(self._cfg.assets))
+        log.info("  Tick interval   : %dms", self._cfg.refresh_millis)
+        log.info("  Min edge        : %s", self._cfg.min_edge)
+        log.info("  Bankroll        : $%s", self._cfg.bankroll_usd)
+        log.info("  Improve ticks   : %d", self._cfg.improve_ticks)
+        log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
+        log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
+        log.info("  Taker mode      : %s", self._cfg.taker_enabled)
+        log.info("=" * 56)
+
+        tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
+
+        try:
+            while True:
+                self._tick()
+                await asyncio.sleep(tick_interval)
+        except asyncio.CancelledError:
+            log.info("Engine cancelled, shutting down")
+        finally:
+            self._order_mgr.cancel_all(self._client, "SHUTDOWN")
+
+    def _tick(self) -> None:
+        """Single tick: discover, refresh positions, evaluate markets, check fills."""
+        now = time.time()
+
+        # Discovery every 30s
+        if now - self._last_discovery > 30.0:
+            self._active_markets = discover_markets(self._cfg.assets)
+            self._last_discovery = now
+
+        # Refresh positions
+        self._inventory.refresh_if_stale(self._client)
+        self._inventory.sync_inventory(self._active_markets)
+
+        # Evaluate each market
+        for market in self._active_markets:
+            try:
+                self._evaluate_market(market, now)
+            except Exception as e:
+                log.error("Error evaluating %s: %s", market.slug, e)
+
+        # Check pending orders for fills
+        self._order_mgr.check_pending_orders(self._client, self._handle_fill)
+
+    def _handle_fill(self, state, filled_shares: Decimal) -> None:
+        if state.market is None or state.direction is None:
+            return
+        is_up = state.direction == Direction.UP
+        self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
+        log.info(
+            "FILL %s %s +%s shares @ %s",
+            state.market.slug,
+            state.direction.value,
+            filled_shares,
+            state.price,
+        )
+
+    def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
+        seconds_to_end = int(market.end_time - now)
+        max_lifetime = 900 if market.market_type == "updown-15m" else 3600
+
+        # Outside lifetime
+        if seconds_to_end < 0 or seconds_to_end > max_lifetime:
+            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_LIFETIME")
+            return
+
+        # Outside configured time window
+        min_ste = max(0, self._cfg.min_seconds_to_end)
+        max_ste = min(max_lifetime, max(min_ste, self._cfg.max_seconds_to_end))
+        if seconds_to_end < min_ste or seconds_to_end > max_ste:
+            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_TIME_WINDOW")
+            return
+
+        # Fetch TOB for both legs
+        up_book = get_top_of_book(self._client, market.up_token_id)
+        down_book = get_top_of_book(self._client, market.down_token_id)
+
+        if not up_book or not down_book:
+            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE")
+            return
+        if up_book.best_bid is None or up_book.best_ask is None:
+            self._order_mgr.cancel_order(self._client, market.up_token_id, "BOOK_STALE")
+            return
+        if down_book.best_bid is None or down_book.best_ask is None:
+            self._order_mgr.cancel_order(self._client, market.down_token_id, "BOOK_STALE")
+            return
+
+        inv = self._inventory.get_inventory(market.slug)
+        skew_up, skew_down = calculate_skew_ticks(
+            inv, self._cfg.max_skew_ticks, self._cfg.imbalance_for_max_skew
+        )
+
+        # Fast top-up after recent fill
+        self._maybe_fast_top_up(market, inv, up_book, down_book, seconds_to_end)
+
+        # Near-end taker top-up
+        if self._cfg.top_up_enabled and seconds_to_end <= self._cfg.top_up_seconds_to_end:
+            abs_imbalance = abs(inv.imbalance)
+            if abs_imbalance >= self._cfg.top_up_min_shares:
+                if inv.imbalance > ZERO:
+                    lagging = Direction.DOWN
+                    lagging_book = down_book
+                    lagging_token = market.down_token_id
+                else:
+                    lagging = Direction.UP
+                    lagging_book = up_book
+                    lagging_token = market.up_token_id
+                self._maybe_top_up_lagging(
+                    market, lagging_token, lagging, lagging_book, seconds_to_end,
+                    abs_imbalance, "TOP_UP",
+                )
+
+        # Calculate entry prices
+        up_entry = calculate_entry_price(up_book, TICK_SIZE, self._cfg.improve_ticks, skew_up)
+        down_entry = calculate_entry_price(down_book, TICK_SIZE, self._cfg.improve_ticks, skew_down)
+        if up_entry is None or down_entry is None:
+            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE")
+            return
+
+        # Edge check
+        if not has_minimum_edge(up_entry, down_entry, self._cfg.min_edge):
+            log.debug("Skipping %s - insufficient edge", market.slug)
+            self._order_mgr.cancel_market_orders(self._client, market, "INSUFFICIENT_EDGE")
+            return
+
+        # Optional taker mode
+        planned_edge = ONE - (up_entry + down_entry)
+        if self._should_take(planned_edge, up_book, down_book):
+            take_leg = self._decide_taker_leg(inv, up_book, down_book)
+            if take_leg == Direction.UP:
+                self._maybe_take_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end)
+                self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down)
+                return
+            elif take_leg == Direction.DOWN:
+                self._maybe_take_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end)
+                self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up)
+                return
+
+        # Maker mode: quote both legs
+        self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up)
+        self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down)
+
+    def _maybe_quote_token(
+        self,
+        market: GabagoolMarket,
+        token_id: str,
+        direction: Direction,
+        book: TopOfBook,
+        seconds_to_end: int,
+        skew_ticks: int,
+    ) -> None:
+        entry_price = calculate_entry_price(book, TICK_SIZE, self._cfg.improve_ticks, skew_ticks)
+        if entry_price is None:
+            return
+
+        exposure = calculate_exposure(
+            self._order_mgr.get_open_orders(),
+            self._inventory.get_all_inventories(),
+        )
+        shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
+        if shares is None:
+            return
+
+        decision = self._order_mgr.maybe_replace(
+            token_id, entry_price, shares, self._cfg.min_replace_millis
+        )
+        if decision == ReplaceDecision.SKIP:
+            return
+
+        if decision == ReplaceDecision.REPLACE:
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_PRICE")
+
+        reason = "REPLACE" if decision == ReplaceDecision.REPLACE else "QUOTE"
+        self._order_mgr.place_order(
+            self._client, market, token_id, direction,
+            entry_price, shares, seconds_to_end, reason,
+        )
+
+    def _maybe_take_token(
+        self,
+        market: GabagoolMarket,
+        token_id: str,
+        direction: Direction,
+        book: TopOfBook,
+        seconds_to_end: int,
+    ) -> None:
+        if book.best_ask is None or book.best_ask > Decimal("0.99"):
+            return
+
+        exposure = calculate_exposure(
+            self._order_mgr.get_open_orders(),
+            self._inventory.get_all_inventories(),
+        )
+        shares = calculate_shares(market.slug, book.best_ask, self._cfg, seconds_to_end, exposure)
+        if shares is None:
+            return
+
+        existing = self._order_mgr.get_order(token_id)
+        if existing:
+            age_ms = (time.time() - existing.placed_at) * 1000
+            if age_ms < self._cfg.min_replace_millis:
+                return
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TAKER")
+
+        log.info(
+            "TAKER %s on %s at ask %s (size=%s, %ds left)",
+            direction.value, market.slug, book.best_ask, shares, seconds_to_end,
+        )
+        self._order_mgr.place_order(
+            self._client, market, token_id, direction,
+            book.best_ask, shares, seconds_to_end, "TAKER",
+        )
+
+    def _maybe_fast_top_up(
+        self,
+        market: GabagoolMarket,
+        inv,
+        up_book: TopOfBook,
+        down_book: TopOfBook,
+        seconds_to_end: int,
+    ) -> None:
+        if not self._cfg.fast_top_up_enabled:
+            return
+
+        imbalance = inv.imbalance
+        abs_imbalance = abs(imbalance)
+        if abs_imbalance < self._cfg.top_up_min_shares:
+            return
+
+        now = time.time()
+        if (
+            inv.last_top_up_at is not None
+            and (now - inv.last_top_up_at) * 1000 < self._cfg.fast_top_up_cooldown_millis
+        ):
+            return
+
+        # Determine lagging leg
+        if imbalance > ZERO:
+            lagging = Direction.DOWN
+            lead_fill_at = inv.last_up_fill_at
+            lag_fill_at = inv.last_down_fill_at
+            lagging_book = down_book
+            lagging_token = market.down_token_id
+            lead_fill_price = inv.last_up_fill_price
+        else:
+            lagging = Direction.UP
+            lead_fill_at = inv.last_down_fill_at
+            lag_fill_at = inv.last_up_fill_at
+            lagging_book = up_book
+            lagging_token = market.up_token_id
+            lead_fill_price = inv.last_down_fill_price
+
+        if lead_fill_at is None:
+            return
+
+        since_lead_fill = now - lead_fill_at
+        if (
+            since_lead_fill < self._cfg.fast_top_up_min_seconds
+            or since_lead_fill > self._cfg.fast_top_up_max_seconds
+        ):
+            return
+
+        # Lag fill must be before lead fill (or absent)
+        if lag_fill_at is not None and lag_fill_at >= lead_fill_at:
+            return
+
+        if lagging_book.best_bid is None or lagging_book.best_ask is None:
+            return
+        spread = lagging_book.best_ask - lagging_book.best_bid
+        if spread > self._cfg.taker_max_spread:
+            return
+
+        # Check hedged edge
+        if lead_fill_price is None:
+            if lagging == Direction.DOWN:
+                lead_fill_price = up_book.best_bid
+            else:
+                lead_fill_price = down_book.best_bid
+        if lead_fill_price is not None:
+            hedged_edge = ONE - (lead_fill_price + lagging_book.best_ask)
+            if hedged_edge < self._cfg.fast_top_up_min_edge:
+                return
+
+        self._inventory.mark_top_up(market.slug)
+        self._maybe_top_up_lagging(
+            market, lagging_token, lagging, lagging_book, seconds_to_end,
+            abs_imbalance, "FAST_TOP_UP",
+        )
+
+    def _maybe_top_up_lagging(
+        self,
+        market: GabagoolMarket,
+        token_id: str,
+        direction: Direction,
+        book: TopOfBook,
+        seconds_to_end: int,
+        imbalance_shares: Decimal,
+        reason: str,
+    ) -> None:
+        if imbalance_shares < Decimal("0.01"):
+            return
+        if book.best_ask is None or book.best_ask > Decimal("0.99"):
+            return
+
+        # Check spread
+        if book.best_bid is not None:
+            spread = book.best_ask - book.best_bid
+            if spread > self._cfg.taker_max_spread:
+                return
+
+        top_up_shares = imbalance_shares
+        bankroll = self._cfg.bankroll_usd
+
+        # Per-order cap
+        if bankroll > ZERO and self._cfg.max_order_bankroll_fraction > ZERO:
+            per_order_cap = bankroll * self._cfg.max_order_bankroll_fraction
+            cap = (per_order_cap / book.best_ask).quantize(Decimal("0.01"))
+            top_up_shares = min(top_up_shares, cap)
+
+        # Total cap
+        if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
+            total_cap = bankroll * self._cfg.max_total_bankroll_fraction
+            exposure = calculate_exposure(
+                self._order_mgr.get_open_orders(),
+                self._inventory.get_all_inventories(),
+            )
+            remaining = total_cap - exposure
+            if remaining <= ZERO:
+                return
+            cap = (remaining / book.best_ask).quantize(Decimal("0.01"))
+            top_up_shares = min(top_up_shares, cap)
+
+        top_up_shares = top_up_shares.quantize(Decimal("0.01"))
+        if top_up_shares < Decimal("0.01"):
+            return
+
+        # Cancel existing order if any
+        existing = self._order_mgr.get_order(token_id)
+        if existing:
+            age_ms = (time.time() - existing.placed_at) * 1000
+            if age_ms < self._cfg.min_replace_millis:
+                return
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP")
+
+        log.info(
+            "TOP-UP %s on %s at ask %s (imbalance=%s, shares=%s, %ds left) [%s]",
+            direction.value, market.slug, book.best_ask,
+            imbalance_shares, top_up_shares, seconds_to_end, reason,
+        )
+        self._order_mgr.place_order(
+            self._client, market, token_id, direction,
+            book.best_ask, top_up_shares, seconds_to_end, reason,
+        )
+
+    def _should_take(
+        self, edge: Decimal, up_book: TopOfBook, down_book: TopOfBook
+    ) -> bool:
+        if not self._cfg.taker_enabled:
+            return False
+        if edge > self._cfg.taker_max_edge:
+            return False
+
+        up_spread = up_book.best_ask - up_book.best_bid
+        down_spread = down_book.best_ask - down_book.best_bid
+
+        if up_spread > self._cfg.taker_max_spread or down_spread > self._cfg.taker_max_spread:
+            return False
+
+        log.debug(
+            "Taker mode triggered - edge=%s, upSpread=%s, downSpread=%s",
+            edge, up_spread, down_spread,
+        )
+        return True
+
+    def _decide_taker_leg(self, inv, up_book: TopOfBook, down_book: TopOfBook):
+        bid_up = up_book.best_bid
+        ask_up = up_book.best_ask
+        bid_down = down_book.best_bid
+        ask_down = down_book.best_ask
+
+        if None in (bid_up, ask_up, bid_down, ask_down):
+            return None
+
+        edge_take_up = ONE - (ask_up + bid_down)
+        edge_take_down = ONE - (bid_up + ask_down)
+        min_edge = self._cfg.fast_top_up_min_edge
+
+        up_ok = edge_take_up >= min_edge
+        down_ok = edge_take_down >= min_edge
+
+        if not up_ok and not down_ok:
+            return None
+        if up_ok and not down_ok:
+            return Direction.UP
+        if down_ok and not up_ok:
+            return Direction.DOWN
+
+        if edge_take_up > edge_take_down:
+            return Direction.UP
+        if edge_take_down > edge_take_up:
+            return Direction.DOWN
+
+        imbalance = inv.imbalance
+        if imbalance > ZERO:
+            return Direction.DOWN
+        if imbalance < ZERO:
+            return Direction.UP
+        return Direction.UP

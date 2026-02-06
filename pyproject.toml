@@ -16,12 +16,13 @@ dependencies = [
 
 [project.scripts]
 late-entry = "late_entry.bot:main"
+complete-set = "complete_set.bot:main"
 
 [dependency-groups]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/late_entry"]
+packages = ["src/late_entry", "src/complete_set"]
 
 [tool.ruff]
 line-length = 100

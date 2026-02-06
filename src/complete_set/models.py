@@ -1,0 +1,99 @@
+"""Data structures for the complete-set arbitrage strategy."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+from enum import Enum
+from typing import Optional
+
+
+class Direction(Enum):
+    UP = "UP"
+    DOWN = "DOWN"
+
+
+class ReplaceDecision(Enum):
+    SKIP = "SKIP"
+    PLACE = "PLACE"
+    REPLACE = "REPLACE"
+
+
+@dataclass(frozen=True)
+class TopOfBook:
+    best_bid: Optional[Decimal]
+    best_ask: Optional[Decimal]
+    best_bid_size: Optional[Decimal]
+    best_ask_size: Optional[Decimal]
+    updated_at: float  # time.time()
+
+
+@dataclass(frozen=True)
+class GabagoolMarket:
+    slug: str
+    up_token_id: str
+    down_token_id: str
+    end_time: float  # epoch seconds
+    market_type: str  # "updown-15m" or "up-or-down"
+
+
+@dataclass
+class MarketInventory:
+    up_shares: Decimal = field(default_factory=lambda: Decimal("0"))
+    down_shares: Decimal = field(default_factory=lambda: Decimal("0"))
+    last_up_fill_at: Optional[float] = None
+    last_down_fill_at: Optional[float] = None
+    last_up_fill_price: Optional[Decimal] = None
+    last_down_fill_price: Optional[Decimal] = None
+    last_top_up_at: Optional[float] = None
+
+    @property
+    def imbalance(self) -> Decimal:
+        return self.up_shares - self.down_shares
+
+    def add_up(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
+        return MarketInventory(
+            up_shares=self.up_shares + shares,
+            down_shares=self.down_shares,
+            last_up_fill_at=fill_at,
+            last_down_fill_at=self.last_down_fill_at,
+            last_up_fill_price=fill_price,
+            last_down_fill_price=self.last_down_fill_price,
+            last_top_up_at=self.last_top_up_at,
+        )
+
+    def add_down(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
+        return MarketInventory(
+            up_shares=self.up_shares,
+            down_shares=self.down_shares + shares,
+            last_up_fill_at=self.last_up_fill_at,
+            last_down_fill_at=fill_at,
+            last_up_fill_price=self.last_up_fill_price,
+            last_down_fill_price=fill_price,
+            last_top_up_at=self.last_top_up_at,
+        )
+
+    def mark_top_up(self, at: float) -> MarketInventory:
+        return MarketInventory(
+            up_shares=self.up_shares,
+            down_shares=self.down_shares,
+            last_up_fill_at=self.last_up_fill_at,
+            last_down_fill_at=self.last_down_fill_at,
+            last_up_fill_price=self.last_up_fill_price,
+            last_down_fill_price=self.last_down_fill_price,
+            last_top_up_at=at,
+        )
+
+
+@dataclass(frozen=True)
+class OrderState:
+    order_id: str
+    market: Optional[GabagoolMarket]
+    token_id: str
+    direction: Optional[Direction]
+    price: Decimal
+    size: Decimal
+    placed_at: float  # time.time()
+    matched_size: Decimal = field(default_factory=lambda: Decimal("0"))
+    last_status_check_at: Optional[float] = None
+    seconds_to_end_at_entry: Optional[int] = None
