@@ -47,7 +47,7 @@ complete_set:
   fast_top_up_min_seconds: 3
   fast_top_up_max_seconds: 120
   fast_top_up_cooldown_millis: 15000
-  fast_top_up_min_edge: 0.01
+  fast_top_up_min_edge: 0.0  # 0.0 = breakeven-or-better hedging (matches Java default)
 
   # Taker mode (disabled by default)
   taker_enabled: false
