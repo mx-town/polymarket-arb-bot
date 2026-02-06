@@ -18,12 +18,16 @@ CACHE_TTL_SECONDS = 5.0
 ZERO = Decimal("0")
 
 
+ONE = Decimal("1")
+
+
 class InventoryTracker:
     def __init__(self, dry_run: bool = False):
         self._dry_run = dry_run
         self._shares_by_token: dict[str, Decimal] = {}
         self._last_refresh: float = 0.0
         self._inventory_by_market: dict[str, MarketInventory] = {}
+        self.session_realized_pnl: Decimal = ZERO
 
     def refresh_if_stale(self, client) -> None:
         """Refresh positions from CLOB if cache is stale (>5s).
@@ -133,7 +137,34 @@ class InventoryTracker:
     def clear_market(self, slug: str) -> None:
         """Remove inventory for a resolved/expired market."""
         removed = self._inventory_by_market.pop(slug, None)
-        if removed is not None:
+        if removed is None:
+            return
+
+        hedged = min(removed.up_shares, removed.down_shares)
+
+        if hedged > ZERO and removed.up_vwap is not None and removed.down_vwap is not None:
+            hedged_cost = hedged * (removed.up_vwap + removed.down_vwap)
+            hedged_pnl = hedged * ONE - hedged_cost
+            self.session_realized_pnl += hedged_pnl
+
+            # Determine unhedged remainder
+            if removed.up_shares > removed.down_shares:
+                unhedged_str = f"U{removed.up_shares - removed.down_shares}"
+            elif removed.down_shares > removed.up_shares:
+                unhedged_str = f"D{removed.down_shares - removed.up_shares}"
+            else:
+                unhedged_str = "none"
+
+            log.info(
+                "CLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ cost=$%s │ "
+                "hedged_pnl=$%s │ unhedged=%s",
+                slug, removed.up_shares, removed.down_shares,
+                hedged,
+                hedged_cost.quantize(Decimal("0.01")),
+                hedged_pnl.quantize(Decimal("0.01")),
+                unhedged_str,
+            )
+        else:
             log.info(
                 "CLEAR_INVENTORY %s (was U%s/D%s)",
                 slug, removed.up_shares, removed.down_shares,

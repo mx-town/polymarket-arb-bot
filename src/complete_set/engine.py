@@ -150,9 +150,15 @@ class Engine:
         )
         open_count = len(self._order_mgr.get_open_orders())
 
+        bankroll = self._cfg.bankroll_usd
+        pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
+        session_pnl = self._inventory.session_realized_pnl.quantize(Decimal("0.01"))
+
         log.info(
-            "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s",
+            "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s │ "
+            "bankroll=$%s (%s%% used) │ session_pnl=$%s",
             len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
+            bankroll, pct_used, session_pnl,
         )
 
         for market in self._active_markets:
@@ -186,11 +192,19 @@ class Engine:
             up_ord_str = f"ord@{up_order.price}" if up_order else "---"
             dn_ord_str = f"ord@{dn_order.price}" if dn_order else "---"
 
+            # Cost/VWAP segment for markets with hedged inventory
+            if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+                total_cost = (inv.up_cost + inv.down_cost).quantize(Decimal("0.01"))
+                cost_seg = f"cost=${total_cost} vwap=U{inv.up_vwap:.2f}/D{inv.down_vwap:.2f} │ "
+            else:
+                cost_seg = ""
+
             log.info(
-                "  %s │ %ds │ inv=U%s/D%s(h%s) │ "
+                "  %s │ %ds │ inv=U%s/D%s(h%s) │ %s"
                 "book=U[%s/%s] D[%s/%s] │ entry=U%s D%s │ edge=%s │ %s %s",
                 market.slug[-30:], ste,
                 inv.up_shares, inv.down_shares, hedged,
+                cost_seg,
                 up_bid, up_ask, dn_bid, dn_ask,
                 up_entry or "?", dn_entry or "?", edge_str,
                 up_ord_str, dn_ord_str,
