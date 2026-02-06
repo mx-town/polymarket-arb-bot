@@ -81,6 +81,15 @@ class Engine:
             self._active_markets = discover_markets(self._cfg.assets)
             self._last_discovery = now
             self._balance_failures.clear()
+            # Prune inventory and cancel orphaned orders for expired markets
+            active_slugs = {m.slug for m in self._active_markets}
+            for slug in list(self._inventory.get_all_inventories()):
+                if slug not in active_slugs:
+                    self._inventory.clear_market(slug)
+            for token_id in list(self._order_mgr.get_open_orders()):
+                order = self._order_mgr.get_order(token_id)
+                if order and order.market and order.market.slug not in active_slugs:
+                    self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED")
             self._log_market_transitions(now)
             self._log_summary(now)
 
@@ -413,23 +422,44 @@ class Engine:
             lead_fill_price = inv.last_down_fill_price
 
         if lead_fill_at is None:
+            log.debug("FAST_TOP_UP_SKIP %s no lead fill timestamp", market.slug)
             return
 
         since_lead_fill = now - lead_fill_at
+        log.debug(
+            "FAST_TOP_UP_CHECK %s imbalance=%s lagging=%s lead_fill=%.1fs ago "
+            "lag_fill=%s spread=%s",
+            market.slug, imbalance, lagging.value, since_lead_fill,
+            f"{now - lag_fill_at:.1f}s ago" if lag_fill_at else "none",
+            f"{lagging_book.best_ask - lagging_book.best_bid}"
+            if lagging_book.best_bid is not None and lagging_book.best_ask is not None
+            else "?",
+        )
         if (
             since_lead_fill < self._cfg.fast_top_up_min_seconds
             or since_lead_fill > self._cfg.fast_top_up_max_seconds
         ):
+            log.debug(
+                "FAST_TOP_UP_SKIP %s since_lead=%.1fs outside [%s, %s]",
+                market.slug, since_lead_fill,
+                self._cfg.fast_top_up_min_seconds, self._cfg.fast_top_up_max_seconds,
+            )
             return
 
         # Lag fill must be before lead fill (or absent)
         if lag_fill_at is not None and lag_fill_at >= lead_fill_at:
+            log.debug("FAST_TOP_UP_SKIP %s lag fill after lead fill", market.slug)
             return
 
         if lagging_book.best_bid is None or lagging_book.best_ask is None:
+            log.debug("FAST_TOP_UP_SKIP %s no book for lagging side", market.slug)
             return
         spread = lagging_book.best_ask - lagging_book.best_bid
         if spread > self._cfg.taker_max_spread:
+            log.debug(
+                "FAST_TOP_UP_SKIP %s spread %s > max %s",
+                market.slug, spread, self._cfg.taker_max_spread,
+            )
             return
 
         # Check hedged edge
@@ -441,6 +471,10 @@ class Engine:
         if lead_fill_price is not None:
             hedged_edge = ONE - (lead_fill_price + lagging_book.best_ask)
             if hedged_edge < self._cfg.fast_top_up_min_edge:
+                log.debug(
+                    "FAST_TOP_UP_SKIP %s hedged_edge=%s < min_edge=%s",
+                    market.slug, hedged_edge, self._cfg.fast_top_up_min_edge,
+                )
                 return
 
         self._inventory.mark_top_up(market.slug)
@@ -460,16 +494,23 @@ class Engine:
         reason: str,
     ) -> None:
         if self._balance_failures.get(market.slug, 0) >= 3:
+            log.debug("TOP_UP_SKIP %s too many balance failures", market.slug)
             return
         if imbalance_shares < Decimal("0.01"):
+            log.debug("TOP_UP_SKIP %s imbalance too small (%s)", market.slug, imbalance_shares)
             return
         if book.best_ask is None or book.best_ask > Decimal("0.99"):
+            log.debug("TOP_UP_SKIP %s bad ask (%s)", market.slug, book.best_ask)
             return
 
         # Check spread
         if book.best_bid is not None:
             spread = book.best_ask - book.best_bid
             if spread > self._cfg.taker_max_spread:
+                log.debug(
+                    "TOP_UP_SKIP %s spread %s > max %s",
+                    market.slug, spread, self._cfg.taker_max_spread,
+                )
                 return
 
         top_up_shares = imbalance_shares
@@ -481,21 +522,13 @@ class Engine:
             cap = (per_order_cap / book.best_ask).quantize(Decimal("0.01"))
             top_up_shares = min(top_up_shares, cap)
 
-        # Total cap
-        if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
-            total_cap = bankroll * self._cfg.max_total_bankroll_fraction
-            exposure = calculate_exposure(
-                self._order_mgr.get_open_orders(),
-                self._inventory.get_all_inventories(),
-            )
-            remaining = total_cap - exposure
-            if remaining <= ZERO:
-                return
-            cap = (remaining / book.best_ask).quantize(Decimal("0.01"))
-            top_up_shares = min(top_up_shares, cap)
+        # NOTE: total bankroll cap intentionally skipped for top-ups.
+        # Top-ups hedge an existing imbalance — they reduce risk, not add it.
+        # The per-order cap above still limits individual top-up size.
 
         top_up_shares = top_up_shares.quantize(Decimal("0.01"))
         if top_up_shares < Decimal("0.01"):
+            log.debug("TOP_UP_SKIP %s capped shares too small", market.slug)
             return
 
         # Cancel existing order if any
@@ -503,6 +536,10 @@ class Engine:
         if existing:
             age_ms = (time.time() - existing.placed_at) * 1000
             if age_ms < self._cfg.min_replace_millis:
+                log.debug(
+                    "TOP_UP_SKIP %s existing order too young (%dms < %dms)",
+                    market.slug, age_ms, self._cfg.min_replace_millis,
+                )
                 return
             self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP")
 

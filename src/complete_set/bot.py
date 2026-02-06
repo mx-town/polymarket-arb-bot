@@ -34,7 +34,7 @@ def _setup_logging(level_str: str) -> None:
         format="%(asctime)s │ %(name)-16s │ %(message)s",
         datefmt="%H:%M:%S",
     )
-    for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client"):
+    for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 log = logging.getLogger("cs.bot")

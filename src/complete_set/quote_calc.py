@@ -16,6 +16,7 @@ ONE = Decimal("1")
 TICK_001 = Decimal("0.01")
 PRICE_MAX = Decimal("0.99")
 WIDE_SPREAD = Decimal("0.06")
+MIN_ORDER_SIZE = Decimal("5")  # Polymarket minimum
 
 
 def round_to_tick(value: Decimal, tick_size: Decimal) -> Decimal:
@@ -167,7 +168,9 @@ def calculate_shares(
         shares = min(shares, cap_shares)
 
     shares = shares.quantize(TICK_001, rounding=ROUND_DOWN)
-    return shares if shares >= TICK_001 else None
+    if shares < MIN_ORDER_SIZE:
+        return None
+    return shares
 
 
 def calculate_skew_ticks(

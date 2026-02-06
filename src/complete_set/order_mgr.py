@@ -135,19 +135,24 @@ class OrderManager:
             return True
 
         except Exception as e:
-            log.error("FAILED %s │ %s", label, e)
-            # Insert sentinel so maybe_replace returns SKIP for min_replace_millis
-            self._orders[token_id] = OrderState(
-                order_id="",
-                market=market,
-                token_id=token_id,
-                direction=direction,
-                price=price,
-                size=size,
-                placed_at=time.time(),
-                matched_size=ZERO,
-                seconds_to_end_at_entry=seconds_to_end,
-            )
+            error_str = str(e).lower()
+            is_balance_error = "balance" in error_str or "allowance" in error_str
+            log.error("FAILED %s │ %s (balance_error=%s)", label, e, is_balance_error)
+            if not is_balance_error:
+                # Insert sentinel so maybe_replace returns SKIP for min_replace_millis.
+                # Skip sentinel for balance errors — no order exists to track,
+                # and the sentinel would cause cancel→retry spam.
+                self._orders[token_id] = OrderState(
+                    order_id="",
+                    market=market,
+                    token_id=token_id,
+                    direction=direction,
+                    price=price,
+                    size=size,
+                    placed_at=time.time(),
+                    matched_size=ZERO,
+                    seconds_to_end_at_entry=seconds_to_end,
+                )
             return False
 
     # -----------------------------------------------------------------

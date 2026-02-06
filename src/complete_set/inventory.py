@@ -128,6 +128,15 @@ class InventoryTracker:
         """Get inventory for a market, returns empty if not tracked."""
         return self._inventory_by_market.get(slug, MarketInventory())
 
+    def clear_market(self, slug: str) -> None:
+        """Remove inventory for a resolved/expired market."""
+        removed = self._inventory_by_market.pop(slug, None)
+        if removed is not None:
+            log.info(
+                "CLEAR_INVENTORY %s (was U%s/D%s)",
+                slug, removed.up_shares, removed.down_shares,
+            )
+
     def get_all_inventories(self) -> dict[str, MarketInventory]:
         """Get all inventories for exposure calculation."""
         return dict(self._inventory_by_market)
