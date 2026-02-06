@@ -24,8 +24,16 @@ def should_enter(market: dict, prices: dict, config: dict) -> dict | None:
     entry_window = config["entry_window_sec"]
     exit_buffer = config["exit_buffer_sec"]
 
+    slug = market["slug"]
+    mins, secs = divmod(int(secs_left), 60)
+    time_str = f"{mins}m{secs:02d}s"
+
     # Must be in the entry window (last N minutes) but not too close to end
-    if secs_left > entry_window or secs_left < exit_buffer:
+    if secs_left > entry_window:
+        log.debug(f"  SKIP {slug[:40]} │ too early ({time_str} left, window={entry_window}s)")
+        return None
+    if secs_left < exit_buffer:
+        log.debug(f"  SKIP {slug[:40]} │ too late ({time_str} left, buffer={exit_buffer}s)")
         return None
 
     up_bid = prices["up_bid"]
@@ -40,21 +48,24 @@ def should_enter(market: dict, prices: dict, config: dict) -> dict | None:
     # Favorite must lead by min spread
     spread = abs(up_bid - down_bid)
     if spread < config["min_favorite_spread"]:
+        log.info(f"  SKIP {slug[:40]} │ spread too low ({spread:.2%} < {config['min_favorite_spread']:.0%})")
         return None
 
     # Don't overpay
     if fav_price > config["max_favorite_price"]:
+        log.info(f"  SKIP {slug[:40]} │ price too high ({fav_price:.4f} > {config['max_favorite_price']})")
         return None
 
     # Position sizing: how many shares can we buy
     max_size = config.get("max_position_size", 8)
     size = math.floor(max_size / fav_price)
     if size < 1:
+        log.info(f"  SKIP {slug[:40]} │ size=0 (max_pos=${max_size} / price={fav_price:.4f})")
         return None
 
     log.info(
-        f"ENTRY_SIGNAL market={market['slug']} side={fav_side} "
-        f"price={fav_price:.4f} spread={spread:.4f} secs_left={secs_left:.0f} size={size}"
+        f"  SIGNAL {slug[:40]} │ {fav_side.upper()} @ {fav_price:.4f} "
+        f"spread={spread:.2%} size={size} {time_str} left"
     )
 
     return {

@@ -39,6 +39,7 @@ def init_client(dry_run: bool) -> ClobClient:
 
 def place_order(
     client: ClobClient,
+    slug: str,
     token_id: str,
     side: str,
     price: float,
@@ -49,15 +50,17 @@ def place_order(
     Place an order on the CLOB.
 
     Args:
+        slug: market slug for logging
         side: "buy" or "sell"
 
     Returns:
         {success, order_id, filled_size, filled_price, error}
     """
+    cost = price * size
+    label = f"{slug[:40]} │ {side.upper()} {size}x @ {price:.4f} = ${cost:.2f}"
+
     if dry_run:
-        log.info(
-            f"DRY_ORDER token={token_id[:16]}... side={side} price={price:.4f} size={size:.2f}"
-        )
+        log.info(f"  DRY {label}")
         return {
             "success": True,
             "order_id": "dry-run",
@@ -77,19 +80,18 @@ def place_order(
             )
         )
         response = client.post_order(order)
+        order_id = getattr(response, "order_id", "n/a")
 
-        log.info(
-            f"ORDER_PLACED token={token_id[:16]}... side={side} price={price:.4f} size={size:.2f}"
-        )
+        log.info(f"  FILLED {label} (order={order_id})")
         return {
             "success": True,
-            "order_id": getattr(response, "order_id", None),
+            "order_id": order_id,
             "filled_size": size,
             "filled_price": price,
             "error": None,
         }
     except Exception as e:
-        log.error(f"ORDER_ERROR token={token_id[:16]}... error={e}")
+        log.error(f"  FAILED {label} │ {e}")
         return {
             "success": False, "order_id": None,
             "filled_size": 0, "filled_price": 0, "error": str(e),

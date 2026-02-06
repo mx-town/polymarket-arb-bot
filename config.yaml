@@ -15,3 +15,5 @@ polling:
 assets:
   - bitcoin
   - ethereum
+  - solana
+  - xrp

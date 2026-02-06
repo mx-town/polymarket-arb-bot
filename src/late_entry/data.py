@@ -13,7 +13,9 @@ GAMMA_HOST = "https://gamma-api.polymarket.com"
 # Series IDs for 15m updown markets
 SERIES_IDS = {
     "bitcoin": "10192",
-    "ethereum": "10194",
+    "ethereum": "10191",
+    "solana": "10423",
+    "xrp": "10422",
 }
 
 
@@ -99,7 +101,15 @@ def get_active_markets(assets: list[str]) -> list[dict]:
                     "asset": asset,
                 })
 
-    log.info(f"MARKETS_FOUND count={len(all_markets)}")
+    if all_markets:
+        now = datetime.now(UTC)
+        log.info(f"Found {len(all_markets)} active market(s):")
+        for m in all_markets:
+            secs_left = (m["end_date"] - now).total_seconds()
+            mins, secs = divmod(int(secs_left), 60)
+            log.info(f"  {m['asset'].upper():>5} │ {m['slug'][:50]:<50} │ {mins}m{secs:02d}s left")
+    else:
+        log.info("No active markets found")
     return all_markets
 
 
@@ -134,6 +144,12 @@ def get_market_prices(client, market: dict) -> dict | None:
 
     if not up or not down:
         return None
+
+    slug = market.get("slug", market.get("market_slug", "?"))
+    log.debug(
+        f"  {slug[:40]:<40} │ UP {up['best_bid']:.4f}/{up['best_ask']:.4f}  "
+        f"DOWN {down['best_bid']:.4f}/{down['best_ask']:.4f}"
+    )
 
     return {
         "up_bid": up["best_bid"],
