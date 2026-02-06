@@ -10,7 +10,7 @@ import time
 from decimal import Decimal
 from typing import Callable, Optional
 
-from py_clob_client.clob_types import OrderArgs
+from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY
 
 from complete_set.models import (
@@ -93,7 +93,7 @@ class OrderManager:
                     side=BUY,
                 )
             )
-            resp = client.post_order(order)
+            resp = client.post_order(order, OrderType.GTC)
 
             # Extract order ID from response
             order_id = None
@@ -106,6 +106,18 @@ class OrderManager:
 
             if not order_id:
                 log.warning("Order submission returned null orderId for %s", market.slug)
+                # Insert sentinel so maybe_replace returns SKIP for min_replace_millis
+                self._orders[token_id] = OrderState(
+                    order_id="",
+                    market=market,
+                    token_id=token_id,
+                    direction=direction,
+                    price=price,
+                    size=size,
+                    placed_at=time.time(),
+                    matched_size=ZERO,
+                    seconds_to_end_at_entry=seconds_to_end,
+                )
                 return False
 
             self._orders[token_id] = OrderState(
@@ -124,6 +136,18 @@ class OrderManager:
 
         except Exception as e:
             log.error("FAILED %s │ %s", label, e)
+            # Insert sentinel so maybe_replace returns SKIP for min_replace_millis
+            self._orders[token_id] = OrderState(
+                order_id="",
+                market=market,
+                token_id=token_id,
+                direction=direction,
+                price=price,
+                size=size,
+                placed_at=time.time(),
+                matched_size=ZERO,
+                seconds_to_end_at_entry=seconds_to_end,
+            )
             return False
 
     # -----------------------------------------------------------------
@@ -136,6 +160,7 @@ class OrderManager:
         new_price: Decimal,
         new_size: Decimal,
         min_replace_millis: int,
+        min_price_change: Decimal = ZERO,
     ) -> ReplaceDecision:
         """Decide whether to skip, place new, or replace existing order."""
         existing = self._orders.get(token_id)
@@ -146,9 +171,11 @@ class OrderManager:
         if age_ms < min_replace_millis:
             return ReplaceDecision.SKIP
 
-        same_price = existing.price == new_price
+        price_delta = abs(existing.price - new_price)
         same_size = existing.size == new_size
-        if same_price and same_size:
+
+        # Skip if price moved less than the minimum threshold
+        if price_delta < min_price_change and same_size:
             return ReplaceDecision.SKIP
 
         return ReplaceDecision.REPLACE

@@ -52,6 +52,7 @@ class Engine:
         log.info("  Min edge        : %s", self._cfg.min_edge)
         log.info("  Bankroll        : $%s", self._cfg.bankroll_usd)
         log.info("  Improve ticks   : %d", self._cfg.improve_ticks)
+        log.info("  Min replace     : %dms / %d ticks", self._cfg.min_replace_millis, self._cfg.min_replace_ticks)
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
         log.info("  Max shares/mkt  : %s", self._cfg.max_shares_per_market)
         log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
@@ -245,10 +246,12 @@ class Engine:
             self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE")
             return
 
-        # Edge check
+        # Edge check — don't cancel existing orders, just skip new quotes.
+        # Existing orders were placed when edge was sufficient; let them ride
+        # until stale timeout or a valid replacement comes along.
         if not has_minimum_edge(up_entry, down_entry, self._cfg.min_edge):
-            log.debug("Skipping %s - insufficient edge", market.slug)
-            self._order_mgr.cancel_market_orders(self._client, market, "INSUFFICIENT_EDGE")
+            log.debug("Skipping %s - insufficient edge (%.3f)", market.slug,
+                       ONE - (up_entry + down_entry))
             return
 
         # Optional taker mode
@@ -300,8 +303,10 @@ class Engine:
         if shares is None:
             return
 
+        min_price_change = TICK_SIZE * self._cfg.min_replace_ticks
         decision = self._order_mgr.maybe_replace(
-            token_id, entry_price, shares, self._cfg.min_replace_millis
+            token_id, entry_price, shares, self._cfg.min_replace_millis,
+            min_price_change=min_price_change,
         )
         if decision == ReplaceDecision.SKIP:
             return

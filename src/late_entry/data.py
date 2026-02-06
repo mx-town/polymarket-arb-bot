@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import UTC, datetime
 
 import requests
@@ -9,6 +10,9 @@ import requests
 log = logging.getLogger("data")
 
 GAMMA_HOST = "https://gamma-api.polymarket.com"
+
+# Throttle "none within 5m" log to avoid spam
+_last_no_markets_log: float = 0
 
 # Series IDs for 15m updown markets
 SERIES_IDS = {
@@ -131,7 +135,11 @@ def get_active_markets(assets: list[str]) -> list[dict]:
                 f"│ {fav} +{spread:.1%}"
             )
     else:
-        log.info(f"  {len(all_markets)} markets tracked, none within 5m yet")
+        global _last_no_markets_log
+        now_mono = time.monotonic()
+        if now_mono - _last_no_markets_log >= 30:
+            log.info(f"  {len(all_markets)} markets tracked, none within 5m yet")
+            _last_no_markets_log = now_mono
     return all_markets
 
 

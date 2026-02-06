@@ -13,6 +13,7 @@ class CompleteSetConfig:
     dry_run: bool = True
     refresh_millis: int = 500
     min_replace_millis: int = 5000
+    min_replace_ticks: int = 2
     improve_ticks: int = 2
     assets: tuple[str, ...] = ("bitcoin", "ethereum")
 
@@ -60,6 +61,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         dry_run=cs.get("dry_run", True),
         refresh_millis=cs.get("refresh_millis", 500),
         min_replace_millis=cs.get("min_replace_millis", 5000),
+        min_replace_ticks=cs.get("min_replace_ticks", 2),
         improve_ticks=cs.get("improve_ticks", 2),
         assets=tuple(assets),
         min_seconds_to_end=cs.get("min_seconds_to_end", 0),
