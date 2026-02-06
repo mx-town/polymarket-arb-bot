@@ -100,6 +100,8 @@ class InventoryTracker:
             self._inventory_by_market[market.slug] = MarketInventory(
                 up_shares=max(chain_up, existing.up_shares),
                 down_shares=max(chain_down, existing.down_shares),
+                up_cost=existing.up_cost,
+                down_cost=existing.down_cost,
                 last_up_fill_at=existing.last_up_fill_at,
                 last_down_fill_at=existing.last_down_fill_at,
                 last_up_fill_price=existing.last_up_fill_price,

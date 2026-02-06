@@ -17,6 +17,7 @@ from complete_set.market_data import discover_markets, get_top_of_book
 from complete_set.models import Direction, GabagoolMarket, ReplaceDecision, TopOfBook
 from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
+    calculate_balanced_shares,
     calculate_entry_price,
     calculate_exposure,
     calculate_shares,
@@ -278,9 +279,16 @@ class Engine:
                 self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up)
                 return
 
-        # Maker mode: quote both legs
-        self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up)
-        self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down)
+        # Maker mode: quote both legs with balanced share count
+        exposure = calculate_exposure(
+            self._order_mgr.get_open_orders(),
+            self._inventory.get_all_inventories(),
+        )
+        balanced = calculate_balanced_shares(
+            market.slug, up_entry, down_entry, self._cfg, seconds_to_end, exposure,
+        )
+        self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up, pre_shares=balanced)
+        self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down, pre_shares=balanced)
 
     def _maybe_quote_token(
         self,
@@ -290,6 +298,7 @@ class Engine:
         book: TopOfBook,
         seconds_to_end: int,
         skew_ticks: int,
+        pre_shares: Decimal | None = None,
     ) -> None:
         if self._balance_failures.get(market.slug, 0) >= 3:
             return
@@ -309,11 +318,14 @@ class Engine:
                 )
                 return
 
-        exposure = calculate_exposure(
-            self._order_mgr.get_open_orders(),
-            self._inventory.get_all_inventories(),
-        )
-        shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
+        if pre_shares is not None:
+            shares = pre_shares
+        else:
+            exposure = calculate_exposure(
+                self._order_mgr.get_open_orders(),
+                self._inventory.get_all_inventories(),
+            )
+            shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
         if shares is None:
             return
 
@@ -412,14 +424,14 @@ class Engine:
             lag_fill_at = inv.last_down_fill_at
             lagging_book = down_book
             lagging_token = market.down_token_id
-            lead_fill_price = inv.last_up_fill_price
+            lead_fill_price = inv.up_vwap  # VWAP instead of last fill
         else:
             lagging = Direction.UP
             lead_fill_at = inv.last_down_fill_at
             lag_fill_at = inv.last_up_fill_at
             lagging_book = up_book
             lagging_token = market.up_token_id
-            lead_fill_price = inv.last_down_fill_price
+            lead_fill_price = inv.down_vwap  # VWAP instead of last fill
 
         if lead_fill_at is None:
             log.debug("FAST_TOP_UP_SKIP %s no lead fill timestamp", market.slug)

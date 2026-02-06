@@ -173,6 +173,50 @@ def calculate_shares(
     return shares
 
 
+def calculate_balanced_shares(
+    slug: str,
+    up_price: Decimal,
+    down_price: Decimal,
+    cfg: CompleteSetConfig,
+    seconds_to_end: int,
+    current_exposure: Decimal,
+) -> Optional[Decimal]:
+    """Calculate order size so both legs get the same number of shares.
+
+    Uses the MORE EXPENSIVE price for bankroll caps so both legs fit
+    within the budget, preventing share imbalances from asymmetric capping.
+    """
+    shares = replica_shares_by_time(slug, seconds_to_end)
+    if shares is None:
+        return None
+    if up_price is None or up_price <= ZERO or down_price is None or down_price <= ZERO:
+        return None
+
+    bankroll = cfg.bankroll_usd
+
+    # Per-order cap: use the more expensive price so both legs fit
+    if bankroll > ZERO and cfg.max_order_bankroll_fraction > ZERO:
+        per_order_cap = bankroll * cfg.max_order_bankroll_fraction
+        expensive = max(up_price, down_price)
+        cap_shares = (per_order_cap / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
+        shares = min(shares, cap_shares)
+
+    # Total bankroll cap: use the more expensive price
+    if bankroll > ZERO and cfg.max_total_bankroll_fraction > ZERO:
+        total_cap = bankroll * cfg.max_total_bankroll_fraction
+        remaining = total_cap - current_exposure
+        if remaining <= ZERO:
+            return None
+        expensive = max(up_price, down_price)
+        cap_shares = (remaining / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
+        shares = min(shares, cap_shares)
+
+    shares = shares.quantize(TICK_001, rounding=ROUND_DOWN)
+    if shares < MIN_ORDER_SIZE:
+        return None
+    return shares
+
+
 def calculate_skew_ticks(
     inventory: MarketInventory,
     max_skew: int,
