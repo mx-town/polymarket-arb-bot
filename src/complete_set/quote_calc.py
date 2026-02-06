@@ -272,7 +272,11 @@ def calculate_exposure(
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
-            unhedged_notional += abs_imbalance * Decimal("0.50")
+            if inv.imbalance > ZERO:
+                unit_cost = inv.last_up_fill_price if inv.last_up_fill_price else Decimal("0.50")
+            else:
+                unit_cost = inv.last_down_fill_price if inv.last_down_fill_price else Decimal("0.50")
+            unhedged_notional += abs_imbalance * unit_cost
         # Hedged pairs represent locked capital (~$1 per complete set)
         hedged_pairs = min(inv.up_shares, inv.down_shares)
         if hedged_pairs > ZERO:
