@@ -90,14 +90,16 @@ class InventoryTracker:
                     self._inventory_by_market[market.slug] = MarketInventory()
                 continue
 
-            up_shares = self._shares_by_token.get(market.up_token_id, ZERO)
-            down_shares = self._shares_by_token.get(market.down_token_id, ZERO)
+            chain_up = self._shares_by_token.get(market.up_token_id, ZERO)
+            chain_down = self._shares_by_token.get(market.down_token_id, ZERO)
 
             if existing is None:
                 existing = MarketInventory()
+            # Use max() to merge: never reduce shares below what record_fill
+            # has accumulated, even if CLOB positions haven't settled yet.
             self._inventory_by_market[market.slug] = MarketInventory(
-                up_shares=up_shares,
-                down_shares=down_shares,
+                up_shares=max(chain_up, existing.up_shares),
+                down_shares=max(chain_down, existing.down_shares),
                 last_up_fill_at=existing.last_up_fill_at,
                 last_down_fill_at=existing.last_down_fill_at,
                 last_up_fill_price=existing.last_up_fill_price,

@@ -40,6 +40,7 @@ class Engine:
         self._active_markets: list[GabagoolMarket] = []
         self._last_discovery: float = 0.0
         self._prev_quotable_slugs: set[str] = set()
+        self._balance_failures: dict[str, int] = {}  # market slug -> consecutive failures
 
     async def run(self) -> None:
         """Main event loop."""
@@ -79,6 +80,7 @@ class Engine:
         if now - self._last_discovery > 30.0:
             self._active_markets = discover_markets(self._cfg.assets)
             self._last_discovery = now
+            self._balance_failures.clear()
             self._log_market_transitions(now)
             self._log_summary(now)
 
@@ -280,6 +282,9 @@ class Engine:
         seconds_to_end: int,
         skew_ticks: int,
     ) -> None:
+        if self._balance_failures.get(market.slug, 0) >= 3:
+            return
+
         entry_price = calculate_entry_price(book, TICK_SIZE, self._cfg.improve_ticks, skew_ticks)
         if entry_price is None:
             return
@@ -315,11 +320,15 @@ class Engine:
             self._order_mgr.cancel_order(self._client, token_id, "REPLACE_PRICE")
 
         reason = "REPLACE" if decision == ReplaceDecision.REPLACE else "QUOTE"
-        self._order_mgr.place_order(
+        success = self._order_mgr.place_order(
             self._client, market, token_id, direction,
             entry_price, shares, seconds_to_end, reason,
             on_fill=self._handle_fill,
         )
+        if not success:
+            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
+        else:
+            self._balance_failures.pop(market.slug, None)
 
     def _maybe_take_token(
         self,
@@ -329,6 +338,9 @@ class Engine:
         book: TopOfBook,
         seconds_to_end: int,
     ) -> None:
+        if self._balance_failures.get(market.slug, 0) >= 3:
+            return
+
         if book.best_ask is None or book.best_ask > Decimal("0.99"):
             return
 
@@ -351,11 +363,15 @@ class Engine:
             "TAKER %s on %s at ask %s (size=%s, %ds left)",
             direction.value, market.slug, book.best_ask, shares, seconds_to_end,
         )
-        self._order_mgr.place_order(
+        success = self._order_mgr.place_order(
             self._client, market, token_id, direction,
             book.best_ask, shares, seconds_to_end, "TAKER",
             on_fill=self._handle_fill,
         )
+        if not success:
+            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
+        else:
+            self._balance_failures.pop(market.slug, None)
 
     def _maybe_fast_top_up(
         self,
@@ -443,6 +459,8 @@ class Engine:
         imbalance_shares: Decimal,
         reason: str,
     ) -> None:
+        if self._balance_failures.get(market.slug, 0) >= 3:
+            return
         if imbalance_shares < Decimal("0.01"):
             return
         if book.best_ask is None or book.best_ask > Decimal("0.99"):
@@ -493,11 +511,15 @@ class Engine:
             direction.value, market.slug, book.best_ask,
             imbalance_shares, top_up_shares, seconds_to_end, reason,
         )
-        self._order_mgr.place_order(
+        success = self._order_mgr.place_order(
             self._client, market, token_id, direction,
             book.best_ask, top_up_shares, seconds_to_end, reason,
             on_fill=self._handle_fill,
         )
+        if not success:
+            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
+        else:
+            self._balance_failures.pop(market.slug, None)
 
     def _should_take(
         self, edge: Decimal, up_book: TopOfBook, down_book: TopOfBook

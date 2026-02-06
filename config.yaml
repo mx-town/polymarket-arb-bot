@@ -40,10 +40,10 @@ complete_set:
   max_total_bankroll_fraction: 0.50
 
   # Top-up (disabled until core spread capture validated)
-  top_up_enabled: false
+  top_up_enabled: true
   top_up_seconds_to_end: 60
-  top_up_min_shares: 10
-  fast_top_up_enabled: false
+  top_up_min_shares: 2
+  fast_top_up_enabled: true
   fast_top_up_min_seconds: 3
   fast_top_up_max_seconds: 120
   fast_top_up_cooldown_millis: 15000

@@ -190,6 +190,10 @@ class OrderManager:
         if state is None:
             return
 
+        if not state.order_id:
+            log.debug("REMOVE_SENTINEL %s reason=%s", token_id[:16], reason)
+            return  # sentinel, nothing to cancel on CLOB
+
         if self._dry_run:
             log.info("DRY_CANCEL %s reason=%s", token_id[:16], reason)
             return
