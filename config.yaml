@@ -3,10 +3,10 @@ trading:
   max_position_size: 8
 
 late_entry:
-  entry_window_sec: 90      # Enter in last 4 minutes
-  exit_buffer_sec: 15        # Exit 30s before resolution
-  min_favorite_spread: 0.10  # Favorite must lead by 10%+
-  max_favorite_price: 0.95   # Don't buy above 0.90
+  entry_window_sec: 30      # Enter in last 30 seconds
+  exit_buffer_sec: 5        # Exit 5s before resolution
+  min_favorite_spread: 0.20  # Favorite must lead by 20%+
+  max_favorite_price: 0.95   # Don't buy above 0.95
   take_profit_pct: 0.15      # Take profit at 15% gain
 
 polling:

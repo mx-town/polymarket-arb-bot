@@ -39,6 +39,7 @@ class Engine:
         self._inventory = InventoryTracker()
         self._active_markets: list[GabagoolMarket] = []
         self._last_discovery: float = 0.0
+        self._prev_quotable_slugs: set[str] = set()
 
     async def run(self) -> None:
         """Main event loop."""
@@ -51,6 +52,8 @@ class Engine:
         log.info("  Min edge        : %s", self._cfg.min_edge)
         log.info("  Bankroll        : $%s", self._cfg.bankroll_usd)
         log.info("  Improve ticks   : %d", self._cfg.improve_ticks)
+        log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
+        log.info("  Max shares/mkt  : %s", self._cfg.max_shares_per_market)
         log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
         log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
@@ -75,6 +78,8 @@ class Engine:
         if now - self._last_discovery > 30.0:
             self._active_markets = discover_markets(self._cfg.assets)
             self._last_discovery = now
+            self._log_market_transitions(now)
+            self._log_summary(now)
 
         # Refresh positions
         self._inventory.refresh_if_stale(self._client)
@@ -102,6 +107,81 @@ class Engine:
             filled_shares,
             state.price,
         )
+
+    def _log_market_transitions(self, now: float) -> None:
+        """Log markets entering/leaving the quotable time window."""
+        quotable_now: set[str] = set()
+        for m in self._active_markets:
+            ste = int(m.end_time - now)
+            max_lt = 900 if m.market_type == "updown-15m" else 3600
+            min_ste = max(0, self._cfg.min_seconds_to_end)
+            max_ste = min(max_lt, max(min_ste, self._cfg.max_seconds_to_end))
+            if min_ste <= ste <= max_ste:
+                quotable_now.add(m.slug)
+
+        entered = quotable_now - self._prev_quotable_slugs
+        exited = self._prev_quotable_slugs - quotable_now
+
+        for slug in sorted(entered):
+            log.info("ENTER window │ %s", slug)
+        for slug in sorted(exited):
+            log.info("EXIT  window │ %s", slug)
+
+        self._prev_quotable_slugs = quotable_now
+
+    def _log_summary(self, now: float) -> None:
+        """Periodic summary: inventory, exposure, entry prices vs book."""
+        exposure = calculate_exposure(
+            self._order_mgr.get_open_orders(),
+            self._inventory.get_all_inventories(),
+        )
+        open_count = len(self._order_mgr.get_open_orders())
+
+        log.info(
+            "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s",
+            len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
+        )
+
+        for market in self._active_markets:
+            ste = int(market.end_time - now)
+            inv = self._inventory.get_inventory(market.slug)
+            hedged = min(inv.up_shares, inv.down_shares)
+
+            up_book = get_top_of_book(self._client, market.up_token_id)
+            down_book = get_top_of_book(self._client, market.down_token_id)
+
+            up_bid = up_book.best_bid if up_book else None
+            up_ask = up_book.best_ask if up_book else None
+            dn_bid = down_book.best_bid if down_book else None
+            dn_ask = down_book.best_ask if down_book else None
+
+            # Compute what entry prices would be (no skew for summary)
+            up_entry = calculate_entry_price(
+                up_book, TICK_SIZE, self._cfg.improve_ticks, 0
+            ) if up_book and up_bid is not None and up_ask is not None else None
+            dn_entry = calculate_entry_price(
+                down_book, TICK_SIZE, self._cfg.improve_ticks, 0
+            ) if down_book and dn_bid is not None and dn_ask is not None else None
+
+            edge_str = "?"
+            if up_entry and dn_entry:
+                edge = ONE - (up_entry + dn_entry)
+                edge_str = f"{edge:.3f}"
+
+            up_order = self._order_mgr.get_order(market.up_token_id)
+            dn_order = self._order_mgr.get_order(market.down_token_id)
+            up_ord_str = f"ord@{up_order.price}" if up_order else "---"
+            dn_ord_str = f"ord@{dn_order.price}" if dn_order else "---"
+
+            log.info(
+                "  %s │ %ds │ inv=U%s/D%s(h%s) │ "
+                "book=U[%s/%s] D[%s/%s] │ entry=U%s D%s │ edge=%s │ %s %s",
+                market.slug[-30:], ste,
+                inv.up_shares, inv.down_shares, hedged,
+                up_bid, up_ask, dn_bid, dn_ask,
+                up_entry or "?", dn_entry or "?", edge_str,
+                up_ord_str, dn_ord_str,
+            )
 
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
         seconds_to_end = int(market.end_time - now)

@@ -18,7 +18,7 @@ class CompleteSetConfig:
 
     # Time window
     min_seconds_to_end: int = 0
-    max_seconds_to_end: int = 900
+    max_seconds_to_end: int = 3600
 
     # Edge & skew
     min_edge: Decimal = Decimal("0.01")
@@ -63,7 +63,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         improve_ticks=cs.get("improve_ticks", 2),
         assets=tuple(assets),
         min_seconds_to_end=cs.get("min_seconds_to_end", 0),
-        max_seconds_to_end=cs.get("max_seconds_to_end", 900),
+        max_seconds_to_end=cs.get("max_seconds_to_end", 3600),
         min_edge=Decimal(str(cs.get("min_edge", "0.01"))),
         max_skew_ticks=cs.get("max_skew_ticks", 1),
         imbalance_for_max_skew=Decimal(str(cs.get("imbalance_for_max_skew", "200"))),
