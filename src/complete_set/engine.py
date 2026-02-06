@@ -412,14 +412,12 @@ class Engine:
             lag_fill_at = inv.last_down_fill_at
             lagging_book = down_book
             lagging_token = market.down_token_id
-            lead_fill_price = inv.last_up_fill_price
         else:
             lagging = Direction.UP
             lead_fill_at = inv.last_down_fill_at
             lag_fill_at = inv.last_up_fill_at
             lagging_book = up_book
             lagging_token = market.up_token_id
-            lead_fill_price = inv.last_down_fill_price
 
         if lead_fill_at is None:
             log.debug("FAST_TOP_UP_SKIP %s no lead fill timestamp", market.slug)
@@ -446,8 +444,10 @@ class Engine:
             )
             return
 
-        # Lag fill must be before lead fill (or absent)
-        if lag_fill_at is not None and lag_fill_at >= lead_fill_at:
+        # Lag fill must be before lead fill (or absent).
+        # Use 1s tolerance: simultaneous initial fills (within 1s) aren't a
+        # "catch-up" and should still allow a top-up.
+        if lag_fill_at is not None and lag_fill_at > lead_fill_at + 1.0:
             log.debug("FAST_TOP_UP_SKIP %s lag fill after lead fill", market.slug)
             return
 
@@ -462,20 +462,9 @@ class Engine:
             )
             return
 
-        # Check hedged edge
-        if lead_fill_price is None:
-            if lagging == Direction.DOWN:
-                lead_fill_price = up_book.best_bid
-            else:
-                lead_fill_price = down_book.best_bid
-        if lead_fill_price is not None:
-            hedged_edge = ONE - (lead_fill_price + lagging_book.best_ask)
-            if hedged_edge < self._cfg.fast_top_up_min_edge:
-                log.debug(
-                    "FAST_TOP_UP_SKIP %s hedged_edge=%s < min_edge=%s",
-                    market.slug, hedged_edge, self._cfg.fast_top_up_min_edge,
-                )
-                return
+        # NOTE: hedged_edge gate removed. Top-ups reduce naked directional
+        # risk — locking in a small per-share loss is preferable to carrying
+        # unhedged exposure. Per-order cap and spread checks still apply.
 
         self._inventory.mark_top_up(market.slug)
         self._maybe_top_up_lagging(
