@@ -2,82 +2,30 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["research", "engine", "trading", "api"]
-
 [project]
-name = "polymarket-arb-bot"
-version = "0.2.0"
-description = "Polymarket arbitrage bot with lag arbitrage"
+name = "polymarket-late-entry"
+version = "0.1.0"
+description = "Late-entry bot for Polymarket 15m crypto Up/Down markets"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
     "requests",
     "python-dotenv",
     "pyyaml",
-    "websocket-client",
-    "fastapi",
-    "uvicorn[standard]",
-    "pandas>=3.0.0",
-    "numpy>=2.4.2",
-    "scipy>=1.17.0",
-    "pyarrow>=23.0.0",
-    "web3>=6.0.0",
 ]
-
-[dependency-groups]
-dev = [
-    "ruff>=0.8.0",
-    "pytest>=8.0.0",
-    "pytest-mock>=3.12.0",
-]
-research = [
-    "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "scipy>=1.10.0",
-    "pyarrow>=14.0.0",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_unit_*.py"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
-pythonpath = ["."]
 
 [project.scripts]
-arb-bot = "trading.cli:main"
-arb-bot-direct = "trading.bot:main"
-arb-api = "api.server:main"
-arb-research = "research.cli:main"
+late-entry = "late_entry.bot:main"
+
+[dependency-groups]
+dev = ["ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/late_entry"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # Pyflakes
-    "I",      # isort
-    "B",      # flake8-bugbear
-    "C4",     # flake8-comprehensions
-    "UP",     # pyupgrade
-    "SIM",    # flake8-simplify
-]
-ignore = [
-    "E501",   # line too long (handled by formatter)
-    "B008",   # do not perform function calls in argument defaults
-    "B904",   # raise from inside except
-    "SIM108", # use ternary operator instead of if-else
-]
-
-[tool.ruff.lint.isort]
-known-first-party = ["trading", "api", "engine", "research"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
+select = ["E", "F", "I", "W"]
