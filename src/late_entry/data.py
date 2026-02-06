@@ -61,7 +61,7 @@ def get_active_markets(assets: list[str]) -> list[dict]:
         try:
             resp = requests.get(
                 f"{GAMMA_HOST}/events",
-                params={"series_id": series_id, "closed": "false", "limit": 5},
+                params={"series_id": series_id, "closed": "false", "limit": 2},
                 timeout=15,
             )
             resp.raise_for_status()
@@ -91,6 +91,16 @@ def get_active_markets(assets: list[str]) -> list[dict]:
                 if len(outcomes) >= 2 and "down" in outcomes[0].lower():
                     up_token, down_token = down_token, up_token
 
+                # Parse Gamma prices
+                outcome_prices = parse_json_field(m.get("outcomePrices"))
+                if len(outcome_prices) != 2:
+                    continue
+                up_price = float(outcome_prices[0])
+                down_price = float(outcome_prices[1])
+                # Swap if outcomes are reversed
+                if len(outcomes) >= 2 and "down" in outcomes[0].lower():
+                    up_price, down_price = down_price, up_price
+
                 all_markets.append({
                     "condition_id": m.get("conditionId", ""),
                     "question": m.get("question", event.get("title", "Unknown")),
@@ -99,61 +109,42 @@ def get_active_markets(assets: list[str]) -> list[dict]:
                     "down_token": down_token,
                     "end_date": end_date,
                     "asset": asset,
+                    "up_price": up_price,
+                    "down_price": down_price,
+                    "best_bid": float(m.get("bestBid", 0)),
+                    "best_ask": float(m.get("bestAsk", 1)),
+                    "spread": float(m.get("spread", 1)),
                 })
 
-    if all_markets:
-        now = datetime.now(UTC)
-        log.info(f"Found {len(all_markets)} active market(s):")
-        for m in all_markets:
+    # Only log markets within ~5 minutes (actionable soon)
+    now = datetime.now(UTC)
+    nearby = [m for m in all_markets if (m["end_date"] - now).total_seconds() <= 300]
+    if nearby:
+        for m in nearby:
             secs_left = (m["end_date"] - now).total_seconds()
             mins, secs = divmod(int(secs_left), 60)
-            log.info(f"  {m['asset'].upper():>5} │ {m['slug'][:50]:<50} │ {mins}m{secs:02d}s left")
+            fav = "UP" if m["up_price"] > m["down_price"] else "DN"
+            spread = abs(m["up_price"] - m["down_price"])
+            log.info(
+                f"  {m['asset'].upper():>5} │ {m['slug'][:40]:<40} │ "
+                f"{mins}m{secs:02d}s │ U={m['up_price']:.3f} D={m['down_price']:.3f} "
+                f"│ {fav} +{spread:.1%}"
+            )
     else:
-        log.info("No active markets found")
+        log.info(f"  {len(all_markets)} markets tracked, none within 5m yet")
     return all_markets
 
 
-def get_prices(client, token_id: str) -> dict | None:
+def get_market_prices(market: dict) -> dict:
     """
-    Fetch best bid/ask for a token from the CLOB order book.
+    Extract Gamma outcome prices already embedded in the market dict.
 
-    Returns: {best_bid, best_ask} or None
+    Returns: {up_price, down_price, best_bid, best_ask, spread}
     """
-    try:
-        book = client.get_order_book(token_id)
-        bids = getattr(book, "bids", []) or []
-        asks = getattr(book, "asks", []) or []
-
-        best_bid = float(bids[0].price) if bids else 0.0
-        best_ask = float(asks[0].price) if asks else 1.0
-
-        return {"best_bid": best_bid, "best_ask": best_ask}
-    except Exception as e:
-        log.error(f"PRICE_ERROR token={token_id[:16]}... error={e}")
-        return None
-
-
-def get_market_prices(client, market: dict) -> dict | None:
-    """
-    Fetch prices for both sides of a market.
-
-    Returns: {up_bid, up_ask, down_bid, down_ask} or None
-    """
-    up = get_prices(client, market["up_token"])
-    down = get_prices(client, market["down_token"])
-
-    if not up or not down:
-        return None
-
-    slug = market.get("slug", market.get("market_slug", "?"))
-    log.debug(
-        f"  {slug[:40]:<40} │ UP {up['best_bid']:.4f}/{up['best_ask']:.4f}  "
-        f"DOWN {down['best_bid']:.4f}/{down['best_ask']:.4f}"
-    )
-
     return {
-        "up_bid": up["best_bid"],
-        "up_ask": up["best_ask"],
-        "down_bid": down["best_bid"],
-        "down_ask": down["best_ask"],
+        "up_price": market["up_price"],
+        "down_price": market["down_price"],
+        "best_bid": market.get("best_bid", 0),
+        "best_ask": market.get("best_ask", 1),
+        "spread": market.get("spread", 1),
     }

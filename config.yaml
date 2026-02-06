@@ -6,11 +6,11 @@ late_entry:
   entry_window_sec: 240      # Enter in last 4 minutes
   exit_buffer_sec: 30        # Exit 30s before resolution
   min_favorite_spread: 0.10  # Favorite must lead by 10%+
-  max_favorite_price: 0.75   # Don't buy above 0.75
+  max_favorite_price: 0.90   # Don't buy above 0.90
   take_profit_pct: 0.15      # Take profit at 15% gain
 
 polling:
-  interval_sec: 10
+  interval_sec: 5
 
 assets:
   - bitcoin

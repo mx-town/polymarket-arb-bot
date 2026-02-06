@@ -1,7 +1,7 @@
 """Late-entry strategy for 15m Up/Down markets.
 
 Buy the favorite side in the last 4 minutes before resolution.
-The favorite is whichever side (up/down) has the higher bid price.
+Uses Gamma outcome prices as the signal (probability that side wins).
 """
 
 import logging
@@ -15,6 +15,7 @@ def should_enter(market: dict, prices: dict, config: dict) -> dict | None:
     """
     Check if we should enter a late-entry position.
 
+    Uses Gamma outcome prices (0-1 probability) to determine favorite.
     Returns signal dict {side, token_id, price, size} or None.
     """
     now = datetime.now(UTC)
@@ -36,19 +37,22 @@ def should_enter(market: dict, prices: dict, config: dict) -> dict | None:
         log.debug(f"  SKIP {slug[:40]} │ too late ({time_str} left, buffer={exit_buffer}s)")
         return None
 
-    up_bid = prices["up_bid"]
-    down_bid = prices["down_bid"]
+    up_price = prices["up_price"]
+    down_price = prices["down_price"]
 
-    # Determine favorite
-    if up_bid > down_bid:
-        fav_side, fav_token, fav_price = "up", market["up_token"], prices["up_ask"]
+    # Determine favorite by Gamma outcome price (probability)
+    if up_price > down_price:
+        fav_side, fav_token, fav_price = "up", market["up_token"], up_price
     else:
-        fav_side, fav_token, fav_price = "down", market["down_token"], prices["down_ask"]
+        fav_side, fav_token, fav_price = "down", market["down_token"], down_price
 
     # Favorite must lead by min spread
-    spread = abs(up_bid - down_bid)
+    spread = abs(up_price - down_price)
     if spread < config["min_favorite_spread"]:
-        log.info(f"  SKIP {slug[:40]} │ spread too low ({spread:.2%} < {config['min_favorite_spread']:.0%})")
+        log.info(
+            f"  SKIP {slug[:40]} │ spread too low "
+            f"({spread:.2%} < {config['min_favorite_spread']:.0%})"
+        )
         return None
 
     # Don't overpay
@@ -81,6 +85,7 @@ def should_exit(position: dict, prices: dict, config: dict) -> dict | None:
     """
     Check if we should exit an existing position.
 
+    Uses Gamma outcome price for the position's side as current value.
     Returns signal dict {token_id, price, size, reason} or None.
     """
     now = datetime.now(UTC)
@@ -92,18 +97,18 @@ def should_exit(position: dict, prices: dict, config: dict) -> dict | None:
     entry_price = position["entry_price"]
     size = position["size"]
 
-    # Current bid for our side
-    bid = prices["up_bid"] if side == "up" else prices["down_bid"]
+    # Current Gamma price for our side
+    current_price = prices["up_price"] if side == "up" else prices["down_price"]
 
     # Take profit
-    profit_pct = (bid - entry_price) / entry_price
+    profit_pct = (current_price - entry_price) / entry_price
     if profit_pct >= config["take_profit_pct"]:
-        log.info(f"EXIT_TAKE_PROFIT market={position['market_slug']} profit={profit_pct:.2%}")
-        return {"token_id": token_id, "price": bid, "size": size, "reason": "take_profit"}
+        log.info(f"  EXIT_TAKE_PROFIT {position['market_slug']} profit={profit_pct:.2%}")
+        return {"token_id": token_id, "price": current_price, "size": size, "reason": "take_profit"}
 
     # Exit before resolution buffer
     if secs_left <= config["exit_buffer_sec"]:
-        log.info(f"EXIT_BUFFER market={position['market_slug']} secs_left={secs_left:.0f}")
-        return {"token_id": token_id, "price": bid, "size": size, "reason": "buffer_exit"}
+        log.info(f"  EXIT_BUFFER {position['market_slug']} secs_left={secs_left:.0f}")
+        return {"token_id": token_id, "price": current_price, "size": size, "reason": "buffer_exit"}
 
     return None

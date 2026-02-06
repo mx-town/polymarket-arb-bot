@@ -81,13 +81,15 @@ def _tick(client, assets, positions, cfg, dry_run):
         log.info("No active markets this tick")
         return
 
-    # Check exits first
+    # Check exits — re-fetch Gamma prices for positions
     closed = []
     for pos in positions:
-        prices = get_market_prices(client, pos)
-        if not prices:
-            log.warning(f"  Could not fetch prices for position {pos['market_slug']}")
+        # Find this position's market in the current tick's markets
+        pos_market = next((m for m in markets if m["slug"] == pos["market_slug"]), None)
+        if not pos_market:
+            log.warning(f"  Position {pos['market_slug']} not found in active markets")
             continue
+        prices = get_market_prices(pos_market)
 
         signal = should_exit(pos, prices, cfg)
         if signal:
@@ -113,10 +115,7 @@ def _tick(client, assets, positions, cfg, dry_run):
         if market["slug"] in active_slugs:
             continue
 
-        prices = get_market_prices(client, market)
-        if not prices:
-            log.warning(f"  Could not fetch prices for {market['slug']}")
-            continue
+        prices = get_market_prices(market)
 
         signal = should_enter(market, prices, cfg)
         if not signal:
