@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { startBot, stopBot, restartTradingBot, refreshMarkets } from '../api/client';
+import { startBot, stopBot, restartTradingBot } from '../api/client';
 
 interface Props {
   running: boolean;
@@ -13,7 +13,6 @@ export function ControlPanel({ running, pid, uptimeSec, dryRun, onRefresh }: Pro
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const handleStart = async () => {
@@ -55,23 +54,6 @@ export function ControlPanel({ running, pid, uptimeSec, dryRun, onRefresh }: Pro
       setMessage({ text: e instanceof Error ? e.message : 'Failed to restart', type: 'error' });
     } finally {
       setRestarting(false);
-    }
-  };
-
-  const handleRefreshMarkets = async () => {
-    setRefreshing(true);
-    setMessage(null);
-    try {
-      const result = await refreshMarkets();
-      setMessage({ text: result.message, type: 'success' });
-      setTimeout(() => onRefresh?.(), 1000);
-    } catch (e) {
-      setMessage({
-        text: e instanceof Error ? e.message : 'Failed to refresh markets',
-        type: 'error',
-      });
-    } finally {
-      setRefreshing(false);
     }
   };
 
@@ -217,7 +199,7 @@ export function ControlPanel({ running, pid, uptimeSec, dryRun, onRefresh }: Pro
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
+            gridTemplateColumns: '1fr 1fr 1fr',
             gap: '0.5rem',
           }}
         >
@@ -301,34 +283,6 @@ export function ControlPanel({ running, pid, uptimeSec, dryRun, onRefresh }: Pro
               <>
                 <span>{'\u25A0'}</span>
                 Stop
-              </>
-            )}
-          </button>
-
-          {/* Refresh Markets Button */}
-          <button
-            onClick={handleRefreshMarkets}
-            disabled={refreshing || !running}
-            style={{
-              ...buttonBase,
-              ...(running && !refreshing
-                ? {
-                    background:
-                      'linear-gradient(135deg, var(--accent-blue) 0%, #2266aa 100%)',
-                    color: 'white',
-                  }
-                : disabledStyle),
-            }}
-          >
-            {refreshing ? (
-              <>
-                <span className="animate-pulse">{'\u25CF'}</span>
-                Refreshing...
-              </>
-            ) : (
-              <>
-                <span>{'\u21BB'}</span>
-                Refresh
               </>
             )}
           </button>

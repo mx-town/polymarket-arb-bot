@@ -23,6 +23,15 @@ def cmd_trade(args: argparse.Namespace) -> int:
         # Emit stage markers for API subprocess parsing
         print("BOT_START", flush=True)
 
+    # Rewrite sys.argv so build_config()/parse_args() in bot.py sees
+    # only the flags it understands (it has its own argparse parser).
+    argv = [sys.argv[0], "--config", str(args.config)]
+    if args.live:
+        argv.append("--live")
+    if args.verbose:
+        argv.append("--verbose")
+    sys.argv = argv
+
     # Run the bot (uses default config loading from build_config)
     return bot_main()
 

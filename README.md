@@ -1,6 +1,6 @@
-# Polymarket BTC 15-Minute Arbitrage Bot
+# Polymarket Arbitrage Bot
 
-Automated arbitrage system for Polymarket's Bitcoin 15-minute UP/DOWN binary prediction markets. Exploits pricing inefficiencies through Dutch Book arbitrage, lag arbitrage, and momentum-based directional trades.
+Automated arbitrage system for Polymarket's BTC and ETH hourly UP/DOWN binary prediction markets. Exploits pricing inefficiencies through lag arbitrage and momentum-based directional trades, enhanced by a probability surface model.
 
 **Target Performance:** 95-98% win rate with minimum 2.5-3% edge after fees.
 
@@ -65,9 +65,7 @@ Take directional positions when technical indicators align with order book imbal
 │  │                                                              │   │
 │  │   ┌──────────────┐         ┌─────────────────────────────┐  │   │
 │  │   │   Bot        │◀───────▶│  Polymarket CLOB WebSocket  │  │   │
-│  │   │  (main.py)   │         │  (order books, prices)      │  │   │
-│  │   │              │◀───────▶│  Polymarket RTDS WebSocket  │  │   │
-│  │   │              │         │  (Chainlink prices)         │  │   │
+│  │   │  (arb-bot)   │         │  (order books, prices)      │  │   │
 │  │   │              │◀───────▶│  Binance WebSocket          │  │   │
 │  │   │              │         │  (spot trades, momentum)    │  │   │
 │  │   └──────┬───────┘         └─────────────────────────────┘  │   │
@@ -81,9 +79,9 @@ Take directional positions when technical indicators align with order book imbal
 │                              │                                      │
 │  ┌───────────────────────────┴─────────────────────────────────┐   │
 │  │  Frontend Container (Node)                                   │   │
-│  │  React Dashboard :3000                                       │   │
+│  │  React Dashboard :5173 (dev) / :8000 (prod)                  │   │
 │  │  - Real-time metrics via WebSocket                          │   │
-│  │  - Market prices, lag windows, P&L charts                   │   │
+│  │  - Market prices, lag windows, signal feed                  │   │
 │  │  - Bot control (start/stop, config)                         │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -168,14 +166,14 @@ cd polymarket-arb-bot
 # 2. Create environment file
 cp .env.example .env
 
-# 3. Start services
-docker compose up -d
+# 3. Start services (Docker)
+pnpm docker:up
 
 # 4. View dashboard
-open http://localhost:3000
+open http://localhost:5173
 
 # 5. View logs
-docker compose logs -f backend
+pnpm docker:logs
 ```
 
 ## Local Development
@@ -194,38 +192,50 @@ uv sync
 # Install frontend dependencies
 cd dashboard && pnpm install && cd ..
 
-# Run backend
-uv run python -m src.main
+# Run API + dashboard together
+pnpm dev
 
-# Run frontend (in another terminal)
-cd dashboard && pnpm run dev
+# Or run individually:
+pnpm dev:api        # API server on :8000
+pnpm dev:dashboard  # Vite dev server on :5173
+pnpm dev:bot        # Trading bot (dry run)
+```
+
+### Useful Commands
+
+```bash
+pnpm lint           # Lint Python (ruff) + TypeScript (eslint)
+pnpm format         # Format Python (ruff) + TypeScript (prettier)
+pnpm test           # Run pytest
+pnpm build          # Production build dashboard
+pnpm check          # Full lint + format + build check
 ```
 
 ---
 
 ## Research & Observation Tools
 
-The `arb-capture` CLI provides tools for data collection, model building, and live observation.
+The `arb-research` CLI provides tools for data collection, model building, and live observation.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `uv run arb-capture init` | Download 6 months of Binance data and build probability model |
-| `uv run arb-capture rebuild` | Rebuild model from existing data |
-| `uv run arb-capture observe` | Run live observation with model predictions |
-| `uv run arb-capture verify` | 5-minute stream health check |
-| `uv run arb-capture analyse` | Analyse captured observation data |
-| `uv run arb-capture reset` | Clear old observation files |
+| `uv run arb-research init` | Download 6 months of Binance data and build probability model |
+| `uv run arb-research rebuild` | Rebuild model from existing data |
+| `uv run arb-research observe` | Run live observation with model predictions |
+| `uv run arb-research verify` | 5-minute stream health check |
+| `uv run arb-research analyse` | Analyse captured observation data |
+| `uv run arb-research reset` | Clear old observation files |
 
 ### First-Time Setup
 
 ```bash
 # Download data + build probability surface model (~5 min)
-uv run arb-capture init
+uv run arb-research init
 
 # Or if you already have data, just rebuild the model (~2 min)
-uv run arb-capture rebuild
+uv run arb-research rebuild
 ```
 
 ### Live Observation
@@ -234,13 +244,13 @@ Run observation mode to see what the bot would do without trading:
 
 ```bash
 # 1-hour observation (default)
-uv run arb-capture observe
+uv run arb-research observe
 
 # Custom duration (30 minutes)
-uv run arb-capture observe --duration 1800
+uv run arb-research observe --duration 1800
 
 # With debug logging
-uv run arb-capture --debug observe --duration 300
+uv run arb-research --debug observe --duration 300
 ```
 
 Observation mode:
@@ -256,10 +266,10 @@ After running observation mode, analyse the results:
 
 ```bash
 # Analyse most recent capture
-uv run arb-capture analyse
+uv run arb-research analyse
 
 # Analyse specific file
-uv run arb-capture analyse --file research/data/observations/snapshots_20260203_021258.parquet
+uv run arb-research analyse --file research/data/observations/snapshots_20260203_021258.parquet
 ```
 
 Output includes:
@@ -276,20 +286,20 @@ Output includes:
 
 ```bash
 # Show files and prompt for confirmation
-uv run arb-capture reset
+uv run arb-research reset
 
 # Force delete without confirmation
-uv run arb-capture reset --force
+uv run arb-research reset --force
 ```
 
 ### Verify Stream Connections
 
 ```bash
 # 5-minute health check (default)
-uv run arb-capture verify
+uv run arb-research verify
 
 # Shorter verification
-uv run arb-capture verify --duration 60
+uv run arb-research verify --duration 60
 ```
 
 ### Output Files
@@ -339,32 +349,19 @@ websocket:
   ping_interval: 5
   reconnect_delay: 5
 
-# Dutch Book strategy (hold to resolution)
-dutch_book:
-  max_combined_price: 0.99
-  min_time_to_resolution_sec: 300
-  exit_on_pump_threshold: 0.10
-
 # Lag arbitrage strategy
 lag_arb:
   enabled: true
-  candle_interval: "15m"
-  spot_momentum_window_sec: 5
-  spot_move_threshold_pct: 0.001
+  candle_interval: "1h"
+  spot_momentum_window_sec: 10
+  spot_move_threshold_pct: 0.002
   max_combined_price: 0.995
   expected_lag_ms: 2000
   max_lag_window_ms: 5000
+  fee_rate: 0.0
   momentum_trigger_threshold_pct: 0.001
   pump_exit_threshold_pct: 0.03
   max_hold_time_sec: 300
-
-# Momentum strategy
-momentum:
-  enabled: true
-  velocity_threshold_pct: 0.001
-  min_book_imbalance: 0.3
-  min_time_remaining_sec: 60
-  require_positive_acceleration: true
 
 # Risk management
 risk:
@@ -379,17 +376,17 @@ filters:
   min_book_depth: 500
   max_spread_pct: 0.05
   market_types:
-    - btc-up-or-down-15m
+    - btc-updown
+    - eth-updown
 ```
 
 ### CLI Arguments
 
 ```bash
-python -m src.main \
+arb-bot trade \
   --config config/default.yaml \
   --live \
   --min-spread 0.02 \
-  --strategy dutch_book \
   -v, --verbose
 ```
 
@@ -397,14 +394,15 @@ python -m src.main \
 
 ## Dashboard
 
-The React dashboard provides real-time monitoring at `http://localhost:3000`:
+The React dashboard provides real-time monitoring at `http://localhost:5173` (dev):
 
-- **Metrics Panel**: Total P&L, trades, opportunities
-- **Control Panel**: Start/stop bot, view uptime
+- **Control Panel**: Start/Stop/Restart bot, refresh markets (2x2 button grid)
+- **Config Panel**: Live config editor with subpanels (strategy, discovery, entry, sizing, exit, risk)
+- **Metrics Display**: Connection status, uptime, latency, signal activity
 - **Markets Panel**: Active markets with bid/ask prices
 - **Lag Windows Panel**: Active arbitrage windows
-- **Signal Feed**: Real-time event stream
-- **P&L Chart**: Historical profit/loss
+- **Signal Feed**: Real-time event stream with tier badges and model data
+- **Spot Prices**: BTC/ETH spot prices with sparklines
 
 ---
 
@@ -412,12 +410,17 @@ The React dashboard provides real-time monitoring at `http://localhost:3000`:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/health` | GET | Health check |
 | `/api/status` | GET | Bot status (running, PID, uptime) |
 | `/api/metrics` | GET | Full metrics + visibility data |
 | `/api/config` | GET | Current configuration |
 | `/api/config` | PUT | Update configuration |
-| `/api/restart` | POST | Restart bot |
+| `/api/restart` | POST | Restart bot (SIGTERM) |
+| `/api/refresh-markets` | POST | Force market refresh (SIGUSR1) |
+| `/api/trading/status` | GET | Detailed trading status |
+| `/api/trading/start` | POST | Start trading bot |
+| `/api/trading/stop` | POST | Stop trading bot |
+| `/api/trading/restart` | POST | Restart trading bot |
+| `/api/trading/metrics` | GET | Trading metrics from file |
 | `/api/ws/metrics` | WS | Real-time metrics stream |
 
 ---
@@ -470,24 +473,18 @@ kubectl create secret generic polymarket-credentials \
 ## Project Structure
 
 ```
-├── src/                    # Python source
-│   ├── main.py             # Bot orchestrator
-│   ├── config.py           # Configuration management
-│   ├── api/                # FastAPI server
-│   ├── data/               # WebSocket clients
-│   ├── market/             # Market discovery & state
-│   ├── strategy/           # Trading strategies
-│   ├── execution/          # Order execution
-│   └── utils/              # Logging, metrics
-├── research/               # Probability model & backtesting
-│   ├── run_research.py     # Main orchestration
-│   ├── data/               # Historical data fetcher
-│   ├── models/             # Probability surface
-│   └── analysis/           # Volatility, session, lag analysis
-├── dashboard/              # React frontend
-├── config/                 # YAML configuration
-├── k8s/                    # Kubernetes manifests
-└── docker-compose.yaml     # Local development
+├── engine/                # Shared signal evaluation + data streams
+├── trading/               # Trading bot (strategy, execution, risk)
+├── research/              # Probability model, analysis, observation
+├── api/                   # FastAPI server (bot control, metrics, config)
+├── dashboard/             # React frontend (Vite + React 19 + TypeScript)
+├── tests/                 # Unit + integration tests
+├── config/                # YAML configuration
+├── docker/                # Dockerfile, entrypoint, supervisord
+├── k8s/                   # Kubernetes manifests (ArgoCD)
+├── package.json           # Root shorthand commands
+├── pyproject.toml         # Python project config + CLI entry points
+└── docker-compose.yml     # Local Docker development
 ```
 
 ---

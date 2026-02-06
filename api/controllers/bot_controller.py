@@ -147,10 +147,6 @@ class BotController:
         # Build CLI command
         cmd = [sys.executable, "-m", "trading.cli", "trade", "--api-mode"]
 
-        # Add strategy
-        strategy = config_overrides.get("strategy", "lag_arb")
-        cmd.extend(["--strategy", strategy])
-
         # Add dry-run flag
         dry_run = config_overrides.get("dry_run", True)
         if dry_run:

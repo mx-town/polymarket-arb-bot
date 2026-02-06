@@ -57,17 +57,19 @@ Python arbitrage bot connecting to Polymarket CLOB and Binance via WebSocket for
 │  - GET/PUT /api/config                                                  │
 │  - GET /api/metrics (reads /tmp/polymarket_metrics.json)               │
 │  - WS /api/ws/metrics (pushes every 1 sec)                             │
-│  - POST /api/restart (SIGTERM), /api/refresh-markets (SIGUSR1)         │
+│  - POST /api/restart, /api/refresh-markets                             │
+│  - POST /api/trading/start|stop|restart                                │
+│  - GET  /api/trading/status|metrics                                    │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          REACT DASHBOARD                                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  :3000 (dev) / served by API (prod)                                    │
+│  :5173 (dev) / served by API (prod)                                    │
 │  Components: MetricsDisplay, ControlPanel, ConfigPanel,                │
 │              MarketsPanel, LagWindowsPanel, SignalFeed,                │
-│              PnlChart, ActivityChart                                   │
+│              SpotPricesPanel                                           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -197,7 +199,7 @@ polymarket-arb-bot/
 │   ├── __init__.py
 │   ├── cli.py                    # arb-research CLI
 │   ├── observation/              # Data capture for research
-│   │   ├── enricher.py
+│   │   ├── enricher.py           # Uses engine pipeline (ModelBridge + SignalEvaluator)
 │   │   ├── synchronizer.py
 │   │   └── verify.py
 │   ├── models/
@@ -234,22 +236,35 @@ polymarket-arb-bot/
 │       ├── research.py           # Research endpoints
 │       └── trading.py            # POST /api/trading/start|stop|restart
 │
-├── dashboard/                    # React frontend
+├── dashboard/                    # React frontend (Vite + React 19 + TypeScript)
 │   ├── src/
-│   │   ├── App.tsx
+│   │   ├── App.tsx               # Main layout (2-column grid)
+│   │   ├── App.css               # Theme variables, scanline overlay
+│   │   ├── api/
+│   │   │   └── client.ts         # API client, types, WebSocket
 │   │   ├── components/
-│   │   ├── hooks/
-│   │   └── api/
+│   │   │   ├── ControlPanel.tsx   # Start/Stop/Restart/Refresh (2×2 grid)
+│   │   │   ├── ConfigPanel.tsx    # Config editor with subpanels
+│   │   │   ├── MetricsDisplay.tsx # Status + Activity cards
+│   │   │   ├── SignalFeed.tsx     # Event feed with tier badges + model data
+│   │   │   ├── MarketsPanel.tsx
+│   │   │   ├── LagWindowsPanel.tsx
+│   │   │   ├── SpotPricesPanel.tsx
+│   │   │   └── config/           # Config subpanels
+│   │   └── hooks/
 │   └── package.json
 │
-├── legacy/                       # Archived v1 code
-│   ├── arb_bot.py
-│   └── analyze_spreads.py
-│
+├── tests/                        # Unit + integration tests
 ├── config/
 │   └── default.yaml
 ├── docker/
+│   ├── Dockerfile.dev
+│   ├── entrypoint.sh
+│   └── supervisord.conf
+├── k8s/                          # Kubernetes manifests
+├── package.json                  # Root shorthand commands (pnpm dev/lint/format/docker)
 ├── pyproject.toml
+├── docker-compose.yml
 └── CLAUDE.md
 ```
 
@@ -276,6 +291,22 @@ arb-research init          # Download historical data
 arb-research rebuild       # Rebuild probability surface
 
 arb-api                    # Run API server
+```
+
+### Shorthand Commands (root package.json)
+
+```
+pnpm dev                   # API server + dashboard
+pnpm dev:api               # API server only
+pnpm dev:bot               # Trading bot only
+pnpm dev:dashboard         # Vite dev server only
+pnpm docker:up             # docker compose up --build
+pnpm docker:down           # docker compose down
+pnpm lint                  # Ruff (Python) + ESLint (TypeScript)
+pnpm format                # Ruff format + Prettier
+pnpm test                  # pytest
+pnpm build                 # Dashboard production build
+pnpm check                 # Full lint + format check + build
 ```
 
 ## Coding Conventions
@@ -308,6 +339,13 @@ The lag arb strategy uses momentum as the PRIMARY trigger:
 2. When momentum crosses 0.1%, emit DirectionSignal
 3. Enter position if combined_ask < threshold
 4. Exit aggressively (don't wait for resolution)
+
+### Engine Integration (ModelOutput)
+When the probability model is loaded, trading pipeline uses it for:
+1. Entry filtering -- skip marginal entries when model shows no edge
+2. Kelly-based position sizing -- `size = base_size * clamp(kelly, 0.10, 0.25)`
+3. Exit tuning -- widen pump exit threshold by 20% when model has strong conviction
+4. Metrics enrichment -- signal_tier, model_prob_up, model_edge, kelly_fraction in events
 
 ### Atomic Metrics Export
 Bot writes metrics atomically:

@@ -16,7 +16,7 @@ from trading.config import INTERVAL_FEE_RATES, INTERVAL_MAX_COMBINED
 
 router = APIRouter()
 
-CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "default.yaml"
+CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "default.yaml"
 
 
 class ConfigUpdate(BaseModel):
