@@ -55,6 +55,7 @@ class OrderManager:
         size: Decimal,
         seconds_to_end: int,
         reason: str = "QUOTE",
+        on_fill: Optional[Callable] = None,
     ) -> bool:
         """Place a BUY GTC limit order. Returns True on success."""
         label = (
@@ -64,7 +65,7 @@ class OrderManager:
 
         if self._dry_run:
             log.info("DRY %s", label)
-            self._orders[token_id] = OrderState(
+            state = OrderState(
                 order_id=f"dry-{int(time.time()*1000)}",
                 market=market,
                 token_id=token_id,
@@ -72,9 +73,14 @@ class OrderManager:
                 price=price,
                 size=size,
                 placed_at=time.time(),
-                matched_size=ZERO,
+                matched_size=size,  # mark fully matched immediately
                 seconds_to_end_at_entry=seconds_to_end,
             )
+            self._orders[token_id] = state
+            # Fire fill callback now so inventory updates, but keep order
+            # in _orders so maybe_replace sees it and respects cooldown.
+            if on_fill:
+                on_fill(state, size)
             return True
 
         try:
@@ -197,10 +203,15 @@ class OrderManager:
                 continue
 
             if self._dry_run:
-                # In dry run, simulate immediate fill
-                if on_fill and state.matched_size < state.size:
-                    delta = state.size - state.matched_size
-                    on_fill(state, delta)
+                # Dry-run orders persist; fills happen at placement time.
+                # Only remove once stale so min_replace_millis throttles.
+                if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
+                    log.info(
+                        "Removing stale dry-run order %s token=%s after %ds",
+                        state.order_id,
+                        token_id[:16],
+                        int(now - state.placed_at),
+                    )
                     self._orders.pop(token_id, None)
                 continue
 

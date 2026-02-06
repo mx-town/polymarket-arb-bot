@@ -201,6 +201,17 @@ class Engine:
         if entry_price is None:
             return
 
+        # Hard cap: skip quoting if hedged inventory already at limit
+        if self._cfg.max_shares_per_market > ZERO:
+            inv = self._inventory.get_inventory(market.slug)
+            hedged = min(inv.up_shares, inv.down_shares)
+            if hedged >= self._cfg.max_shares_per_market:
+                log.debug(
+                    "Skipping %s %s - at max_shares_per_market (%s hedged)",
+                    market.slug, direction.value, hedged,
+                )
+                return
+
         exposure = calculate_exposure(
             self._order_mgr.get_open_orders(),
             self._inventory.get_all_inventories(),
@@ -222,6 +233,7 @@ class Engine:
         self._order_mgr.place_order(
             self._client, market, token_id, direction,
             entry_price, shares, seconds_to_end, reason,
+            on_fill=self._handle_fill,
         )
 
     def _maybe_take_token(
@@ -257,6 +269,7 @@ class Engine:
         self._order_mgr.place_order(
             self._client, market, token_id, direction,
             book.best_ask, shares, seconds_to_end, "TAKER",
+            on_fill=self._handle_fill,
         )
 
     def _maybe_fast_top_up(
@@ -398,6 +411,7 @@ class Engine:
         self._order_mgr.place_order(
             self._client, market, token_id, direction,
             book.best_ask, top_up_shares, seconds_to_end, reason,
+            on_fill=self._handle_fill,
         )
 
     def _should_take(

@@ -219,11 +219,16 @@ def calculate_exposure(
         orders_notional += state.price * remaining
 
     unhedged_notional = ZERO
+    hedged_cost = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
             unhedged_notional += abs_imbalance * Decimal("0.50")
+        # Hedged pairs represent locked capital (~$1 per complete set)
+        hedged_pairs = min(inv.up_shares, inv.down_shares)
+        if hedged_pairs > ZERO:
+            hedged_cost += hedged_pairs * ONE
 
-    return orders_notional + unhedged_notional
+    return orders_notional + unhedged_notional + hedged_cost
