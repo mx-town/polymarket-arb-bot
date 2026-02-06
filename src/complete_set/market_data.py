@@ -237,46 +237,61 @@ def discover_markets(assets: tuple[str, ...]) -> list[GabagoolMarket]:
 # TOB polling via CLOB
 # ---------------------------------------------------------------------------
 
+def _extract_price(entry) -> Optional[Decimal]:
+    """Extract price from an OrderSummary object or dict."""
+    if isinstance(entry, dict):
+        raw = entry.get("price")
+    else:
+        raw = getattr(entry, "price", None)
+    if raw is None:
+        return None
+    return Decimal(str(raw))
+
+
+def _extract_size(entry) -> Optional[Decimal]:
+    """Extract size from an OrderSummary object or dict."""
+    if isinstance(entry, dict):
+        raw = entry.get("size")
+    else:
+        raw = getattr(entry, "size", None)
+    if raw is None:
+        return None
+    return Decimal(str(raw))
+
+
 def get_top_of_book(client, token_id: str) -> Optional[TopOfBook]:
     """Fetch top-of-book from CLOB order book endpoint.
 
     Uses py-clob-client's client.get_order_book(token_id).
+    Returns None if both sides are empty.
     """
     try:
         book = client.get_order_book(token_id)
 
-        bids = book.get("bids", []) if isinstance(book, dict) else getattr(book, "bids", [])
-        asks = book.get("asks", []) if isinstance(book, dict) else getattr(book, "asks", [])
+        if isinstance(book, dict):
+            bids = book.get("bids") or []
+            asks = book.get("asks") or []
+        else:
+            bids = getattr(book, "bids", None) or []
+            asks = getattr(book, "asks", None) or []
+
+        # Sort: bids descending by price, asks ascending by price.
+        # Server usually returns sorted, but py-clob-client doesn't guarantee it.
+        bids = sorted(bids, key=lambda e: _extract_price(e) or Decimal(0), reverse=True)
+        asks = sorted(asks, key=lambda e: _extract_price(e) or Decimal("999"), reverse=False)
+
+        best_bid = _extract_price(bids[0]) if bids else None
+        best_bid_size = _extract_size(bids[0]) if bids else None
+        best_ask = _extract_price(asks[0]) if asks else None
+        best_ask_size = _extract_size(asks[0]) if asks else None
 
         log.debug(
-            "RAW book %s │ bids=%d asks=%d │ top_bid=%s top_ask=%s",
+            "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
             token_id[:16],
             len(bids), len(asks),
-            bids[0] if bids else "EMPTY",
-            asks[0] if asks else "EMPTY",
+            best_bid, best_ask,
+            (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
         )
-
-        best_bid = None
-        best_bid_size = None
-        if bids:
-            top_bid = bids[0]
-            if isinstance(top_bid, dict):
-                best_bid = Decimal(str(top_bid.get("price", 0)))
-                best_bid_size = Decimal(str(top_bid.get("size", 0)))
-            else:
-                best_bid = Decimal(str(getattr(top_bid, "price", 0)))
-                best_bid_size = Decimal(str(getattr(top_bid, "size", 0)))
-
-        best_ask = None
-        best_ask_size = None
-        if asks:
-            top_ask = asks[0]
-            if isinstance(top_ask, dict):
-                best_ask = Decimal(str(top_ask.get("price", 0)))
-                best_ask_size = Decimal(str(top_ask.get("size", 0)))
-            else:
-                best_ask = Decimal(str(getattr(top_ask, "price", 0)))
-                best_ask_size = Decimal(str(getattr(top_ask, "size", 0)))
 
         if best_bid is None and best_ask is None:
             return None

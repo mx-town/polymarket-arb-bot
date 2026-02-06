@@ -1,5 +1,6 @@
 """Entry point for the complete-set arbitrage strategy."""
 
+import argparse
 import asyncio
 import logging
 import os
@@ -12,13 +13,27 @@ from py_clob_client.client import ClobClient
 from complete_set.config import load_complete_set_config
 from complete_set.engine import Engine
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s │ %(name)-16s │ %(message)s",
-    datefmt="%H:%M:%S",
-)
-for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client"):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Complete-set arb strategy")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "debug", "info", "warning", "error"],
+        help="Root log level (default: INFO)",
+    )
+    return parser.parse_args()
+
+
+def _setup_logging(level_str: str) -> None:
+    level = getattr(logging, level_str.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s │ %(name)-16s │ %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 log = logging.getLogger("cs.bot")
 
@@ -30,7 +45,7 @@ def _init_client(dry_run: bool) -> ClobClient:
     """Initialize ClobClient. Authenticated for live, read-only for dry run."""
     if dry_run:
         log.info("INIT read-only client (DRY_RUN)")
-        return ClobClient(CLOB_HOST)
+        return ClobClient(CLOB_HOST, chain_id=CHAIN_ID)
 
     private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
     funder = os.environ.get("POLYMARKET_FUNDER_ADDRESS")
@@ -51,6 +66,8 @@ def _init_client(dry_run: bool) -> ClobClient:
 
 
 def main():
+    args = _parse_args()
+    _setup_logging(args.log_level)
     load_dotenv()
 
     with open("config.yaml") as f:
