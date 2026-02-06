@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "pnpm run dev:api & pnpm run dev:dashboard",
     "dev:api": "uv run arb-api",
-    "dev:bot": "uv run arb-bot trade",
+    "dev:bot": "uv run arb-bot trade --config config/default.yaml -v",
     "dev:dashboard": "pnpm --dir dashboard dev",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down",
