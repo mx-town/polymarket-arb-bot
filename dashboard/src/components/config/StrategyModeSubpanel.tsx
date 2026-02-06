@@ -5,7 +5,7 @@ export function StrategyModeSubpanel({ config, onChange }: SubpanelProps) {
     <SubpanelCard title="Strategy Mode" accentColor={SECTION_COLORS.mode}>
       <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
         <Toggle
-          checked={config.trading.dry_run}
+          checked={config?.trading?.dry_run ?? true}
           onChange={(v) => onChange('trading', 'dry_run', v)}
           label="Dry Run"
           activeColor="var(--accent-amber)"

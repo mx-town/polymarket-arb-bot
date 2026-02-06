@@ -46,6 +46,21 @@ export function PositionSizingSubpanel({ config, onChange }: SubpanelProps) {
           )}
         </div>
       </div>
+      <div
+        style={{
+          marginTop: '1rem',
+          padding: '0.625rem 0.75rem',
+          background: 'var(--accent-blue-dim)',
+          borderLeft: '3px solid var(--accent-blue)',
+          borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+          fontSize: '0.6875rem',
+          color: 'var(--text-secondary)',
+          lineHeight: 1.5,
+        }}
+      >
+        <span style={{ fontWeight: 600, color: 'var(--accent-blue)' }}>Kelly sizing:</span>{' '}
+        When P() model loaded, positions sized at 10–25% of max via Kelly criterion
+      </div>
     </SubpanelCard>
   );
 }

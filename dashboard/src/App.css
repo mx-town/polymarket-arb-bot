@@ -28,6 +28,9 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+
+  --accent-amber-glow: rgba(255, 170, 0, 0.08);
+  --accent-green-glow: rgba(0, 212, 170, 0.08);
 }
 
 * {
@@ -56,6 +59,21 @@ body::before {
   pointer-events: none;
   opacity: 0.3;
   z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
 }
 
 #root {
@@ -158,4 +176,18 @@ button:disabled {
 
 .animate-slide-in {
   animation: slideIn 0.2s ease-out;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
 }

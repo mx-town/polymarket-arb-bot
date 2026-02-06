@@ -1,30 +1,60 @@
 import { useState } from 'react';
-import { restartBot, refreshMarkets } from '../api/client';
+import { startBot, stopBot, restartTradingBot, refreshMarkets } from '../api/client';
 
 interface Props {
   running: boolean;
   pid: number | null;
   uptimeSec: number;
+  dryRun?: boolean;
   onRefresh?: () => void;
 }
 
-export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
-  const [loading, setLoading] = useState(false);
+export function ControlPanel({ running, pid, uptimeSec, dryRun, onRefresh }: Props) {
+  const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  const handleRestart = async () => {
-    setLoading(true);
+  const handleStart = async () => {
+    setStarting(true);
     setMessage(null);
     try {
-      const result = await restartBot();
-      setMessage({ text: result.message, type: 'success' });
-      // Trigger refresh after restart
+      const result = await startBot({ dry_run: dryRun });
+      setMessage({ text: `Bot started (${result.status.status})`, type: 'success' });
+      setTimeout(() => onRefresh?.(), 2000);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : 'Failed to start', type: 'error' });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setStopping(true);
+    setMessage(null);
+    try {
+      const result = await stopBot();
+      setMessage({ text: `Bot stopped (${result.status.status})`, type: 'success' });
+      setTimeout(() => onRefresh?.(), 2000);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : 'Failed to stop', type: 'error' });
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    setMessage(null);
+    try {
+      const result = await restartTradingBot({ dry_run: dryRun });
+      setMessage({ text: `Bot restarted (${result.status.status})`, type: 'success' });
       setTimeout(() => onRefresh?.(), 2000);
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : 'Failed to restart', type: 'error' });
     } finally {
-      setLoading(false);
+      setRestarting(false);
     }
   };
 
@@ -34,7 +64,6 @@ export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
     try {
       const result = await refreshMarkets();
       setMessage({ text: result.message, type: 'success' });
-      // Trigger data refresh
       setTimeout(() => onRefresh?.(), 1000);
     } catch (e) {
       setMessage({
@@ -52,6 +81,28 @@ export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
     const m = Math.floor((seconds % 3600) / 60);
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
+  };
+
+  const buttonBase: React.CSSProperties = {
+    padding: '0.625rem 1rem',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    border: 'none',
+    cursor: 'pointer',
+    width: '100%',
+  };
+
+  const disabledStyle: React.CSSProperties = {
+    background: 'var(--border)',
+    color: 'var(--text-muted)',
+    cursor: 'not-allowed',
   };
 
   return (
@@ -74,7 +125,7 @@ export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
           background: 'var(--bg-elevated)',
         }}
       >
-        <span style={{ fontSize: '1rem' }}>\u2318</span>
+        <span style={{ fontSize: '1rem' }}>{'\u2318'}</span>
         <span
           style={{
             fontSize: '0.75rem',
@@ -162,76 +213,126 @@ export function ControlPanel({ running, pid, uptimeSec, onRefresh }: Props) {
           )}
         </div>
 
-        {/* Refresh Markets Button */}
-        <button
-          onClick={handleRefreshMarkets}
-          disabled={refreshing || !running}
+        {/* Button Grid */}
+        <div
           style={{
-            width: '100%',
-            background: running
-              ? 'linear-gradient(135deg, var(--accent-blue) 0%, #2266aa 100%)'
-              : 'var(--border)',
-            color: running ? 'white' : 'var(--text-muted)',
-            padding: '0.625rem 1rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
             gap: '0.5rem',
-            marginBottom: '0.5rem',
           }}
         >
-          {refreshing ? (
-            <>
-              <span className="animate-pulse">\u25CF</span>
-              Refreshing...
-            </>
-          ) : (
-            <>
-              <span>\u21BB</span>
-              Refresh Markets
-            </>
-          )}
-        </button>
+          {/* Start Button */}
+          <button
+            onClick={handleStart}
+            disabled={starting || running}
+            style={{
+              ...buttonBase,
+              ...(!running && !starting
+                ? {
+                    background:
+                      'linear-gradient(135deg, var(--accent-green) 0%, #22aa44 100%)',
+                    color: 'white',
+                  }
+                : disabledStyle),
+            }}
+          >
+            {starting ? (
+              <>
+                <span className="animate-pulse">{'\u25CF'}</span>
+                Starting...
+              </>
+            ) : (
+              <>
+                <span>{'\u25B6'}</span>
+                Start
+              </>
+            )}
+          </button>
 
-        {/* Restart Button */}
-        <button
-          onClick={handleRestart}
-          disabled={loading || !running}
-          style={{
-            width: '100%',
-            background: running
-              ? 'linear-gradient(135deg, var(--accent-red) 0%, #cc3344 100%)'
-              : 'var(--border)',
-            color: running ? 'white' : 'var(--text-muted)',
-            padding: '0.625rem 1rem',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          {loading ? (
-            <>
-              <span className="animate-pulse">\u25CF</span>
-              Restarting...
-            </>
-          ) : (
-            <>
-              <span>\u21BB</span>
-              Restart Bot
-            </>
-          )}
-        </button>
+          {/* Restart Button */}
+          <button
+            onClick={handleRestart}
+            disabled={restarting || !running}
+            style={{
+              ...buttonBase,
+              ...(running && !restarting
+                ? {
+                    background:
+                      'linear-gradient(135deg, var(--accent-amber) 0%, #cc8833 100%)',
+                    color: 'white',
+                  }
+                : disabledStyle),
+            }}
+          >
+            {restarting ? (
+              <>
+                <span className="animate-pulse">{'\u25CF'}</span>
+                Restarting...
+              </>
+            ) : (
+              <>
+                <span>{'\u21BB'}</span>
+                Restart
+              </>
+            )}
+          </button>
+
+          {/* Stop Button */}
+          <button
+            onClick={handleStop}
+            disabled={stopping || !running}
+            style={{
+              ...buttonBase,
+              ...(running && !stopping
+                ? {
+                    background:
+                      'linear-gradient(135deg, var(--accent-red) 0%, #cc3344 100%)',
+                    color: 'white',
+                  }
+                : disabledStyle),
+            }}
+          >
+            {stopping ? (
+              <>
+                <span className="animate-pulse">{'\u25CF'}</span>
+                Stopping...
+              </>
+            ) : (
+              <>
+                <span>{'\u25A0'}</span>
+                Stop
+              </>
+            )}
+          </button>
+
+          {/* Refresh Markets Button */}
+          <button
+            onClick={handleRefreshMarkets}
+            disabled={refreshing || !running}
+            style={{
+              ...buttonBase,
+              ...(running && !refreshing
+                ? {
+                    background:
+                      'linear-gradient(135deg, var(--accent-blue) 0%, #2266aa 100%)',
+                    color: 'white',
+                  }
+                : disabledStyle),
+            }}
+          >
+            {refreshing ? (
+              <>
+                <span className="animate-pulse">{'\u25CF'}</span>
+                Refreshing...
+              </>
+            ) : (
+              <>
+                <span>{'\u21BB'}</span>
+                Refresh
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Message */}

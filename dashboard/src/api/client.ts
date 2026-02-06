@@ -48,6 +48,16 @@ export interface TradingEvent {
   market_id?: string;
   up_success?: boolean;
   down_success?: boolean;
+  // Engine signal data (DIRECTION events)
+  signal_tier?: string;
+  engine_edge?: number;
+  engine_confidence?: number;
+  model_prob_up?: number;
+  model_edge?: number;
+  kelly_fraction?: number;
+  model_reliable?: boolean;
+  // POSITION_OPENED engine data
+  position_size?: number;
 }
 
 export interface PnlSnapshot {
@@ -71,6 +81,14 @@ export interface BotStatus {
   uptime_sec?: number;
   start_time?: string;
   last_update?: string;
+}
+
+export interface TradingStatus {
+  is_running: boolean;
+  pid: number | null;
+  uptime_sec: number | null;
+  status: 'starting' | 'running' | 'stopped' | 'failed';
+  started_at: string | null;
 }
 
 export interface ActiveMarket {
@@ -267,6 +285,38 @@ export async function restartBot(): Promise<{ status: string; message: string }>
 
 export async function refreshMarkets(): Promise<{ status: string; message: string }> {
   return fetchJson(`${API_BASE}/refresh-markets`, { method: 'POST' });
+}
+
+export async function getTradingStatus(): Promise<TradingStatus> {
+  return fetchJson<TradingStatus>(`${API_BASE}/trading/status`);
+}
+
+export async function startBot(options?: {
+  dry_run?: boolean;
+}): Promise<{ status: TradingStatus }> {
+  return fetchJson(`${API_BASE}/trading/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dry_run: options?.dry_run ?? true }),
+  });
+}
+
+export async function stopBot(force?: boolean): Promise<{ status: TradingStatus }> {
+  return fetchJson(`${API_BASE}/trading/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: force ?? false }),
+  });
+}
+
+export async function restartTradingBot(options?: {
+  dry_run?: boolean;
+}): Promise<{ status: TradingStatus }> {
+  return fetchJson(`${API_BASE}/trading/restart`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dry_run: options?.dry_run ?? true }),
+  });
 }
 
 export function createMetricsWebSocket(onMessage: (metrics: BotMetrics) => void): WebSocket {

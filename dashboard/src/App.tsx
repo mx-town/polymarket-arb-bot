@@ -6,8 +6,6 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { MarketsPanel } from './components/MarketsPanel';
 import { LagWindowsPanel } from './components/LagWindowsPanel';
 import { SignalFeed } from './components/SignalFeed';
-import { PnlChart } from './components/PnlChart';
-import { ActivityChart } from './components/ActivityChart';
 import { SpotPricesPanel } from './components/SpotPricesPanel';
 import { ResearchDashboard } from '@/features/research';
 import './App.css';
@@ -23,10 +21,8 @@ function App() {
   const activeWindows = metrics?.active_windows || [];
   const configSummary = metrics?.config_summary;
 
-  // Extract unified event stream and history data
+  // Extract unified event stream
   const events = metrics?.events || [];
-  const pnlHistory = metrics?.pnl_history || [];
-  const tradesHistory = metrics?.trades_history || [];
 
   // Extract spot prices for price tracking panel
   const spotPrices = metrics?.spot_prices || {};
@@ -113,6 +109,23 @@ function App() {
               {mode === 'trading'
                 ? `${configSummary?.strategy || 'lag_arb'} | ${configSummary?.dry_run ? 'DRY RUN' : 'LIVE'}`
                 : 'Probability Analysis | Lag Measurement | Backtesting'}
+              {mode === 'trading' && configSummary?.model_loaded && (
+                <span
+                  style={{
+                    fontSize: '0.625rem',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: 600,
+                    padding: '0.1875rem 0.5rem',
+                    borderRadius: '3px',
+                    background: 'rgba(0, 212, 170, 0.15)',
+                    color: 'var(--accent-green)',
+                    letterSpacing: '0.05em',
+                    marginLeft: '0.5rem',
+                  }}
+                >
+                  P() MODEL
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -219,31 +232,24 @@ function App() {
 
       {/* Main Content */}
       {mode === 'trading' ? (
-        /* Trading Dashboard - 3-column layout */
+        /* Trading Dashboard - 2-column layout (MVP) */
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr 320px',
+            gridTemplateColumns: '1fr 380px',
             gap: '1.5rem',
-            maxWidth: '1800px',
+            maxWidth: '1400px',
           }}
         >
-          {/* Left Column - Spot Prices, Markets, Metrics & P&L Chart */}
+          {/* Left Column - Data flow: Prices → Markets → Windows → Events */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <SpotPricesPanel spotPrices={spotPrices} />
             <MarketsPanel markets={activeMarkets} />
-            <MetricsDisplay metrics={metrics} connected={connected} />
-            <PnlChart data={pnlHistory} />
-          </div>
-
-          {/* Center Column - Lag Windows, Event Feed & Activity Chart */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <LagWindowsPanel windows={activeWindows} config={configSummary} />
             <SignalFeed events={events} />
-            <ActivityChart trades={tradesHistory} />
           </div>
 
-          {/* Right Column - Control & Config */}
+          {/* Right Column - Controls + Config + Health */}
           <div
             style={{
               display: 'flex',
@@ -255,50 +261,11 @@ function App() {
               running={botRunning}
               pid={botPid}
               uptimeSec={botUptime}
+              dryRun={configSummary?.dry_run}
               onRefresh={refresh}
             />
             <ConfigPanel />
-
-            {/* Quick Info */}
-            <div
-              style={{
-                background: 'var(--bg-card)',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                padding: '1rem',
-              }}
-            >
-              <div
-                style={{
-                  fontSize: '0.625rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.1em',
-                  color: 'var(--text-muted)',
-                  marginBottom: '0.75rem',
-                }}
-              >
-                Quick Actions
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem',
-                  fontSize: '0.75rem',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                <div>
-                  <span style={{ color: 'var(--text-muted)' }}>Start:</span>{' '}
-                  <span style={{ color: 'var(--accent-blue)' }}>uv run python -m src.main</span>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--text-muted)' }}>API:</span>{' '}
-                  <span style={{ color: 'var(--accent-blue)' }}>:8000</span>
-                </div>
-              </div>
-            </div>
+            <MetricsDisplay metrics={metrics} connected={connected} />
           </div>
         </div>
       ) : (

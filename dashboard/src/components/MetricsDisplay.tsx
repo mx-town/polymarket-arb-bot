@@ -155,168 +155,66 @@ export function MetricsDisplay({ metrics, connected }: Props) {
     return `${s}s`;
   };
 
-  const formatPnl = (pnl: number) => {
-    const abs = Math.abs(pnl);
-    if (abs >= 1000) return `${pnl >= 0 ? '+' : '-'}$${(abs / 1000).toFixed(1)}k`;
-    if (abs >= 1) return `${pnl >= 0 ? '+' : '-'}$${abs.toFixed(2)}`;
-    return `${pnl >= 0 ? '+' : '-'}$${abs.toFixed(4)}`;
-  };
-
-  const winRate =
-    metrics.trades_filled > 0
-      ? (((metrics.trades_filled - metrics.trades_failed) / metrics.trades_filled) * 100).toFixed(0)
-      : '0';
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      {/* P&L Hero Card */}
-      <div
-        style={{
-          background: `linear-gradient(135deg, var(--bg-card) 0%, ${metrics.total_pnl >= 0 ? 'var(--accent-green-dim)' : 'var(--accent-red-dim)'} 100%)`,
-          borderRadius: 'var(--radius-lg)',
-          border: `1px solid ${metrics.total_pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}`,
-          padding: '1.5rem',
-          display: 'grid',
-          gridTemplateColumns: '1fr auto',
-          gap: '1.5rem',
-          alignItems: 'center',
-        }}
+      {/* Status Card */}
+      <MetricCard
+        title="Status"
+        icon="◉"
+        accent={connected ? 'var(--accent-green)' : 'var(--accent-red)'}
       >
-        <div>
-          <div
-            style={{
-              fontSize: '0.75rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.1em',
-              color: 'var(--text-muted)',
-              marginBottom: '0.5rem',
-            }}
-          >
-            Total P&L
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div
+              style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                background: connected ? 'var(--accent-green)' : 'var(--accent-red)',
+                boxShadow: connected
+                  ? '0 0 8px var(--accent-green)'
+                  : '0 0 8px var(--accent-red)',
+              }}
+            />
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.875rem',
+                color: connected ? 'var(--accent-green)' : 'var(--accent-red)',
+              }}
+            >
+              {connected ? 'CONNECTED' : 'DISCONNECTED'}
+            </span>
           </div>
-          <div
-            style={{
-              fontSize: '2.5rem',
-              fontFamily: 'var(--font-mono)',
-              fontWeight: 700,
-              color: metrics.total_pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-              lineHeight: 1,
-            }}
-          >
-            {formatPnl(metrics.total_pnl)}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <Stat label="Uptime" value={formatUptime(metrics.uptime_sec)} size="sm" />
+            <Stat
+              label="Latency"
+              value={`${metrics.avg_latency_ms.toFixed(0)}ms`}
+              size="sm"
+              accent={metrics.avg_latency_ms > 500 ? 'amber' : undefined}
+            />
           </div>
         </div>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.75rem',
-            borderLeft: '1px solid var(--border)',
-            paddingLeft: '1.5rem',
-          }}
-        >
+      </MetricCard>
+
+      {/* Trading Activity Card */}
+      <MetricCard title="Activity" icon="⚡" accent="var(--accent-blue)">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <Stat label="Markets" value={metrics.markets_scanned} size="sm" />
+          <Stat label="Signals" value={metrics.opportunities_seen} size="sm" />
+          <Stat label="Taken" value={metrics.opportunities_taken} accent="green" size="sm" />
           <Stat
-            label="Daily"
-            value={formatPnl(metrics.daily_pnl)}
-            accent={metrics.daily_pnl >= 0 ? 'green' : 'red'}
+            label="Hit Rate"
+            value={
+              metrics.opportunities_seen > 0
+                ? `${((metrics.opportunities_taken / metrics.opportunities_seen) * 100).toFixed(0)}%`
+                : '—'
+            }
             size="sm"
           />
-          <Stat label="Win Rate" value={`${winRate}%`} accent="blue" size="sm" />
         </div>
-      </div>
-
-      {/* Metrics Grid */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '1rem',
-        }}
-      >
-        {/* Status Card */}
-        <MetricCard
-          title="Status"
-          icon="◉"
-          accent={connected ? 'var(--accent-green)' : 'var(--accent-red)'}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div
-                style={{
-                  width: '10px',
-                  height: '10px',
-                  borderRadius: '50%',
-                  background: connected ? 'var(--accent-green)' : 'var(--accent-red)',
-                  boxShadow: connected
-                    ? '0 0 8px var(--accent-green)'
-                    : '0 0 8px var(--accent-red)',
-                }}
-              />
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.875rem',
-                  color: connected ? 'var(--accent-green)' : 'var(--accent-red)',
-                }}
-              >
-                {connected ? 'CONNECTED' : 'DISCONNECTED'}
-              </span>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <Stat label="Uptime" value={formatUptime(metrics.uptime_sec)} size="sm" />
-              <Stat
-                label="Latency"
-                value={`${metrics.avg_latency_ms.toFixed(0)}ms`}
-                size="sm"
-                accent={metrics.avg_latency_ms > 500 ? 'amber' : undefined}
-              />
-            </div>
-          </div>
-        </MetricCard>
-
-        {/* Trading Activity Card */}
-        <MetricCard title="Activity" icon="⚡" accent="var(--accent-blue)">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <Stat label="Markets" value={metrics.markets_scanned} size="sm" />
-            <Stat label="Signals" value={metrics.opportunities_seen} size="sm" />
-            <Stat label="Taken" value={metrics.opportunities_taken} accent="green" size="sm" />
-            <Stat
-              label="Hit Rate"
-              value={
-                metrics.opportunities_seen > 0
-                  ? `${((metrics.opportunities_taken / metrics.opportunities_seen) * 100).toFixed(0)}%`
-                  : '—'
-              }
-              size="sm"
-            />
-          </div>
-        </MetricCard>
-
-        {/* Execution Card */}
-        <MetricCard title="Execution" icon="↗" accent="var(--accent-amber)">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <Stat label="Filled" value={metrics.trades_filled} accent="green" size="sm" />
-            <Stat
-              label="Failed"
-              value={metrics.trades_failed}
-              accent={metrics.trades_failed > 0 ? 'red' : undefined}
-              size="sm"
-            />
-            <Stat
-              label="Reconnects"
-              value={metrics.ws_reconnects}
-              accent={metrics.ws_reconnects > 5 ? 'amber' : undefined}
-              size="sm"
-            />
-            <Stat
-              label="Losses"
-              value={`${metrics.consecutive_losses} streak`}
-              accent={metrics.consecutive_losses > 2 ? 'red' : undefined}
-              size="sm"
-            />
-          </div>
-        </MetricCard>
-      </div>
+      </MetricCard>
     </div>
   );
 }

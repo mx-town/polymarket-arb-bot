@@ -74,67 +74,118 @@ export function SignalFeed({ events }: Props) {
     return EVENT_CONFIG[type as EventType] || EVENT_CONFIG.DIRECTION;
   };
 
+  const getTierBadgeStyle = (tier: string): { background: string; color: string } => {
+    switch (tier) {
+      case 'DUTCH_BOOK':
+        return { background: 'rgba(0, 212, 170, 0.15)', color: 'var(--accent-green)' };
+      case 'LAG_ARB':
+        return { background: 'rgba(255, 170, 0, 0.15)', color: 'var(--accent-amber)' };
+      case 'MOMENTUM':
+        return { background: 'rgba(74, 158, 255, 0.15)', color: 'var(--accent-blue)' };
+      case 'FLASH_CRASH':
+        return { background: 'rgba(255, 71, 87, 0.15)', color: 'var(--accent-red)' };
+      default:
+        return { background: 'rgba(136, 136, 160, 0.15)', color: 'var(--text-secondary)' };
+    }
+  };
+
   const renderEventDetails = (event: TradingEvent) => {
     const type = event.type as EventType;
 
     switch (type) {
       case 'DIRECTION':
         return (
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.75rem',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <span>
-              <span style={{ color: 'var(--text-muted)' }}>Mom: </span>
-              <span
+          <>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.75rem',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <span>
+                <span style={{ color: 'var(--text-muted)' }}>Mom: </span>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--accent-amber)',
+                  }}
+                >
+                  {event.momentum ? `${(event.momentum * 100).toFixed(3)}%` : '\u2014'}
+                </span>
+              </span>
+              <span>
+                <span style={{ color: 'var(--text-muted)' }}>Winner: </span>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    color:
+                      event.expected_winner === 'UP' ? 'var(--accent-green)' : 'var(--accent-red)',
+                  }}
+                >
+                  {event.expected_winner || '\u2014'}
+                </span>
+              </span>
+            </div>
+            {event.model_prob_up != null && (
+              <div
                 style={{
+                  fontSize: '0.6875rem',
                   fontFamily: 'var(--font-mono)',
-                  color: 'var(--accent-amber)',
+                  color: 'var(--text-secondary)',
+                  marginTop: '0.375rem',
+                  display: 'flex',
+                  gap: '1rem',
                 }}
               >
-                {event.momentum ? `${(event.momentum * 100).toFixed(3)}%` : '\u2014'}
-              </span>
-            </span>
-            <span>
-              <span style={{ color: 'var(--text-muted)' }}>Winner: </span>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  color:
-                    event.expected_winner === 'UP' ? 'var(--accent-green)' : 'var(--accent-red)',
-                }}
-              >
-                {event.expected_winner || '\u2014'}
-              </span>
-            </span>
-          </div>
+                <span>P(UP): {(event.model_prob_up * 100).toFixed(1)}%</span>
+                <span>Edge: {event.model_edge != null ? `${(event.model_edge * 100).toFixed(1)}%` : '\u2014'}</span>
+                <span>K: {event.kelly_fraction != null ? event.kelly_fraction.toFixed(2) : '\u2014'}</span>
+              </div>
+            )}
+          </>
         );
 
       case 'POSITION_OPENED':
         return (
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.75rem',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <span>
-              <span style={{ color: 'var(--text-muted)' }}>Cost: </span>
-              <span style={{ fontFamily: 'var(--font-mono)' }}>
-                ${event.cost?.toFixed(4) || '\u2014'}
+          <>
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.75rem',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <span>
+                <span style={{ color: 'var(--text-muted)' }}>Cost: </span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  ${event.cost?.toFixed(4) || '\u2014'}
+                </span>
               </span>
-            </span>
-            <span>
-              <span style={{ color: 'var(--text-muted)' }}>Profit: </span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-green)' }}>
-                ${event.expected_profit?.toFixed(4) || '\u2014'}
+              <span>
+                <span style={{ color: 'var(--text-muted)' }}>Profit: </span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-green)' }}>
+                  ${event.expected_profit?.toFixed(4) || '\u2014'}
+                </span>
               </span>
-            </span>
-          </div>
+            </div>
+            {event.position_size != null && (
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-secondary)',
+                  marginTop: '0.375rem',
+                  display: 'flex',
+                  gap: '1rem',
+                }}
+              >
+                <span>Size: ${event.position_size.toFixed(2)}</span>
+                <span>Kelly: {event.kelly_fraction != null ? event.kelly_fraction.toFixed(2) : '\u2014'}</span>
+                <span>Edge: {event.engine_edge != null ? `${(event.engine_edge * 100).toFixed(1)}%` : '\u2014'}</span>
+              </div>
+            )}
+          </>
         );
 
       case 'POSITION_CLOSED':
@@ -394,6 +445,25 @@ export function SignalFeed({ events }: Props) {
                     >
                       {config.label}
                     </span>
+                    {event.signal_tier && (() => {
+                      const tierStyle = getTierBadgeStyle(event.signal_tier);
+                      return (
+                        <span
+                          style={{
+                            fontSize: '0.6rem',
+                            padding: '0.125rem 0.375rem',
+                            borderRadius: '3px',
+                            fontFamily: 'var(--font-mono)',
+                            fontWeight: 600,
+                            letterSpacing: '0.05em',
+                            background: tierStyle.background,
+                            color: tierStyle.color,
+                          }}
+                        >
+                          {event.signal_tier}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {renderEventDetails(event)}
