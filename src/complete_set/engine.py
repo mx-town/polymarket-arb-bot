@@ -36,7 +36,7 @@ class Engine:
         self._client = client
         self._cfg = cfg
         self._order_mgr = OrderManager(dry_run=cfg.dry_run)
-        self._inventory = InventoryTracker()
+        self._inventory = InventoryTracker(dry_run=cfg.dry_run)
         self._active_markets: list[GabagoolMarket] = []
         self._last_discovery: float = 0.0
         self._prev_quotable_slugs: set[str] = set()

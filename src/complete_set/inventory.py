@@ -19,13 +19,20 @@ ZERO = Decimal("0")
 
 
 class InventoryTracker:
-    def __init__(self):
+    def __init__(self, dry_run: bool = False):
+        self._dry_run = dry_run
         self._shares_by_token: dict[str, Decimal] = {}
         self._last_refresh: float = 0.0
         self._inventory_by_market: dict[str, MarketInventory] = {}
 
     def refresh_if_stale(self, client) -> None:
-        """Refresh positions from CLOB if cache is stale (>5s)."""
+        """Refresh positions from CLOB if cache is stale (>5s).
+
+        In dry-run mode, skip entirely — inventory comes from record_fill.
+        """
+        if self._dry_run:
+            return
+
         now = time.time()
         if now - self._last_refresh < CACHE_TTL_SECONDS:
             return
@@ -66,15 +73,28 @@ class InventoryTracker:
         self._shares_by_token = shares
 
     def sync_inventory(self, markets: list[GabagoolMarket]) -> None:
-        """Map token positions to per-market MarketInventory."""
+        """Map token positions to per-market MarketInventory.
+
+        In dry-run mode, only ensure market entries exist — never overwrite
+        share counts since there's no on-chain data to merge.
+        """
         for market in markets:
             if not market.up_token_id or not market.down_token_id:
+                continue
+
+            existing = self._inventory_by_market.get(market.slug)
+
+            if self._dry_run:
+                # Just ensure the entry exists; don't touch shares
+                if existing is None:
+                    self._inventory_by_market[market.slug] = MarketInventory()
                 continue
 
             up_shares = self._shares_by_token.get(market.up_token_id, ZERO)
             down_shares = self._shares_by_token.get(market.down_token_id, ZERO)
 
-            existing = self._inventory_by_market.get(market.slug, MarketInventory())
+            if existing is None:
+                existing = MarketInventory()
             self._inventory_by_market[market.slug] = MarketInventory(
                 up_shares=up_shares,
                 down_shares=down_shares,

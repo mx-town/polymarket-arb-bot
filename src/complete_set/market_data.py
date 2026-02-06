@@ -248,6 +248,14 @@ def get_top_of_book(client, token_id: str) -> Optional[TopOfBook]:
         bids = book.get("bids", []) if isinstance(book, dict) else getattr(book, "bids", [])
         asks = book.get("asks", []) if isinstance(book, dict) else getattr(book, "asks", [])
 
+        log.debug(
+            "RAW book %s │ bids=%d asks=%d │ top_bid=%s top_ask=%s",
+            token_id[:16],
+            len(bids), len(asks),
+            bids[0] if bids else "EMPTY",
+            asks[0] if asks else "EMPTY",
+        )
+
         best_bid = None
         best_bid_size = None
         if bids:
