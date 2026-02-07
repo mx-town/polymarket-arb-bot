@@ -22,6 +22,12 @@ from complete_set.models import (
 
 log = logging.getLogger("cs.orders")
 
+# ANSI colors for log highlights
+C_GREEN = "\033[32m"
+C_RED = "\033[31m"
+C_YELLOW = "\033[33m"
+C_RESET = "\033[0m"
+
 ORDER_STALE_TIMEOUT_S = 300.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
 ZERO = Decimal("0")
@@ -105,7 +111,7 @@ class OrderManager:
                 order_id = resp.order_id
 
             if not order_id:
-                log.warning("Order submission returned null orderId for %s", market.slug)
+                log.warning("%sOrder submission returned null orderId for %s%s", C_YELLOW, market.slug, C_RESET)
                 # Insert sentinel so maybe_replace returns SKIP for min_replace_millis
                 self._orders[token_id] = OrderState(
                     order_id="",
@@ -131,13 +137,13 @@ class OrderManager:
                 matched_size=ZERO,
                 seconds_to_end_at_entry=seconds_to_end,
             )
-            log.info("PLACED %s (order=%s)", label, order_id)
+            log.info("%sPLACED %s (order=%s)%s", C_GREEN, label, order_id, C_RESET)
             return True
 
         except Exception as e:
             error_str = str(e).lower()
             is_balance_error = "balance" in error_str or "allowance" in error_str
-            log.error("FAILED %s │ %s (balance_error=%s)", label, e, is_balance_error)
+            log.error("%sFAILED %s │ %s (balance_error=%s)%s", C_RED, label, e, is_balance_error, C_RESET)
             if not is_balance_error:
                 # Insert sentinel so maybe_replace returns SKIP for min_replace_millis.
                 # Skip sentinel for balance errors — no order exists to track,
@@ -227,24 +233,26 @@ class OrderManager:
                 if matched > prev_matched and on_fill:
                     delta = matched - prev_matched
                     log.info(
-                        "RECONCILE_FILL %s %s +%s shares before cancel (reason=%s)",
+                        "%sRECONCILE_FILL %s %s +%s shares before cancel (reason=%s)%s",
+                        C_YELLOW,
                         state.order_id,
                         token_id[:16],
                         delta,
                         reason,
+                        C_RESET,
                     )
                     on_fill(state, delta)
         except Exception as e:
             log.warning(
-                "Pre-cancel fill check failed %s: %s (fills may be lost)",
-                state.order_id, e,
+                "%sPre-cancel fill check failed %s: %s (fills may be lost)%s",
+                C_YELLOW, state.order_id, e, C_RESET,
             )
 
         # If fully filled, skip the cancel call — order is already terminal
         if matched >= state.size:
             log.info(
-                "SKIP_CANCEL %s fully filled (%s/%s), reason=%s",
-                state.order_id, matched, state.size, reason,
+                "%sSKIP_CANCEL %s fully filled (%s/%s), reason=%s%s",
+                C_GREEN, state.order_id, matched, state.size, reason, C_RESET,
             )
             self._orders.pop(token_id, None)
             return
@@ -255,7 +263,7 @@ class OrderManager:
             client.cancel(state.order_id)
             log.info("CANCELLED %s reason=%s", state.order_id, reason)
         except Exception as e:
-            log.warning("Cancel failed %s: %s", state.order_id, e)
+            log.warning("%sCancel failed %s: %s%s", C_RED, state.order_id, e, C_RESET)
 
     def cancel_market_orders(
         self,
@@ -300,10 +308,12 @@ class OrderManager:
                 # Only remove once stale so min_replace_millis throttles.
                 if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
                     log.info(
-                        "Removing stale dry-run order %s token=%s after %ds",
+                        "%sRemoving stale dry-run order %s token=%s after %ds%s",
+                        C_YELLOW,
                         state.order_id,
                         token_id[:16],
                         int(now - state.placed_at),
+                        C_RESET,
                     )
                     self._orders.pop(token_id, None)
                 continue
@@ -323,10 +333,12 @@ class OrderManager:
                 continue
             if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
                 log.info(
-                    "Cancelling stale order %s token=%s after %ds",
+                    "%sCancelling stale order %s token=%s after %ds%s",
+                    C_YELLOW,
                     state.order_id,
                     token_id[:16],
                     int(now - state.placed_at),
+                    C_RESET,
                 )
                 self.cancel_order(client, token_id, "STALE_TIMEOUT", on_fill)
 

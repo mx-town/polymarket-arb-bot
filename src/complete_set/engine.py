@@ -115,7 +115,7 @@ class Engine:
                             inventory=inv,
                             eligible_at=market.end_time + 60,
                         )
-                        log.info("REDEEM_QUEUED %s U%s/D%s", slug, inv.up_shares, inv.down_shares)
+                        log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
                     self._inventory.clear_market(slug)
             for token_id in list(self._order_mgr.get_open_orders()):
                 order = self._order_mgr.get_order(token_id)
@@ -147,11 +147,13 @@ class Engine:
         is_up = state.direction == Direction.UP
         self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
         log.info(
-            "FILL %s %s +%s shares @ %s",
+            "%sFILL %s %s +%s shares @ %s%s",
+            C_GREEN,
             state.market.slug,
             state.direction.value,
             filled_shares,
             state.price,
+            C_RESET,
         )
 
     def _check_redemptions(self, now: float) -> None:
@@ -185,7 +187,7 @@ class Engine:
                 tx_hash = redeem_positions(
                     self._private_key, self._rpc_url, pr.market.condition_id,
                 )
-                log.info("REDEEMED %s tx=%s", slug, tx_hash)
+                log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
                 self._pending_redemptions.pop(slug)
             except Exception as e:
                 pr.attempts += 1
@@ -221,9 +223,9 @@ class Engine:
         exited = self._prev_quotable_slugs - quotable_now
 
         for slug in sorted(entered):
-            log.info("ENTER window │ %s", slug)
+            log.info("%sENTER window │ %s%s", C_GREEN, slug, C_RESET)
         for slug in sorted(exited):
-            log.info("EXIT  window │ %s", slug)
+            log.info("%sEXIT  window │ %s%s", C_YELLOW, slug, C_RESET)
 
         self._prev_quotable_slugs = quotable_now
 
@@ -562,8 +564,8 @@ class Engine:
             self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TAKER", self._handle_fill)
 
         log.info(
-            "TAKER %s on %s at ask %s (size=%s, %ds left)",
-            direction.value, market.slug, book.best_ask, shares, seconds_to_end,
+            "%sTAKER %s on %s at ask %s (size=%s, %ds left)%s",
+            C_GREEN, direction.value, market.slug, book.best_ask, shares, seconds_to_end, C_RESET,
         )
         success = self._order_mgr.place_order(
             self._client, market, token_id, direction,
@@ -744,9 +746,9 @@ class Engine:
             self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP", self._handle_fill)
 
         log.info(
-            "TOP-UP %s on %s at ask %s (imbalance=%s, shares=%s, %ds left) [%s]",
-            direction.value, market.slug, book.best_ask,
-            imbalance_shares, top_up_shares, seconds_to_end, reason,
+            "%sTOP-UP %s on %s at ask %s (imbalance=%s, shares=%s, %ds left) [%s]%s",
+            C_YELLOW, direction.value, market.slug, book.best_ask,
+            imbalance_shares, top_up_shares, seconds_to_end, reason, C_RESET,
         )
         success = self._order_mgr.place_order(
             self._client, market, token_id, direction,

@@ -39,6 +39,10 @@ def _setup_logging(level_str: str) -> None:
 
 log = logging.getLogger("cs.bot")
 
+# ANSI colors for log highlights
+C_YELLOW = "\033[33m"
+C_RESET = "\033[0m"
+
 CLOB_HOST = "https://clob.polymarket.com"
 CHAIN_ID = 137
 
@@ -109,7 +113,7 @@ def main():
     try:
         asyncio.run(engine.run())
     except KeyboardInterrupt:
-        log.info("SHUTDOWN user interrupt")
+        log.info("%sSHUTDOWN user interrupt%s", C_YELLOW, C_RESET)
         sys.exit(0)
 
 
