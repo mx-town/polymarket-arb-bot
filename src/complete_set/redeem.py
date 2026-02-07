@@ -50,7 +50,9 @@ def redeem_positions(
         abi=REDEEM_ABI,
     )
 
-    condition_bytes = bytes.fromhex(condition_id)
+    if not condition_id:
+        raise ValueError("condition_id is empty — cannot redeem")
+    condition_bytes = bytes.fromhex(condition_id.removeprefix("0x"))
 
     tx = contract.functions.redeemPositions(
         Web3.to_checksum_address(USDC_ADDRESS),

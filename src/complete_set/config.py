@@ -31,8 +31,12 @@ class CompleteSetConfig:
     bankroll_usd: Decimal = Decimal("100")
     max_order_bankroll_fraction: Decimal = Decimal("0.05")
     max_total_bankroll_fraction: Decimal = Decimal("0.50")
+    _max_shares_per_market: Decimal = Decimal("0")
+
     @property
     def max_shares_per_market(self) -> Decimal:
+        if self._max_shares_per_market > Decimal("0"):
+            return self._max_shares_per_market
         return Decimal(int(self.bankroll_usd * self.max_total_bankroll_fraction))
 
     # Top-up
@@ -76,6 +80,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         bankroll_usd=Decimal(str(cs.get("bankroll_usd", "100"))),
         max_order_bankroll_fraction=Decimal(str(cs.get("max_order_bankroll_fraction", "0.05"))),
         max_total_bankroll_fraction=Decimal(str(cs.get("max_total_bankroll_fraction", "0.50"))),
+        _max_shares_per_market=Decimal(str(cs.get("max_shares_per_market", "0"))),
         top_up_enabled=cs.get("top_up_enabled", True),
         top_up_seconds_to_end=cs.get("top_up_seconds_to_end", 60),
         top_up_min_shares=Decimal(str(cs.get("top_up_min_shares", "10"))),

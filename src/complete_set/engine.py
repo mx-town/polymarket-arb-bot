@@ -577,6 +577,15 @@ class Engine:
         else:
             self._balance_failures.pop(market.slug, None)
 
+    def _is_at_max_shares(self, market: GabagoolMarket) -> bool:
+        """Return True if hedged inventory has reached max_shares_per_market."""
+        cap = self._cfg.max_shares_per_market
+        if cap <= ZERO:
+            return False
+        inv = self._inventory.get_inventory(market.slug)
+        hedged = min(inv.up_shares, inv.down_shares)
+        return hedged >= cap
+
     def _maybe_fast_top_up(
         self,
         market: GabagoolMarket,
@@ -586,6 +595,9 @@ class Engine:
         seconds_to_end: int,
     ) -> None:
         if not self._cfg.fast_top_up_enabled:
+            return
+
+        if self._is_at_max_shares(market):
             return
 
         imbalance = inv.imbalance
@@ -692,6 +704,9 @@ class Engine:
     ) -> None:
         if self._balance_failures.get(market.slug, 0) >= 3:
             log.debug("TOP_UP_SKIP %s too many balance failures", market.slug)
+            return
+        if self._is_at_max_shares(market):
+            log.debug("TOP_UP_SKIP %s at max_shares_per_market", market.slug)
             return
         if imbalance_shares < Decimal("0.01"):
             log.debug("TOP_UP_SKIP %s imbalance too small (%s)", market.slug, imbalance_shares)

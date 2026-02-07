@@ -21,7 +21,7 @@ assets:
 # Complete-set arbitrage strategy (Gabagool replica)
 complete_set:
   enabled: true
-  dry_run: true
+  dry_run: false
   refresh_millis: 500          # Tick interval
   min_replace_millis: 10000    # Min age before order replacement
   improve_ticks: 2             # Ticks above best bid for maker quote
@@ -37,7 +37,8 @@ complete_set:
   # Bankroll
   bankroll_usd: 30  # 
   max_order_bankroll_fraction: 0.20   # $6/order at $30 bankroll
-  max_total_bankroll_fraction: 0.50 
+  max_total_bankroll_fraction: 0.50
+  max_shares_per_market: 12
 
   # Top-up (disabled until core spread capture validated)
   top_up_enabled: true
