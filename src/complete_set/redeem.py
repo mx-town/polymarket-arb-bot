@@ -185,6 +185,22 @@ def _compute_position_id(condition_id_hex: str, index_set: int) -> int:
 
 # ── Public API ──
 
+def get_ctf_balances(
+    rpc_url: str, wallet: str, up_token_id: str, down_token_id: str,
+) -> tuple[int, int]:
+    """Query on-chain CTF ERC1155 balances for UP and DOWN positions.
+    Returns (up_balance, down_balance) in base units (6 decimals).
+    """
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    ctf = w3.eth.contract(
+        address=Web3.to_checksum_address(CTF_ADDRESS), abi=ERC1155_ABI,
+    )
+    wallet_cs = Web3.to_checksum_address(wallet)
+    up_bal = ctf.functions.balanceOf(wallet_cs, int(up_token_id)).call()
+    down_bal = ctf.functions.balanceOf(wallet_cs, int(down_token_id)).call()
+    return up_bal, down_bal
+
+
 def merge_positions(
     relay_client,
     condition_id: str,

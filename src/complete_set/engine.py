@@ -32,7 +32,7 @@ from complete_set.quote_calc import (
     calculate_skew_ticks,
     has_minimum_edge,
 )
-from complete_set.redeem import CTF_DECIMALS, merge_positions, redeem_positions
+from complete_set.redeem import CTF_DECIMALS, get_ctf_balances, merge_positions, redeem_positions
 
 log = logging.getLogger("cs.engine")
 
@@ -213,25 +213,41 @@ class Engine:
                     continue
 
                 self._merge_last_attempt[slug] = now
-                amount_base = int(hedged * (10 ** CTF_DECIMALS))
+
+                # Query actual on-chain balances to avoid reverts from inventory drift
+                try:
+                    actual_up, actual_down = get_ctf_balances(
+                        self._rpc_url, self._funder_address,
+                        market.up_token_id, market.down_token_id,
+                    )
+                except Exception as e:
+                    log.warning("MERGE_SKIP %s │ on-chain balance query failed: %s", slug, e)
+                    continue
+
+                amount_base = min(actual_up, actual_down)
+                if amount_base < int(self._cfg.min_merge_shares * (10 ** CTF_DECIMALS)):
+                    log.debug("MERGE_SKIP %s │ on-chain balance too low (up=%d, down=%d)", slug, actual_up, actual_down)
+                    continue
+
                 try:
                     tx_hash = merge_positions(
                         self._relay_client,
                         market.condition_id, amount_base,
                         neg_risk=market.neg_risk,
                     )
-                    self._inventory.reduce_merged(slug, hedged)
+                    merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
+                    self._inventory.reduce_merged(slug, merged_display)
                     self._merge_failures.pop(slug, None)
                     log.info(
                         "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
-                        C_GREEN, slug, hedged, tx_hash, C_RESET,
+                        C_GREEN, slug, merged_display, tx_hash, C_RESET,
                     )
                 except Exception as e:
                     failures = self._merge_failures.get(slug, 0) + 1
                     self._merge_failures[slug] = failures
                     log.warning(
-                        "%sMERGE_FAILED %s │ hedged=%s │ attempt %d/5 │ %s%s",
-                        C_YELLOW, slug, hedged, failures, e, C_RESET,
+                        "%sMERGE_FAILED %s │ amount_base=%d │ attempt %d/5 │ %s%s",
+                        C_YELLOW, slug, amount_base, failures, e, C_RESET,
                     )
                 # Only one merge per tick — don't block the loop further
                 break
@@ -852,6 +868,21 @@ class Engine:
                 return
 
         top_up_shares = imbalance_shares
+
+        # Per-side cap: clamp top-up to remaining headroom under max_shares_per_market
+        if self._cfg.max_shares_per_market > ZERO:
+            inv = self._inventory.get_inventory(market.slug)
+            dir_shares = inv.up_shares if direction == Direction.UP else inv.down_shares
+            if dir_shares >= self._cfg.max_shares_per_market:
+                log.debug(
+                    "TOP_UP_SKIP %s %s at per-side max (%s shares)",
+                    market.slug, direction.value, dir_shares,
+                )
+                return
+            headroom = self._cfg.max_shares_per_market - dir_shares
+            if top_up_shares > headroom:
+                top_up_shares = headroom
+
         bankroll = self._cfg.bankroll_usd
 
         # Per-order cap
