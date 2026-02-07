@@ -60,11 +60,15 @@ class MarketInventory:
 
     @property
     def up_vwap(self) -> Optional[Decimal]:
-        return (self.up_cost / self.up_shares) if self.up_shares > 0 else None
+        if self.up_shares <= 0:
+            return None
+        return (self.up_cost / self.up_shares).quantize(Decimal("0.0001"))
 
     @property
     def down_vwap(self) -> Optional[Decimal]:
-        return (self.down_cost / self.down_shares) if self.down_shares > 0 else None
+        if self.down_shares <= 0:
+            return None
+        return (self.down_cost / self.down_shares).quantize(Decimal("0.0001"))
 
     def add_up(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
         return MarketInventory(

@@ -69,6 +69,9 @@ class Engine:
         self._pending_redeem_task: dict[str, asyncio.Task] = {}  # slug -> Task
         self._start_time: float = time.time()
         self._last_session_log: float = 0.0
+        self._bg_discovery: asyncio.Task | None = None
+        self._bg_refresh: asyncio.Task | None = None
+        self._cached_wallet_bal: str = "n/a"
 
     async def run(self) -> None:
         """Main event loop."""
@@ -106,62 +109,96 @@ class Engine:
 
         try:
             while True:
-                self._tick()
+                await self._tick()
                 await asyncio.sleep(tick_interval)
         except asyncio.CancelledError:
             log.info("Engine cancelled, shutting down")
         finally:
             self._order_mgr.cancel_all(self._client, "SHUTDOWN", self._handle_fill)
 
-    def _tick(self) -> None:
-        """Single tick: discover, refresh positions, evaluate markets, check fills."""
+    async def _tick(self) -> None:
+        """Single tick: harvest bg, launch bg, evaluate+settle."""
         now = time.time()
 
-        # Discovery every 30s
-        if now - self._last_discovery > 30.0:
-            old_market_lookup = {m.slug: m for m in self._active_markets}
-            self._active_markets = discover_markets(self._cfg.assets)
+        # -- Harvest background results (fast, no I/O) --
+        if self._bg_discovery is not None and self._bg_discovery.done():
+            try:
+                new_markets = self._bg_discovery.result()
+                self._apply_discovery(new_markets, now)
+            except Exception as e:
+                log.warning("Discovery failed: %s", e)
+            self._bg_discovery = None
+
+        if self._bg_refresh is not None and self._bg_refresh.done():
+            try:
+                self._bg_refresh.result()
+            except Exception:
+                pass
+            self._bg_refresh = None
+
+        # -- Launch background I/O (non-blocking) --
+        if now - self._last_discovery > 30.0 and self._bg_discovery is None:
             self._last_discovery = now
-            # Prune inventory and cancel orphaned orders for expired markets
-            active_slugs = {m.slug for m in self._active_markets}
-            # Clear completed status only for markets that rotated out
-            self._completed_markets &= active_slugs
-            for slug in list(self._inventory.get_all_inventories()):
-                if slug not in active_slugs:
-                    inv = self._inventory.get_inventory(slug)
-                    market = old_market_lookup.get(slug)
-                    has_shares = inv.up_shares > ZERO or inv.down_shares > ZERO
-                    if has_shares and market and market.condition_id:
-                        self._pending_redemptions[slug] = PendingRedemption(
-                            market=market,
-                            inventory=inv,
-                            eligible_at=market.end_time + 60,
-                        )
-                        log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
-                    self._inventory.clear_market(slug)
-            for token_id in list(self._order_mgr.get_open_orders()):
-                order = self._order_mgr.get_order(token_id)
-                if order and order.market and order.market.slug not in active_slugs:
-                    self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED", self._handle_fill)
-            self._log_market_transitions(now)
-            self._log_summary(now)
+            self._bg_discovery = asyncio.ensure_future(
+                asyncio.to_thread(discover_markets, self._cfg.assets)
+            )
 
-        # Refresh positions
-        self._inventory.refresh_if_stale(self._client, self._active_markets)
-        self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
+        if (
+            self._bg_refresh is None
+            and not self._cfg.dry_run
+            and now - self._inventory._last_refresh >= 5.0
+        ):
+            self._bg_refresh = asyncio.ensure_future(
+                asyncio.to_thread(
+                    self._inventory.refresh_if_stale,
+                    self._client, self._active_markets,
+                )
+            )
 
-        # Evaluate each market
+        # -- Sync + evaluate in thread pool (blocks thread, not event loop) --
+        await asyncio.to_thread(self._tick_core, now)
+
+        # -- Settlements (needs asyncio for task management) --
+        self._check_settlements(now)
+
+    def _tick_core(self, now: float) -> None:
+        """Synchronous evaluate phase - runs in thread pool."""
+        self._inventory.sync_inventory(
+            self._active_markets, get_mid_price=self._get_mid_price,
+        )
         for market in self._active_markets:
             try:
                 self._evaluate_market(market, now)
             except Exception as e:
                 log.error("%sError evaluating %s: %s%s", C_RED, market.slug, e, C_RESET)
-
-        # Check pending orders for fills
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
 
-        # Check merges and pending redemptions
-        self._check_settlements(now)
+    def _apply_discovery(self, new_markets: list[GabagoolMarket], now: float) -> None:
+        """Apply results from background discovery."""
+        old_market_lookup = {m.slug: m for m in self._active_markets}
+        self._active_markets = new_markets
+
+        active_slugs = {m.slug for m in self._active_markets}
+        self._completed_markets &= active_slugs
+        for slug in list(self._inventory.get_all_inventories()):
+            if slug not in active_slugs:
+                inv = self._inventory.get_inventory(slug)
+                market = old_market_lookup.get(slug)
+                has_shares = inv.up_shares > ZERO or inv.down_shares > ZERO
+                if has_shares and market and market.condition_id:
+                    self._pending_redemptions[slug] = PendingRedemption(
+                        market=market,
+                        inventory=inv,
+                        eligible_at=market.end_time + 60,
+                    )
+                    log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
+                self._inventory.clear_market(slug)
+        for token_id in list(self._order_mgr.get_open_orders()):
+            order = self._order_mgr.get_order(token_id)
+            if order and order.market and order.market.slug not in active_slugs:
+                self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED", self._handle_fill)
+        self._log_market_transitions(now)
+        self._log_summary(now)
 
     def _handle_fill(self, state, filled_shares: Decimal) -> None:
         if state.market is None or state.direction is None:
@@ -212,12 +249,14 @@ class Engine:
                 if not task.done():
                     continue
                 del self._pending_merge_task[slug]
-                merged_display = task._merge_meta[0]
                 try:
-                    tx_hash = task.result()
+                    result = task.result()
+                    if result is None:
+                        # Balance too low, skip
+                        continue
+                    tx_hash, merged_display = result
                     self._inventory.reduce_merged(slug, merged_display)
                     self._merge_failures.pop(slug, None)
-                    # Allow re-entry on this market for another cycle
                     self._completed_markets.discard(slug)
                     log.info(
                         "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
@@ -253,28 +292,12 @@ class Engine:
 
                 self._merge_last_attempt[slug] = now
 
-                try:
-                    actual_up, actual_down = get_ctf_balances(
-                        self._rpc_url, self._funder_address,
-                        market.up_token_id, market.down_token_id,
-                    )
-                except Exception as e:
-                    log.warning("MERGE_SKIP %s │ on-chain balance query failed: %s", slug, e)
-                    continue
-
-                amount_base = min(actual_up, actual_down)
-                if amount_base < int(self._cfg.min_merge_shares * (10 ** CTF_DECIMALS)):
-                    log.debug("MERGE_SKIP %s │ on-chain balance too low (up=%d, down=%d)", slug, actual_up, actual_down)
-                    continue
-
-                merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
+                min_base = int(self._cfg.min_merge_shares * (10 ** CTF_DECIMALS))
                 task = asyncio.ensure_future(asyncio.to_thread(
-                    merge_positions, self._w3, self._account, self._funder_address,
-                    market.condition_id, amount_base, neg_risk=market.neg_risk,
+                    self._do_merge_io, slug, market, min_base,
                 ))
-                task._merge_meta = (merged_display,)  # type: ignore[attr-defined]
                 self._pending_merge_task[slug] = task
-                log.info("MERGE_LAUNCHED %s │ amount=%s shares", slug, merged_display)
+                log.info("MERGE_LAUNCHED %s", slug)
                 break
         elif self._cfg.dry_run:
             for market in self._active_markets:
@@ -377,6 +400,35 @@ class Engine:
         except Exception as e:
             log.warning("%sSTARTUP orphan cleanup failed: %s%s", C_YELLOW, e, C_RESET)
 
+    def _do_merge_io(
+        self, slug: str, market: GabagoolMarket, min_base: int,
+    ) -> tuple[str, Decimal] | None:
+        """Run balance check + merge in thread pool. Returns (tx_hash, merged_shares) or None."""
+        actual_up, actual_down = get_ctf_balances(
+            self._rpc_url, self._funder_address,
+            market.up_token_id, market.down_token_id,
+        )
+        amount_base = min(actual_up, actual_down)
+        if amount_base < min_base:
+            log.debug("MERGE_SKIP %s │ on-chain balance too low (up=%d, down=%d)", slug, actual_up, actual_down)
+            return None
+        merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
+        tx_hash = merge_positions(
+            self._w3, self._account, self._funder_address,
+            market.condition_id, amount_base, neg_risk=market.neg_risk,
+        )
+        return (tx_hash, merged_display)
+
+    def _refresh_wallet_balance(self) -> None:
+        """Launch background wallet balance refresh."""
+        def _fetch():
+            try:
+                bal = get_usdc_balance(self._rpc_url, self._funder_address)
+                self._cached_wallet_bal = f"${bal.quantize(Decimal('0.01'))}"
+            except Exception:
+                self._cached_wallet_bal = "err"
+        asyncio.ensure_future(asyncio.to_thread(_fetch))
+
     def _get_mid_price(self, token_id: str) -> Decimal | None:
         """Return mid-market price for a token, or None if book is unavailable."""
         tob = get_top_of_book(self._client, token_id)
@@ -450,14 +502,10 @@ class Engine:
                 pnl_color, runtime_str, realized, unrealized, total_pnl, roi, C_RESET,
             )
 
-        # ── Wallet balance ──
-        wallet_str = "n/a"
+        # ── Wallet balance (cached, refreshed in background) ──
+        wallet_str = self._cached_wallet_bal
         if self._rpc_url and self._funder_address:
-            try:
-                wallet_bal = get_usdc_balance(self._rpc_url, self._funder_address)
-                wallet_str = f"${wallet_bal.quantize(Decimal('0.01'))}"
-            except Exception:
-                wallet_str = "err"
+            self._refresh_wallet_balance()
 
         # ── SUMMARY header ──
         log.info(
