@@ -256,11 +256,12 @@ def calculate_exposure(
     open_orders: dict,
     inventories: dict[str, MarketInventory],
 ) -> Decimal:
-    """Calculate current capital exposure from open orders + unhedged inventory.
+    """Calculate current capital exposure from open orders + inventory.
 
-    Matches Java reference: exposure = open_orders_notional + unhedged_imbalance × $0.50.
-    Hedged pairs are risk-neutral (redeemable for $1) so they don't consume bankroll.
-    Only the unhedged imbalance represents real directional risk.
+    Three components:
+    1. Unfilled order notional (capital committed on the book)
+    2. Unhedged imbalance × $0.50 (directional risk)
+    3. Hedged-but-unmerged cost (capital locked until merge settles)
     """
     orders_notional = ZERO
     for state in open_orders.values():
@@ -271,24 +272,30 @@ def calculate_exposure(
         orders_notional += state.price * remaining
 
     unhedged_exposure = ZERO
+    hedged_locked = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
             unhedged_exposure += abs_imbalance * Decimal("0.50")
+        hedged = min(inv.up_shares, inv.down_shares)
+        if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+            hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)
 
-    return orders_notional + unhedged_exposure
+    return orders_notional + unhedged_exposure + hedged_locked
 
 
 def calculate_exposure_breakdown(
     open_orders: dict,
     inventories: dict[str, MarketInventory],
-) -> tuple[Decimal, Decimal, Decimal]:
-    """Return (orders_notional, unhedged_exposure, total_exposure) for logging.
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Return (orders_notional, unhedged_exposure, hedged_locked, total_exposure).
 
-    - unhedged_exposure: imbalance × $0.50 (matches Java reference formula)
-    - total_exposure: orders + unhedged (what counts against bankroll)
+    - orders_notional: unfilled order notional on the book
+    - unhedged_exposure: imbalance × $0.50 (directional risk)
+    - hedged_locked: cost of hedged-but-unmerged pairs (capital locked until merge)
+    - total_exposure: sum of all three (what counts against bankroll)
     """
     orders_notional = ZERO
     for state in open_orders.values():
@@ -299,12 +306,16 @@ def calculate_exposure_breakdown(
         orders_notional += state.price * remaining
 
     unhedged_exposure = ZERO
+    hedged_locked = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
             unhedged_exposure += abs_imbalance * Decimal("0.50")
+        hedged = min(inv.up_shares, inv.down_shares)
+        if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+            hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)
 
-    total = orders_notional + unhedged_exposure
-    return orders_notional, unhedged_exposure, total
+    total = orders_notional + unhedged_exposure + hedged_locked
+    return orders_notional, unhedged_exposure, hedged_locked, total

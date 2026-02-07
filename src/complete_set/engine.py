@@ -253,17 +253,34 @@ class Engine:
                 break
         elif self._cfg.dry_run:
             for market in self._active_markets:
-                inv = self._inventory.get_inventory(market.slug)
+                slug = market.slug
+                inv = self._inventory.get_inventory(slug)
                 hedged = min(inv.up_shares, inv.down_shares)
                 if hedged < self._cfg.min_merge_shares:
                     continue
                 if not market.condition_id:
                     continue
-                self._inventory.reduce_merged(market.slug, hedged)
+                # Cooldown: 15s between merge attempts per market
+                last_attempt = self._merge_last_attempt.get(slug, 0.0)
+                if now - last_attempt < 15:
+                    continue
+                # Wait for settlement after last fill (mirror live 10s delay)
+                last_fill = max(inv.last_up_fill_at or 0, inv.last_down_fill_at or 0)
+                if last_fill > 0 and now - last_fill < 10:
+                    continue
+                # Don't merge too close to resolution
+                seconds_to_end = int(market.end_time - now)
+                if seconds_to_end < self._cfg.order_cancel_buffer_sec:
+                    continue
+
+                self._merge_last_attempt[slug] = now
+                self._inventory.reduce_merged(slug, hedged)
                 log.info(
                     "DRY_MERGE %s │ merged=%s shares → freed $%s",
-                    market.slug, hedged, hedged,
+                    slug, hedged, hedged,
                 )
+                # Only one merge per tick (mirror live behavior)
+                break
 
         # ── Redeem resolved positions ──
         for slug in list(self._pending_redemptions):
@@ -357,7 +374,7 @@ class Engine:
         open_orders = self._order_mgr.get_open_orders()
         all_inv = self._inventory.get_all_inventories()
         exposure = calculate_exposure(open_orders, all_inv)
-        ord_notional, unhedged_exp, total_exp = calculate_exposure_breakdown(
+        ord_notional, unhedged_exp, hedged_locked, total_exp = calculate_exposure_breakdown(
             open_orders, all_inv,
         )
         open_count = len(open_orders)
@@ -406,9 +423,10 @@ class Engine:
             pnl_color, realized, unrealized, total_pnl, C_RESET,
         )
         log.info(
-            "  EXPOSURE orders=$%s │ unhedged=$%s │ total=$%s │ remaining=$%s",
+            "  EXPOSURE orders=$%s │ unhedged=$%s │ hedged_locked=$%s │ total=$%s │ remaining=$%s",
             ord_notional.quantize(Decimal("0.01")),
             unhedged_exp.quantize(Decimal("0.01")),
+            hedged_locked.quantize(Decimal("0.01")),
             exposure.quantize(Decimal("0.01")),
             remaining.quantize(Decimal("0.01")),
         )
@@ -622,6 +640,26 @@ class Engine:
         if entry_price is None:
             return
 
+        # Cap price based on already-filled opposite leg
+        inv = self._inventory.get_inventory(market.slug)
+        max_price: Decimal | None = None
+        if direction == Direction.UP and inv.down_shares > ZERO and inv.down_vwap is not None:
+            max_price = ONE - inv.down_vwap - self._cfg.min_edge
+            if entry_price > max_price:
+                log.debug(
+                    "PRICE_CAP %s UP entry=%s > max=%s (down_vwap=%s)",
+                    market.slug, entry_price, max_price, inv.down_vwap,
+                )
+                return
+        elif direction == Direction.DOWN and inv.up_shares > ZERO and inv.up_vwap is not None:
+            max_price = ONE - inv.up_vwap - self._cfg.min_edge
+            if entry_price > max_price:
+                log.debug(
+                    "PRICE_CAP %s DOWN entry=%s > max=%s (up_vwap=%s)",
+                    market.slug, entry_price, max_price, inv.up_vwap,
+                )
+                return
+
         if pre_shares is not None:
             shares = pre_shares
         else:
@@ -637,6 +675,7 @@ class Engine:
         decision = self._order_mgr.maybe_replace(
             token_id, entry_price, shares, self._cfg.min_replace_millis,
             min_price_change=min_price_change,
+            max_price=max_price,
         )
         if decision == ReplaceDecision.SKIP:
             return

@@ -30,6 +30,7 @@ C_RESET = "\033[0m"
 
 ORDER_STALE_TIMEOUT_S = 300.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
+DRY_FILL_DELAY_S = 1.0  # simulate fill delay in dry-run mode
 ZERO = Decimal("0")
 
 
@@ -79,14 +80,12 @@ class OrderManager:
                 price=price,
                 size=size,
                 placed_at=time.time(),
-                matched_size=size,  # mark fully matched immediately
+                matched_size=ZERO,  # starts unfilled — exposure accumulates
                 seconds_to_end_at_entry=seconds_to_end,
             )
             self._orders[token_id] = state
-            # Fire fill callback now so inventory updates, but keep order
-            # in _orders so maybe_replace sees it and respects cooldown.
-            if on_fill:
-                on_fill(state, size)
+            # Don't fire on_fill here; check_pending_orders will simulate
+            # the fill after DRY_FILL_DELAY_S so exposure is realistic.
             return True
 
         try:
@@ -172,8 +171,13 @@ class OrderManager:
         new_size: Decimal,
         min_replace_millis: int,
         min_price_change: Decimal = ZERO,
+        max_price: Decimal | None = None,
     ) -> ReplaceDecision:
         """Decide whether to skip, place new, or replace existing order."""
+        # Respect price ceiling from filled opposite leg
+        if max_price is not None and new_price > max_price:
+            return ReplaceDecision.SKIP
+
         existing = self._orders.get(token_id)
         if existing is None:
             return ReplaceDecision.PLACE
@@ -304,8 +308,35 @@ class OrderManager:
                 continue
 
             if self._dry_run:
-                # Dry-run orders persist; fills happen at placement time.
-                # Only remove once stale so min_replace_millis throttles.
+                # Simulate fill after DRY_FILL_DELAY_S
+                if state.matched_size < state.size:
+                    if now - state.placed_at >= DRY_FILL_DELAY_S:
+                        delta = state.size - state.matched_size
+                        self._orders[token_id] = OrderState(
+                            order_id=state.order_id,
+                            market=state.market,
+                            token_id=state.token_id,
+                            direction=state.direction,
+                            price=state.price,
+                            size=state.size,
+                            placed_at=state.placed_at,
+                            matched_size=state.size,
+                            last_status_check_at=now,
+                            seconds_to_end_at_entry=state.seconds_to_end_at_entry,
+                        )
+                        if on_fill:
+                            on_fill(state, delta)
+                        log.info(
+                            "%sDRY_FILL %s %s +%s shares @ %s (after %.1fs)%s",
+                            C_GREEN,
+                            state.market.slug if state.market else "?",
+                            state.direction.value if state.direction else "?",
+                            delta, state.price,
+                            now - state.placed_at,
+                            C_RESET,
+                        )
+
+                # Remove stale orders
                 if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
                     log.info(
                         "%sRemoving stale dry-run order %s token=%s after %ds%s",

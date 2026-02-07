@@ -18,7 +18,7 @@ assets:
 # Complete-set arbitrage (OPTIMIZED for fixed exposure formula)
 complete_set:
   enabled: true
-  dry_run: true
+  dry_run: false
   refresh_millis: 500
   min_replace_millis: 10000
   improve_ticks: 2
