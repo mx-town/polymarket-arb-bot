@@ -169,7 +169,7 @@ def _send_proxy_tx(
         address=Web3.to_checksum_address(PROXY_WALLET_FACTORY),
         abi=PROXY_FACTORY_ABI,
     )
-    nonce = w3.eth.get_transaction_count(account.address)
+    nonce = w3.eth.get_transaction_count(account.address, "pending")
     gas_price = w3.eth.gas_price
 
     tx = factory.functions.proxy(inner_calls).build_transaction({
@@ -364,7 +364,7 @@ def redeem_positions(
     ctf_checksum = Web3.to_checksum_address(CTF_ADDRESS)
     contract = w3.eth.contract(address=ctf_checksum, abi=REDEEM_ABI)
 
-    nonce = w3.eth.get_transaction_count(account.address)
+    nonce = w3.eth.get_transaction_count(account.address, "pending")
     gas_price = w3.eth.gas_price
 
     tx = contract.functions.redeemPositions(
@@ -408,7 +408,7 @@ def _ensure_ctf_approval_eoa(
         return
 
     log.info("MERGE_APPROVE setting %s as ERC1155 operator for %s", operator_checksum, account.address)
-    nonce = w3.eth.get_transaction_count(account.address)
+    nonce = w3.eth.get_transaction_count(account.address, "pending")
     gas_price = w3.eth.gas_price
     tx = erc1155.functions.setApprovalForAll(operator_checksum, True).build_transaction({
         "from": account.address,
@@ -428,7 +428,7 @@ def _ensure_ctf_approval_eoa(
 
 def _send_merge_direct(w3, account, contract, condition_bytes, amount, chain_id) -> str:
     """Direct EOA merge — used when no funder/proxy is configured."""
-    nonce = w3.eth.get_transaction_count(account.address)
+    nonce = w3.eth.get_transaction_count(account.address, "pending")
     gas_price = w3.eth.gas_price
 
     tx = contract.functions.mergePositions(
