@@ -20,6 +20,8 @@ from complete_set.models import GabagoolMarket, TopOfBook
 
 log = logging.getLogger("cs.market_data")
 
+_book_log_ts: dict[str, float] = {}  # token_id -> last log time
+
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 ET = ZoneInfo("America/New_York")
 
@@ -290,13 +292,14 @@ def get_top_of_book(client, token_id: str) -> Optional[TopOfBook]:
         best_ask = _extract_price(asks[0]) if asks else None
         best_ask_size = _extract_size(asks[0]) if asks else None
 
-        log.debug(
-            "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
-            token_id[:16],
-            len(bids), len(asks),
-            best_bid, best_ask,
-            (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
-        )
+        now = time.monotonic()
+        if now - _book_log_ts.get(token_id, 0) >= 5:
+            _book_log_ts[token_id] = now
+            log.debug(
+                "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
+                token_id[:16], len(bids), len(asks), best_bid, best_ask,
+                (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
+            )
 
         if best_bid is None and best_ask is None:
             return None
