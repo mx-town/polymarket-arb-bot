@@ -189,20 +189,55 @@ class OrderManager:
     # Cancel
     # -----------------------------------------------------------------
 
-    def cancel_order(self, client, token_id: str, reason: str = "") -> None:
-        """Cancel an order by token_id."""
-        state = self._orders.pop(token_id, None)
+    def cancel_order(
+        self,
+        client,
+        token_id: str,
+        reason: str = "",
+        on_fill: Optional[Callable[[OrderState, Decimal], None]] = None,
+    ) -> None:
+        """Cancel an order by token_id, reconciling any fills first."""
+        state = self._orders.get(token_id)
         if state is None:
             return
 
         if not state.order_id:
+            self._orders.pop(token_id, None)
             log.debug("REMOVE_SENTINEL %s reason=%s", token_id[:16], reason)
             return  # sentinel, nothing to cancel on CLOB
 
         if self._dry_run:
+            self._orders.pop(token_id, None)
             log.info("DRY_CANCEL %s reason=%s", token_id[:16], reason)
             return
 
+        # Reconcile fills before cancelling: query CLOB for actual matched_size
+        try:
+            order = client.get_order(state.order_id)
+            if isinstance(order, dict):
+                matched_str = (
+                    order.get("matched_size")
+                    or order.get("matchedSize")
+                    or order.get("size_matched")
+                    or order.get("filledSize")
+                )
+                matched = Decimal(str(matched_str)) if matched_str else ZERO
+                prev_matched = state.matched_size or ZERO
+                if matched > prev_matched and on_fill:
+                    delta = matched - prev_matched
+                    log.info(
+                        "RECONCILE_FILL %s %s +%s shares before cancel (reason=%s)",
+                        state.order_id,
+                        token_id[:16],
+                        delta,
+                        reason,
+                    )
+                    on_fill(state, delta)
+        except Exception as e:
+            log.warning("Pre-cancel fill check failed %s: %s", state.order_id, e)
+
+        # Now remove from tracking and cancel on CLOB
+        self._orders.pop(token_id, None)
         try:
             client.cancel(state.order_id)
             log.info("CANCELLED %s reason=%s", state.order_id, reason)
@@ -210,16 +245,25 @@ class OrderManager:
             log.warning("Cancel failed %s: %s", state.order_id, e)
 
     def cancel_market_orders(
-        self, client, market: GabagoolMarket, reason: str = ""
+        self,
+        client,
+        market: GabagoolMarket,
+        reason: str = "",
+        on_fill: Optional[Callable[[OrderState, Decimal], None]] = None,
     ) -> None:
         """Cancel all orders for a market."""
-        self.cancel_order(client, market.up_token_id, reason)
-        self.cancel_order(client, market.down_token_id, reason)
+        self.cancel_order(client, market.up_token_id, reason, on_fill)
+        self.cancel_order(client, market.down_token_id, reason, on_fill)
 
-    def cancel_all(self, client, reason: str = "SHUTDOWN") -> None:
+    def cancel_all(
+        self,
+        client,
+        reason: str = "SHUTDOWN",
+        on_fill: Optional[Callable[[OrderState, Decimal], None]] = None,
+    ) -> None:
         """Cancel all tracked orders."""
         for token_id in list(self._orders.keys()):
-            self.cancel_order(client, token_id, reason)
+            self.cancel_order(client, token_id, reason, on_fill)
 
     # -----------------------------------------------------------------
     # Fill detection
@@ -271,7 +315,7 @@ class OrderManager:
                     token_id[:16],
                     int(now - state.placed_at),
                 )
-                self.cancel_order(client, token_id, "STALE_TIMEOUT")
+                self.cancel_order(client, token_id, "STALE_TIMEOUT", on_fill)
 
     def _refresh_order_status(
         self,

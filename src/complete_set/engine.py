@@ -71,7 +71,7 @@ class Engine:
         except asyncio.CancelledError:
             log.info("Engine cancelled, shutting down")
         finally:
-            self._order_mgr.cancel_all(self._client, "SHUTDOWN")
+            self._order_mgr.cancel_all(self._client, "SHUTDOWN", self._handle_fill)
 
     def _tick(self) -> None:
         """Single tick: discover, refresh positions, evaluate markets, check fills."""
@@ -90,7 +90,7 @@ class Engine:
             for token_id in list(self._order_mgr.get_open_orders()):
                 order = self._order_mgr.get_order(token_id)
                 if order and order.market and order.market.slug not in active_slugs:
-                    self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED")
+                    self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED", self._handle_fill)
             self._log_market_transitions(now)
             self._log_summary(now)
 
@@ -216,14 +216,14 @@ class Engine:
 
         # Outside lifetime
         if seconds_to_end < 0 or seconds_to_end > max_lifetime:
-            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_LIFETIME")
+            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_LIFETIME", self._handle_fill)
             return
 
         # Outside configured time window
         min_ste = max(0, self._cfg.min_seconds_to_end)
         max_ste = min(max_lifetime, max(min_ste, self._cfg.max_seconds_to_end))
         if seconds_to_end < min_ste or seconds_to_end > max_ste:
-            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_TIME_WINDOW")
+            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_TIME_WINDOW", self._handle_fill)
             return
 
         # Fetch TOB for both legs
@@ -231,13 +231,13 @@ class Engine:
         down_book = get_top_of_book(self._client, market.down_token_id)
 
         if not up_book or not down_book:
-            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE")
+            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE", self._handle_fill)
             return
         if up_book.best_bid is None or up_book.best_ask is None:
-            self._order_mgr.cancel_order(self._client, market.up_token_id, "BOOK_STALE")
+            self._order_mgr.cancel_order(self._client, market.up_token_id, "BOOK_STALE", self._handle_fill)
             return
         if down_book.best_bid is None or down_book.best_ask is None:
-            self._order_mgr.cancel_order(self._client, market.down_token_id, "BOOK_STALE")
+            self._order_mgr.cancel_order(self._client, market.down_token_id, "BOOK_STALE", self._handle_fill)
             return
 
         inv = self._inventory.get_inventory(market.slug)
@@ -269,7 +269,7 @@ class Engine:
         up_entry = calculate_entry_price(up_book, TICK_SIZE, self._cfg.improve_ticks, skew_up)
         down_entry = calculate_entry_price(down_book, TICK_SIZE, self._cfg.improve_ticks, skew_down)
         if up_entry is None or down_entry is None:
-            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE")
+            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE", self._handle_fill)
             return
 
         # Edge check — don't cancel existing orders, just skip new quotes.
@@ -352,7 +352,7 @@ class Engine:
             return
 
         if decision == ReplaceDecision.REPLACE:
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_PRICE")
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_PRICE", self._handle_fill)
 
         reason = "REPLACE" if decision == ReplaceDecision.REPLACE else "QUOTE"
         success = self._order_mgr.place_order(
@@ -392,7 +392,7 @@ class Engine:
             age_ms = (time.time() - existing.placed_at) * 1000
             if age_ms < self._cfg.min_replace_millis:
                 return
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TAKER")
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TAKER", self._handle_fill)
 
         log.info(
             "TAKER %s on %s at ask %s (size=%s, %ds left)",
@@ -569,7 +569,7 @@ class Engine:
                     market.slug, age_ms, self._cfg.min_replace_millis,
                 )
                 return
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP")
+            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP", self._handle_fill)
 
         log.info(
             "TOP-UP %s on %s at ask %s (imbalance=%s, shares=%s, %ds left) [%s]",
