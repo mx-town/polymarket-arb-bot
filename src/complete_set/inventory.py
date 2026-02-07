@@ -120,34 +120,7 @@ class InventoryTracker:
             if existing is None:
                 existing = MarketInventory()
 
-            # Bootstrap cost for newly discovered chain positions.
-            # Only fires when chain shows shares but existing cost is zero
-            # (first startup with pre-existing positions). Once fills
-            # accumulate real cost data, existing cost is preserved.
-            up_cost = existing.up_cost
-            down_cost = existing.down_cost
-            if chain_up > ZERO and up_cost == ZERO and existing.up_shares == ZERO:
-                mid = None
-                if get_mid_price is not None:
-                    try:
-                        mid = get_mid_price(market.up_token_id)
-                    except Exception:
-                        mid = None
-                up_cost = chain_up * (mid if mid is not None else DEFAULT_PRICE)
-            if chain_down > ZERO and down_cost == ZERO and existing.down_shares == ZERO:
-                mid = None
-                if get_mid_price is not None:
-                    try:
-                        mid = get_mid_price(market.down_token_id)
-                    except Exception:
-                        mid = None
-                down_cost = chain_down * (mid if mid is not None else DEFAULT_PRICE)
-
-            # Trust chain when it's lower, UNLESS a recent fill (<10s) might
-            # not have settled yet.  This fixes phantom inventory after a
-            # merge confirms on-chain but the tracker missed reduce_merged().
-            # Also skip upward inflation after a recent merge (<30s) to prevent
-            # leftover unmerged shares from re-inflating with wrong cost/VWAP.
+            # Timing checks — compute early so bootstrap can use them
             now_sync = time.time()
             last_up_fill = existing.last_up_fill_at or 0
             last_down_fill = existing.last_down_fill_at or 0
@@ -155,6 +128,38 @@ class InventoryTracker:
             recent_up_fill = (now_sync - last_up_fill) < 10 if last_up_fill else False
             recent_down_fill = (now_sync - last_down_fill) < 10 if last_down_fill else False
             recent_merge = (now_sync - last_merge) < 30 if last_merge else False
+
+            # Bootstrap cost for newly discovered chain positions.
+            # Only fires when chain shows shares but existing cost is zero
+            # (first startup with pre-existing positions). Once fills
+            # accumulate real cost data, existing cost is preserved.
+            # Skip after recent merge — CLOB balances lag behind on-chain
+            # and would re-inflate cost that reduce_merged just zeroed.
+            up_cost = existing.up_cost
+            down_cost = existing.down_cost
+            if not recent_merge:
+                if chain_up > ZERO and up_cost == ZERO and existing.up_shares == ZERO:
+                    mid = None
+                    if get_mid_price is not None:
+                        try:
+                            mid = get_mid_price(market.up_token_id)
+                        except Exception:
+                            mid = None
+                    up_cost = chain_up * (mid if mid is not None else DEFAULT_PRICE)
+                if chain_down > ZERO and down_cost == ZERO and existing.down_shares == ZERO:
+                    mid = None
+                    if get_mid_price is not None:
+                        try:
+                            mid = get_mid_price(market.down_token_id)
+                        except Exception:
+                            mid = None
+                    down_cost = chain_down * (mid if mid is not None else DEFAULT_PRICE)
+
+            # Trust chain when it's lower, UNLESS a recent fill (<10s) might
+            # not have settled yet.  This fixes phantom inventory after a
+            # merge confirms on-chain but the tracker missed reduce_merged().
+            # Also skip upward inflation after a recent merge (<30s) to prevent
+            # leftover unmerged shares from re-inflating with wrong cost/VWAP.
 
             if recent_up_fill:
                 merged_up = existing.up_shares
