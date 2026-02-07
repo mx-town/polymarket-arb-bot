@@ -18,6 +18,7 @@ from complete_set.models import Direction, GabagoolMarket, PendingRedemption, Re
 from complete_set.redeem import redeem_positions
 from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
+    MIN_ORDER_SIZE,
     calculate_balanced_shares,
     calculate_entry_price,
     calculate_exposure,
@@ -660,6 +661,11 @@ class Engine:
             per_order_cap = bankroll * self._cfg.max_order_bankroll_fraction
             cap = (per_order_cap / book.best_ask).quantize(Decimal("0.01"))
             top_up_shares = min(top_up_shares, cap)
+
+        # If capping would strand a sub-minimum remainder, take the full imbalance
+        remainder = imbalance_shares - top_up_shares
+        if ZERO < remainder < MIN_ORDER_SIZE:
+            top_up_shares = imbalance_shares
 
         # NOTE: total bankroll cap intentionally skipped for top-ups.
         # Top-ups hedge an existing imbalance — they reduce risk, not add it.
