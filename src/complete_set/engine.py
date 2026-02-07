@@ -14,7 +14,8 @@ from decimal import Decimal
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book
-from complete_set.models import Direction, GabagoolMarket, ReplaceDecision, TopOfBook
+from complete_set.models import Direction, GabagoolMarket, PendingRedemption, ReplaceDecision, TopOfBook
+from complete_set.redeem import redeem_positions
 from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
     calculate_balanced_shares,
@@ -33,15 +34,18 @@ TICK_SIZE = Decimal("0.01")  # Default Polymarket tick size
 
 
 class Engine:
-    def __init__(self, client, cfg: CompleteSetConfig):
+    def __init__(self, client, cfg: CompleteSetConfig, private_key: str = "", rpc_url: str = ""):
         self._client = client
         self._cfg = cfg
+        self._private_key = private_key
+        self._rpc_url = rpc_url
         self._order_mgr = OrderManager(dry_run=cfg.dry_run)
         self._inventory = InventoryTracker(dry_run=cfg.dry_run)
         self._active_markets: list[GabagoolMarket] = []
         self._last_discovery: float = 0.0
         self._prev_quotable_slugs: set[str] = set()
         self._balance_failures: dict[str, int] = {}  # market slug -> consecutive failures
+        self._pending_redemptions: dict[str, PendingRedemption] = {}
 
     async def run(self) -> None:
         """Main event loop."""
@@ -60,7 +64,12 @@ class Engine:
         log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
         log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
+        log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
+        log.info("  Auto-redeem     : %s", "enabled" if not self._cfg.dry_run and self._rpc_url else "disabled (dry-run)" if self._cfg.dry_run else "disabled (no RPC URL)")
         log.info("=" * 56)
+
+        if not self._cfg.dry_run:
+            self._cancel_orphaned_orders()
 
         tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
 
@@ -79,6 +88,7 @@ class Engine:
 
         # Discovery every 30s
         if now - self._last_discovery > 30.0:
+            old_market_lookup = {m.slug: m for m in self._active_markets}
             self._active_markets = discover_markets(self._cfg.assets)
             self._last_discovery = now
             self._balance_failures.clear()
@@ -86,6 +96,16 @@ class Engine:
             active_slugs = {m.slug for m in self._active_markets}
             for slug in list(self._inventory.get_all_inventories()):
                 if slug not in active_slugs:
+                    inv = self._inventory.get_inventory(slug)
+                    market = old_market_lookup.get(slug)
+                    has_shares = inv.up_shares > ZERO or inv.down_shares > ZERO
+                    if has_shares and market and market.condition_id:
+                        self._pending_redemptions[slug] = PendingRedemption(
+                            market=market,
+                            inventory=inv,
+                            eligible_at=market.end_time + 60,
+                        )
+                        log.info("REDEEM_QUEUED %s U%s/D%s", slug, inv.up_shares, inv.down_shares)
                     self._inventory.clear_market(slug)
             for token_id in list(self._order_mgr.get_open_orders()):
                 order = self._order_mgr.get_order(token_id)
@@ -108,6 +128,9 @@ class Engine:
         # Check pending orders for fills
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
 
+        # Check pending redemptions
+        self._check_redemptions(now)
+
     def _handle_fill(self, state, filled_shares: Decimal) -> None:
         if state.market is None or state.direction is None:
             return
@@ -120,6 +143,58 @@ class Engine:
             filled_shares,
             state.price,
         )
+
+    def _check_redemptions(self, now: float) -> None:
+        """Attempt to redeem resolved positions that are past the settlement delay."""
+        for slug in list(self._pending_redemptions):
+            pr = self._pending_redemptions[slug]
+            if now < pr.eligible_at:
+                continue
+            if pr.attempts >= 3:
+                log.error("REDEEM_FAILED %s after 3 attempts, dropping", slug)
+                self._pending_redemptions.pop(slug)
+                continue
+            if pr.last_attempt_at and now - pr.last_attempt_at < 30:
+                continue
+
+            if self._cfg.dry_run:
+                hedged = min(pr.inventory.up_shares, pr.inventory.down_shares)
+                log.info(
+                    "DRY_REDEEM %s U%s/D%s → expected $%s",
+                    slug, pr.inventory.up_shares, pr.inventory.down_shares, hedged,
+                )
+                self._pending_redemptions.pop(slug)
+                continue
+
+            if not self._private_key or not self._rpc_url:
+                log.warning("REDEEM_SKIP %s no credentials configured", slug)
+                self._pending_redemptions.pop(slug)
+                continue
+
+            try:
+                tx_hash = redeem_positions(
+                    self._private_key, self._rpc_url, pr.market.condition_id,
+                )
+                log.info("REDEEMED %s tx=%s", slug, tx_hash)
+                self._pending_redemptions.pop(slug)
+            except Exception as e:
+                pr.attempts += 1
+                pr.last_attempt_at = now
+                log.warning("REDEEM_ATTEMPT %s failed (%d/3): %s", slug, pr.attempts, e)
+
+    def _cancel_orphaned_orders(self) -> None:
+        """Cancel all open orders on the CLOB from a previous session."""
+        try:
+            open_orders = self._client.get_orders()
+            if not open_orders:
+                log.info("STARTUP no orphaned orders found")
+                return
+            count = len(open_orders) if isinstance(open_orders, list) else 0
+            log.info("STARTUP found %d orphaned orders, cancelling all", count)
+            self._client.cancel_all()
+            log.info("STARTUP cancelled all orphaned orders")
+        except Exception as e:
+            log.warning("STARTUP orphan cleanup failed: %s", e)
 
     def _log_market_transitions(self, now: float) -> None:
         """Log markets entering/leaving the quotable time window."""
@@ -213,6 +288,11 @@ class Engine:
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
         seconds_to_end = int(market.end_time - now)
         max_lifetime = 900 if market.market_type == "updown-15m" else 3600
+
+        # Pre-resolution buffer: cancel all orders to avoid buying worthless shares
+        if 0 <= seconds_to_end < self._cfg.order_cancel_buffer_sec:
+            self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
+            return
 
         # Outside lifetime
         if seconds_to_end < 0 or seconds_to_end > max_lifetime:

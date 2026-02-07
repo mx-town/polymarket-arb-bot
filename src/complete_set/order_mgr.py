@@ -212,6 +212,7 @@ class OrderManager:
             return
 
         # Reconcile fills before cancelling: query CLOB for actual matched_size
+        matched = ZERO
         try:
             order = client.get_order(state.order_id)
             if isinstance(order, dict):
@@ -234,7 +235,19 @@ class OrderManager:
                     )
                     on_fill(state, delta)
         except Exception as e:
-            log.warning("Pre-cancel fill check failed %s: %s", state.order_id, e)
+            log.warning(
+                "Pre-cancel fill check failed %s: %s (fills may be lost)",
+                state.order_id, e,
+            )
+
+        # If fully filled, skip the cancel call — order is already terminal
+        if matched >= state.size:
+            log.info(
+                "SKIP_CANCEL %s fully filled (%s/%s), reason=%s",
+                state.order_id, matched, state.size, reason,
+            )
+            self._orders.pop(token_id, None)
+            return
 
         # Now remove from tracking and cancel on CLOB
         self._orders.pop(token_id, None)

@@ -12,6 +12,7 @@ dependencies = [
     "requests",
     "python-dotenv",
     "pyyaml",
+    "web3",
 ]
 
 [project.scripts]

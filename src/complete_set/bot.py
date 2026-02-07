@@ -100,8 +100,11 @@ def main():
         log.info("Complete-set strategy is disabled in config")
         sys.exit(0)
 
+    private_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+    rpc_url = os.environ.get("POLYGON_RPC_URL", "")
+
     client = _init_client(cfg.dry_run)
-    engine = Engine(client, cfg)
+    engine = Engine(client, cfg, private_key=private_key, rpc_url=rpc_url)
 
     try:
         asyncio.run(engine.run())

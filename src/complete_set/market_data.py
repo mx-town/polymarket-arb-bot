@@ -153,12 +153,15 @@ def _fetch_market_by_slug(slug: str) -> Optional[GabagoolMarket]:
         if not up_token or not down_token:
             return None
 
+        condition_id = first_market.get("conditionId", "")
+
         return GabagoolMarket(
             slug=event_slug,
             up_token_id=up_token,
             down_token_id=down_token,
             end_time=end_time,
             market_type=market_type,
+            condition_id=condition_id,
         )
 
     except Exception as e:

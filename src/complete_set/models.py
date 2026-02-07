@@ -35,6 +35,7 @@ class GabagoolMarket:
     down_token_id: str
     end_time: float  # epoch seconds
     market_type: str  # "updown-15m" or "up-or-down"
+    condition_id: str = ""  # needed for on-chain redemption contract call
 
 
 @dataclass
@@ -99,6 +100,15 @@ class MarketInventory:
             last_down_fill_price=self.last_down_fill_price,
             last_top_up_at=at,
         )
+
+
+@dataclass
+class PendingRedemption:
+    market: GabagoolMarket
+    inventory: MarketInventory
+    eligible_at: float  # end_time + 60 (wait for on-chain settlement)
+    attempts: int = 0
+    last_attempt_at: float = 0.0
 
 
 @dataclass(frozen=True)
