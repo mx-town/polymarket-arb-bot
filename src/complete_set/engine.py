@@ -34,6 +34,12 @@ ZERO = Decimal("0")
 ONE = Decimal("1")
 TICK_SIZE = Decimal("0.01")  # Default Polymarket tick size
 
+# ANSI colors for log highlights
+C_GREEN = "\033[32m"
+C_RED = "\033[31m"
+C_YELLOW = "\033[33m"
+C_RESET = "\033[0m"
+
 
 class Engine:
     def __init__(self, client, cfg: CompleteSetConfig, private_key: str = "", rpc_url: str = ""):
@@ -48,6 +54,8 @@ class Engine:
         self._prev_quotable_slugs: set[str] = set()
         self._balance_failures: dict[str, int] = {}  # market slug -> consecutive failures
         self._pending_redemptions: dict[str, PendingRedemption] = {}
+        self._start_time: float = time.time()
+        self._last_session_log: float = 0.0
 
     async def run(self) -> None:
         """Main event loop."""
@@ -125,7 +133,7 @@ class Engine:
             try:
                 self._evaluate_market(market, now)
             except Exception as e:
-                log.error("Error evaluating %s: %s", market.slug, e)
+                log.error("%sError evaluating %s: %s%s", C_RED, market.slug, e, C_RESET)
 
         # Check pending orders for fills
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
@@ -153,7 +161,7 @@ class Engine:
             if now < pr.eligible_at:
                 continue
             if pr.attempts >= 3:
-                log.error("REDEEM_FAILED %s after 3 attempts, dropping", slug)
+                log.error("%sREDEEM_FAILED %s after 3 attempts, dropping%s", C_RED, slug, C_RESET)
                 self._pending_redemptions.pop(slug)
                 continue
             if pr.last_attempt_at and now - pr.last_attempt_at < 30:
@@ -169,7 +177,7 @@ class Engine:
                 continue
 
             if not self._private_key or not self._rpc_url:
-                log.warning("REDEEM_SKIP %s no credentials configured", slug)
+                log.warning("%sREDEEM_SKIP %s no credentials configured%s", C_YELLOW, slug, C_RESET)
                 self._pending_redemptions.pop(slug)
                 continue
 
@@ -182,7 +190,7 @@ class Engine:
             except Exception as e:
                 pr.attempts += 1
                 pr.last_attempt_at = now
-                log.warning("REDEEM_ATTEMPT %s failed (%d/3): %s", slug, pr.attempts, e)
+                log.warning("%sREDEEM_ATTEMPT %s failed (%d/3): %s%s", C_YELLOW, slug, pr.attempts, e, C_RESET)
 
     def _cancel_orphaned_orders(self) -> None:
         """Cancel all open orders on the CLOB from a previous session."""
@@ -196,7 +204,7 @@ class Engine:
             self._client.cancel_all()
             log.info("STARTUP cancelled all orphaned orders")
         except Exception as e:
-            log.warning("STARTUP orphan cleanup failed: %s", e)
+            log.warning("%sSTARTUP orphan cleanup failed: %s%s", C_YELLOW, e, C_RESET)
 
     def _log_market_transitions(self, now: float) -> None:
         """Log markets entering/leaving the quotable time window."""
@@ -220,7 +228,7 @@ class Engine:
         self._prev_quotable_slugs = quotable_now
 
     def _log_summary(self, now: float) -> None:
-        """Periodic summary: inventory, exposure, entry prices vs book."""
+        """Periodic summary: P&L dashboard with inventory, exposure, entry prices vs book."""
         open_orders = self._order_mgr.get_open_orders()
         all_inv = self._inventory.get_all_inventories()
         exposure = calculate_exposure(open_orders, all_inv)
@@ -233,13 +241,43 @@ class Engine:
         total_cap = bankroll * self._cfg.max_total_bankroll_fraction if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO else bankroll
         remaining = max(ZERO, total_cap - exposure) if total_cap > ZERO else ZERO
         pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
-        session_pnl = self._inventory.session_realized_pnl.quantize(Decimal("0.01"))
 
+        # Compute total unrealized PnL across all inventories
+        total_unrealized = ZERO
+        for _slug, inv in all_inv.items():
+            hedged = min(inv.up_shares, inv.down_shares)
+            if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+                hedged_value = hedged * ONE
+                hedged_cost = hedged * (inv.up_vwap + inv.down_vwap)
+                total_unrealized += hedged_value - hedged_cost
+
+        realized = self._inventory.session_realized_pnl.quantize(Decimal("0.01"))
+        unrealized = total_unrealized.quantize(Decimal("0.01"))
+        total_pnl = (self._inventory.session_realized_pnl + total_unrealized).quantize(Decimal("0.01"))
+        pnl_color = C_GREEN if total_pnl >= ZERO else C_RED
+
+        # ── SESSION summary every 300s ──
+        if now - self._last_session_log >= 300:
+            self._last_session_log = now
+            runtime_s = int(now - self._start_time)
+            if runtime_s >= 3600:
+                runtime_str = f"{runtime_s // 3600}h {(runtime_s % 3600) // 60}m"
+            else:
+                runtime_str = f"{runtime_s // 60}m"
+            roi = (total_pnl / bankroll * 100).quantize(Decimal("0.01")) if bankroll > ZERO else ZERO
+            log.info(
+                "%s═══ SESSION ═══ runtime=%s │ realized=$%s │ unrealized=$%s │ "
+                "total=$%s │ ROI=%s%%%s",
+                pnl_color, runtime_str, realized, unrealized, total_pnl, roi, C_RESET,
+            )
+
+        # ── SUMMARY header ──
         log.info(
             "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s │ "
-            "bankroll=$%s (%s%% used) │ session_pnl=$%s",
+            "bankroll=$%s (%s%% used) │ %srealized=$%s │ unrealized=$%s │ total=$%s%s",
             len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
-            bankroll, pct_used, session_pnl,
+            bankroll, pct_used,
+            pnl_color, realized, unrealized, total_pnl, C_RESET,
         )
         log.info(
             "  EXPOSURE orders=$%s │ inventory=$%s │ total=$%s │ remaining=$%s",
@@ -254,7 +292,7 @@ class Engine:
             inv = self._inventory.get_inventory(market.slug)
             hedged = min(inv.up_shares, inv.down_shares)
 
-            # Position logging for markets with inventory
+            # POSITION + UNREALIZED lines for markets with inventory
             if inv.up_shares > ZERO or inv.down_shares > ZERO:
                 cost = (inv.up_cost + inv.down_cost).quantize(Decimal("0.01"))
                 abs_imbalance = abs(inv.imbalance)
@@ -267,12 +305,26 @@ class Engine:
                 else:
                     at_risk = Decimal("0.00")
                 log.info(
-                    "  POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ deployed=$%s │ at_risk=$%s",
+                    "  POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ at_risk=$%s",
                     market.slug[-40:],
                     inv.up_shares, inv.down_shares, hedged,
-                    cost, cost, at_risk,
+                    cost, at_risk,
                 )
 
+                # UNREALIZED line for hedged positions
+                if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+                    h_value = (hedged * ONE).quantize(Decimal("0.01"))
+                    h_cost = (hedged * (inv.up_vwap + inv.down_vwap)).quantize(Decimal("0.01"))
+                    h_pnl = (hedged * ONE - hedged * (inv.up_vwap + inv.down_vwap)).quantize(Decimal("0.01"))
+                    h_pct = (h_pnl / h_cost * 100).quantize(Decimal("0.1")) if h_cost > ZERO else ZERO
+                    color = C_GREEN if h_pnl >= ZERO else C_RED
+                    log.info(
+                        "  %sUNREALIZED %s │ value=$%s │ cost=$%s │ pnl=$%s (%s%%)%s",
+                        color, market.slug[-40:],
+                        h_value, h_cost, h_pnl, h_pct, C_RESET,
+                    )
+
+            # MARKET line: book state + edge (always shown)
             up_book = get_top_of_book(self._client, market.up_token_id)
             down_book = get_top_of_book(self._client, market.down_token_id)
 
@@ -281,7 +333,6 @@ class Engine:
             dn_bid = down_book.best_bid if down_book else None
             dn_ask = down_book.best_ask if down_book else None
 
-            # Compute what entry prices would be (no skew for summary)
             up_entry = calculate_entry_price(
                 up_book, TICK_SIZE, self._cfg.improve_ticks, 0
             ) if up_book and up_bid is not None and up_ask is not None else None
@@ -294,28 +345,32 @@ class Engine:
                 edge = ONE - (up_entry + dn_entry)
                 edge_str = f"{edge:.3f}"
 
+            log.info(
+                "  MARKET %s │ %ds │ book=U[%s/%s] D[%s/%s] │ edge=%s",
+                market.slug[-30:], ste,
+                up_bid, up_ask, dn_bid, dn_ask, edge_str,
+            )
+
+            # ORDERS line: only if inventory or active orders exist
             up_order = self._order_mgr.get_order(market.up_token_id)
             dn_order = self._order_mgr.get_order(market.down_token_id)
-            up_ord_str = f"ord@{up_order.price}" if up_order else "---"
-            dn_ord_str = f"ord@{dn_order.price}" if dn_order else "---"
+            has_orders = up_order is not None or dn_order is not None
+            has_inv = inv.up_shares > ZERO or inv.down_shares > ZERO
 
-            # Cost/VWAP segment for markets with hedged inventory
-            if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
-                total_cost = (inv.up_cost + inv.down_cost).quantize(Decimal("0.01"))
-                cost_seg = f"cost=${total_cost} vwap=U{inv.up_vwap:.2f}/D{inv.down_vwap:.2f} │ "
-            else:
-                cost_seg = ""
-
-            log.info(
-                "  %s │ %ds │ inv=U%s/D%s(h%s) │ %s"
-                "book=U[%s/%s] D[%s/%s] │ entry=U%s D%s │ edge=%s │ %s %s",
-                market.slug[-30:], ste,
-                inv.up_shares, inv.down_shares, hedged,
-                cost_seg,
-                up_bid, up_ask, dn_bid, dn_ask,
-                up_entry or "?", dn_entry or "?", edge_str,
-                up_ord_str, dn_ord_str,
-            )
+            if has_inv or has_orders:
+                up_ord_str = f"U@{up_order.price}" if up_order else "---"
+                dn_ord_str = f"D@{dn_order.price}" if dn_order else "---"
+                vwap_seg = ""
+                if inv.up_vwap is not None or inv.down_vwap is not None:
+                    up_vwap_str = f"U{inv.up_vwap:.2f}" if inv.up_vwap is not None else "U---"
+                    dn_vwap_str = f"D{inv.down_vwap:.2f}" if inv.down_vwap is not None else "D---"
+                    vwap_seg = f" │ vwap={up_vwap_str}/{dn_vwap_str}"
+                log.info(
+                    "  ORDERS %s │ inv=U%s/D%s(h%s)%s │ ord=%s %s",
+                    market.slug[-30:],
+                    inv.up_shares, inv.down_shares, hedged,
+                    vwap_seg, up_ord_str, dn_ord_str,
+                )
 
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
         seconds_to_end = int(market.end_time - now)

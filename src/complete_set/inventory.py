@@ -16,9 +16,13 @@ log = logging.getLogger("cs.inventory")
 
 CACHE_TTL_SECONDS = 5.0
 ZERO = Decimal("0")
-
-
 ONE = Decimal("1")
+
+# ANSI colors for log highlights
+C_GREEN = "\033[32m"
+C_RED = "\033[31m"
+C_YELLOW = "\033[33m"
+C_RESET = "\033[0m"
 
 
 class InventoryTracker:
@@ -155,14 +159,15 @@ class InventoryTracker:
             else:
                 unhedged_str = "none"
 
+            color = C_GREEN if hedged_pnl >= ZERO else C_RED
             log.info(
-                "CLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ cost=$%s │ "
-                "hedged_pnl=$%s │ unhedged=%s",
-                slug, removed.up_shares, removed.down_shares,
+                "%sCLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ cost=$%s │ "
+                "hedged_pnl=$%s │ unhedged=%s%s",
+                color, slug, removed.up_shares, removed.down_shares,
                 hedged,
                 hedged_cost.quantize(Decimal("0.01")),
                 hedged_pnl.quantize(Decimal("0.01")),
-                unhedged_str,
+                unhedged_str, C_RESET,
             )
         else:
             log.info(

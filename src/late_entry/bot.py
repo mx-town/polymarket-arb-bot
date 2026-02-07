@@ -60,11 +60,20 @@ def main():
 
     client = init_client(dry_run)
     positions: list[dict] = []
+    session = {
+        "total_pnl": 0.0,
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "total_invested": 0.0,
+        "total_returned": 0.0,
+    }
 
     while True:
         try:
-            _tick(client, assets, positions, strategy_cfg, dry_run)
+            _tick(client, assets, positions, strategy_cfg, dry_run, session)
         except KeyboardInterrupt:
+            _log_session_summary(session)
             log.info("SHUTDOWN user interrupt")
             sys.exit(0)
         except Exception as e:
@@ -73,7 +82,21 @@ def main():
         time.sleep(poll_interval)
 
 
-def _tick(client, assets, positions, cfg, dry_run):
+def _log_session_summary(session: dict):
+    """Log a session summary line."""
+    t = session["trades"]
+    if t == 0:
+        return
+    w, l = session["wins"], session["losses"]
+    wr = (w / t * 100) if t else 0
+    log.info(
+        f"  SESSION │ pnl={session['total_pnl']:+.4f} USDC │ "
+        f"{t} trades ({w}W {l}L {wr:.0f}%) │ "
+        f"invested=${session['total_invested']:.2f} returned=${session['total_returned']:.2f}"
+    )
+
+
+def _tick(client, assets, positions, cfg, dry_run, session):
     """Single polling tick: discover markets, check exits, check entries."""
     markets = get_active_markets(assets)
 
@@ -99,14 +122,31 @@ def _tick(client, assets, positions, cfg, dry_run):
             )
             if result["success"]:
                 pnl = (signal["price"] - pos["entry_price"]) * signal["size"]
+                cost = pos["entry_price"] * signal["size"]
+                returned = signal["price"] * signal["size"]
+
+                session["total_pnl"] += pnl
+                session["trades"] += 1
+                session["total_returned"] += returned
+                if pnl >= 0:
+                    session["wins"] += 1
+                else:
+                    session["losses"] += 1
+
                 log.info(
                     f"  CLOSED {pos['market_slug']} "
-                    f"reason={signal['reason']} pnl={pnl:+.4f} USDC"
+                    f"reason={signal['reason']} pnl={pnl:+.4f} │ "
+                    f"session={session['total_pnl']:+.4f} USDC "
+                    f"({session['trades']}t {session['wins']}W {session['losses']}L)"
                 )
                 closed.append(pos)
 
     for pos in closed:
         positions.remove(pos)
+
+    # Log summary when all positions from a cycle close out
+    if closed and not positions:
+        _log_session_summary(session)
 
     # Check entries
     active_slugs = {p["market_slug"] for p in positions}
@@ -126,6 +166,9 @@ def _tick(client, assets, positions, cfg, dry_run):
             "buy", signal["price"], signal["size"], dry_run,
         )
         if result["success"]:
+            cost = signal["price"] * signal["size"]
+            session["total_invested"] += cost
+
             positions.append({
                 "market_slug": signal["market_slug"],
                 "side": signal["side"],
@@ -138,7 +181,8 @@ def _tick(client, assets, positions, cfg, dry_run):
             })
             log.info(
                 f"  OPENED {signal['market_slug']} "
-                f"side={signal['side']} @ {signal['price']:.4f} x{signal['size']}"
+                f"side={signal['side']} @ {signal['price']:.4f} x{signal['size']} "
+                f"cost=${cost:.2f}"
             )
 
 
