@@ -21,6 +21,7 @@ from complete_set.quote_calc import (
     calculate_balanced_shares,
     calculate_entry_price,
     calculate_exposure,
+    calculate_exposure_breakdown,
     calculate_shares,
     calculate_skew_ticks,
     has_minimum_edge,
@@ -219,11 +220,13 @@ class Engine:
 
     def _log_summary(self, now: float) -> None:
         """Periodic summary: inventory, exposure, entry prices vs book."""
-        exposure = calculate_exposure(
-            self._order_mgr.get_open_orders(),
-            self._inventory.get_all_inventories(),
+        open_orders = self._order_mgr.get_open_orders()
+        all_inv = self._inventory.get_all_inventories()
+        exposure = calculate_exposure(open_orders, all_inv)
+        ord_notional, unhedged_notional, hedged_locked = calculate_exposure_breakdown(
+            open_orders, all_inv,
         )
-        open_count = len(self._order_mgr.get_open_orders())
+        open_count = len(open_orders)
 
         bankroll = self._cfg.bankroll_usd
         pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
@@ -235,11 +238,30 @@ class Engine:
             len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
             bankroll, pct_used, session_pnl,
         )
+        log.info(
+            "  EXPOSURE open_orders=$%s │ unhedged=$%s │ hedged=$%s (excluded) │ effective=$%s",
+            ord_notional.quantize(Decimal("0.01")),
+            unhedged_notional.quantize(Decimal("0.01")),
+            hedged_locked.quantize(Decimal("0.01")),
+            exposure.quantize(Decimal("0.01")),
+        )
 
         for market in self._active_markets:
             ste = int(market.end_time - now)
             inv = self._inventory.get_inventory(market.slug)
             hedged = min(inv.up_shares, inv.down_shares)
+
+            # Position logging for markets with inventory
+            if inv.up_shares > ZERO or inv.down_shares > ZERO:
+                total_cost = (inv.up_cost + inv.down_cost).quantize(Decimal("0.01"))
+                hedged_cost = (hedged * ONE).quantize(Decimal("0.01"))
+                unhedged_cost = (total_cost - hedged_cost).quantize(Decimal("0.01")) if total_cost > hedged_cost else Decimal("0.00")
+                log.info(
+                    "  POSITION %s │ U%s/D%s │ hedged=%s │ cost=$%s │ locked=$%s │ risk=$%s",
+                    market.slug[-40:],
+                    inv.up_shares, inv.down_shares, hedged,
+                    total_cost, hedged_cost, unhedged_cost,
+                )
 
             up_book = get_top_of_book(self._client, market.up_token_id)
             down_book = get_top_of_book(self._client, market.down_token_id)

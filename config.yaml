@@ -1,5 +1,5 @@
 trading:
-  dry_run: false
+  dry_run: true
   max_position_size: 5
 
 late_entry:

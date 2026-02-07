@@ -256,7 +256,11 @@ def calculate_exposure(
     open_orders: dict,
     inventories: dict[str, MarketInventory],
 ) -> Decimal:
-    """Calculate current exposure from open orders + unhedged inventory."""
+    """Calculate current risk exposure from open orders + unhedged inventory.
+
+    Hedged pairs are excluded: they guarantee $1 payout at resolution,
+    so they represent locked capital with zero risk.
+    """
     orders_notional = ZERO
     for state in open_orders.values():
         if state is None or state.price is None or state.size is None:
@@ -266,7 +270,6 @@ def calculate_exposure(
         orders_notional += state.price * remaining
 
     unhedged_notional = ZERO
-    hedged_cost = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
@@ -277,9 +280,37 @@ def calculate_exposure(
             else:
                 unit_cost = inv.last_down_fill_price if inv.last_down_fill_price else Decimal("0.50")
             unhedged_notional += abs_imbalance * unit_cost
-        # Hedged pairs represent locked capital (~$1 per complete set)
+
+    return orders_notional + unhedged_notional
+
+
+def calculate_exposure_breakdown(
+    open_orders: dict,
+    inventories: dict[str, MarketInventory],
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Return (orders_notional, unhedged_notional, hedged_locked) for logging."""
+    orders_notional = ZERO
+    for state in open_orders.values():
+        if state is None or state.price is None or state.size is None:
+            continue
+        matched = state.matched_size if state.matched_size else ZERO
+        remaining = max(ZERO, state.size - matched)
+        orders_notional += state.price * remaining
+
+    unhedged_notional = ZERO
+    hedged_locked = ZERO
+    for inv in inventories.values():
+        if inv is None:
+            continue
+        abs_imbalance = abs(inv.imbalance)
+        if abs_imbalance > ZERO:
+            if inv.imbalance > ZERO:
+                unit_cost = inv.last_up_fill_price if inv.last_up_fill_price else Decimal("0.50")
+            else:
+                unit_cost = inv.last_down_fill_price if inv.last_down_fill_price else Decimal("0.50")
+            unhedged_notional += abs_imbalance * unit_cost
         hedged_pairs = min(inv.up_shares, inv.down_shares)
         if hedged_pairs > ZERO:
-            hedged_cost += hedged_pairs * ONE
+            hedged_locked += hedged_pairs * ONE
 
-    return orders_notional + unhedged_notional + hedged_cost
+    return orders_notional, unhedged_notional, hedged_locked
