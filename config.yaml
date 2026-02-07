@@ -20,16 +20,16 @@ complete_set:
   enabled: true
   dry_run: false
   refresh_millis: 500
-  min_replace_millis: 10000
+  min_replace_millis: 3000
   improve_ticks: 2
   assets: [bitcoin]
   min_seconds_to_end: 0
   max_seconds_to_end: 900
 
   # Edge & skew
-  min_edge: 0.01
-  max_skew_ticks: 1
-  imbalance_for_max_skew: 100            # Higher, matches Java
+  min_edge: 0.02
+  max_skew_ticks: 3
+  imbalance_for_max_skew: 50             # Faster rebalancing
 
   # Bankroll — $30, conservative sizing
   bankroll_usd: 30

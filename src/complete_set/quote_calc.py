@@ -245,6 +245,20 @@ def calculate_skew_ticks(
     return (0, 0)
 
 
+def calculate_dynamic_edge(spread: Decimal, base_min_edge: Decimal) -> Decimal:
+    """Scale min_edge with spread width to protect against adverse fills.
+
+    Spread < 6%:  base_min_edge (tight market, good fills)
+    Spread 6-10%: base_min_edge × 1.5 (moderate risk)
+    Spread >= 10%: base_min_edge × 2.0 (wide spread, high slippage risk)
+    """
+    if spread >= Decimal("0.10"):
+        return base_min_edge * 2
+    if spread >= WIDE_SPREAD:
+        return (base_min_edge * 3 / 2).quantize(Decimal("0.001"))
+    return base_min_edge
+
+
 def has_minimum_edge(up_price: Decimal, down_price: Decimal, min_edge: Decimal) -> bool:
     """Check if complete-set edge is sufficient: 1 - (up + down) >= min_edge."""
     cost = up_price + down_price

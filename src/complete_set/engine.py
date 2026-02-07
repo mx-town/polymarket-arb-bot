@@ -25,6 +25,7 @@ from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
     MIN_ORDER_SIZE,
     calculate_balanced_shares,
+    calculate_dynamic_edge,
     calculate_entry_price,
     calculate_exposure,
     calculate_exposure_breakdown,
@@ -595,9 +596,15 @@ class Engine:
         # Edge check — don't cancel existing orders, just skip new quotes.
         # Existing orders were placed when edge was sufficient; let them ride
         # until stale timeout or a valid replacement comes along.
-        if not has_minimum_edge(up_entry, down_entry, self._cfg.min_edge):
-            log.debug("Skipping %s - insufficient edge (%.3f)", market.slug,
-                       ONE - (up_entry + down_entry))
+        # Dynamic edge: widen requirement for wide-spread markets
+        worst_spread = max(
+            up_book.best_ask - up_book.best_bid,
+            down_book.best_ask - down_book.best_bid,
+        )
+        dynamic_edge = calculate_dynamic_edge(worst_spread, self._cfg.min_edge)
+        if not has_minimum_edge(up_entry, down_entry, dynamic_edge):
+            log.debug("Skipping %s - insufficient edge (%.3f < %.3f)", market.slug,
+                       ONE - (up_entry + down_entry), dynamic_edge)
             return
 
         # Optional taker mode
@@ -649,8 +656,18 @@ class Engine:
         if entry_price is None:
             return
 
-        # Cap price based on already-filled opposite leg
+        # Combined VWAP gate: if accumulated fills have consumed all edge, stop quoting
         inv = self._inventory.get_inventory(market.slug)
+        if inv.up_vwap is not None and inv.down_vwap is not None:
+            combined_vwap = inv.up_vwap + inv.down_vwap
+            if combined_vwap >= ONE - self._cfg.min_edge:
+                log.debug(
+                    "VWAP_GATE %s combined_vwap=%s >= max=%s, skip",
+                    market.slug, combined_vwap, ONE - self._cfg.min_edge,
+                )
+                return
+
+        # Cap price based on already-filled opposite leg
         max_price: Decimal | None = None
         if direction == Direction.UP and inv.down_shares > ZERO and inv.down_vwap is not None:
             max_price = ONE - inv.down_vwap - self._cfg.min_edge
