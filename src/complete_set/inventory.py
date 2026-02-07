@@ -243,6 +243,7 @@ class InventoryTracker:
             merged_cost = merged_shares * (inv.up_vwap + inv.down_vwap)
             merged_pnl = merged_shares * ONE - merged_cost
             self.session_realized_pnl += merged_pnl
+            self.session_total_deployed = max(ZERO, self.session_total_deployed - merged_cost)
 
         new_up = max(ZERO, inv.up_shares - merged_shares)
         new_down = max(ZERO, inv.down_shares - merged_shares)
