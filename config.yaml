@@ -28,4 +28,4 @@ complete_set:
   max_order_bankroll_fraction: 0.15
   max_total_bankroll_fraction: 0.80
   min_merge_shares: 5
-  order_cancel_buffer_sec: 180
+  no_new_orders_sec: 90

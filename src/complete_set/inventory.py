@@ -199,6 +199,11 @@ class InventoryTracker:
             if merged_down != existing.down_shares and existing.down_shares > ZERO:
                 down_cost = down_cost * (merged_down / existing.down_shares)
 
+            # Zero out filled shares when total shares reach 0
+            # (prevents residual from previous cycle inflating hedge sizing)
+            filled_up = existing.filled_up_shares if merged_up > ZERO else ZERO
+            filled_down = existing.filled_down_shares if merged_down > ZERO else ZERO
+
             self._inventory_by_market[market.slug] = MarketInventory(
                 up_shares=merged_up,
                 down_shares=merged_down,
@@ -210,8 +215,8 @@ class InventoryTracker:
                 last_down_fill_price=existing.last_down_fill_price,
                 last_top_up_at=existing.last_top_up_at,
                 last_merge_at=existing.last_merge_at,
-                filled_up_shares=existing.filled_up_shares,
-                filled_down_shares=existing.filled_down_shares,
+                filled_up_shares=filled_up,
+                filled_down_shares=filled_down,
             )
 
     def record_fill(
@@ -225,6 +230,16 @@ class InventoryTracker:
             self._inventory_by_market[slug] = current.add_up(shares, now, price)
         else:
             self._inventory_by_market[slug] = current.add_down(shares, now, price)
+
+    def record_sell_fill(
+        self, slug: str, is_up: bool, shares: Decimal, price: Decimal
+    ) -> None:
+        """Update inventory after a sell fill (reduce shares and cost)."""
+        current = self._inventory_by_market.get(slug, MarketInventory())
+        if is_up:
+            self._inventory_by_market[slug] = current.reduce_up(shares, price)
+        else:
+            self._inventory_by_market[slug] = current.reduce_down(shares, price)
 
     def mark_top_up(self, slug: str) -> None:
         """Mark a top-up attempt for cooldown tracking."""

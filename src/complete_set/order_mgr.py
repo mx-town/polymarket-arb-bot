@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_DOWN
 from typing import Callable, Optional
 
 from py_clob_client.clob_types import OrderArgs, OrderType
-from py_clob_client.order_builder.constants import BUY
+from py_clob_client.order_builder.constants import BUY, SELL
 
 from complete_set.models import (
     Direction,
@@ -64,8 +64,9 @@ class OrderManager:
         reason: str = "QUOTE",
         on_fill: Optional[Callable] = None,
         order_type: Optional[OrderType] = None,
+        side: str = "BUY",
     ) -> bool:
-        """Place a BUY limit order. Returns True on success."""
+        """Place a BUY or SELL order. Returns True on success."""
         label = (
             f"{market.slug[:40]} │ {direction.value} "
             f"@ {price} x{size} ({reason}, {seconds_to_end}s left)"
@@ -81,6 +82,7 @@ class OrderManager:
                 price=price,
                 size=size,
                 placed_at=time.time(),
+                side=side,
                 matched_size=ZERO,  # starts unfilled — exposure accumulates
                 seconds_to_end_at_entry=seconds_to_end,
             )
@@ -122,13 +124,14 @@ class OrderManager:
                     f"@ {price} x{size} ({reason}, {seconds_to_end}s left)"
                 )
 
+            clob_side = SELL if side == "SELL" else BUY
             log.info("PLACE %s", label)
             order = client.create_order(
                 OrderArgs(
                     token_id=token_id,
                     price=float(price),
                     size=float(size),
-                    side=BUY,
+                    side=clob_side,
                 )
             )
             resp = client.post_order(order, ot)
@@ -153,6 +156,7 @@ class OrderManager:
                     price=price,
                     size=size,
                     placed_at=time.time(),
+                    side=side,
                     matched_size=ZERO,
                     seconds_to_end_at_entry=seconds_to_end,
                 )
@@ -166,6 +170,7 @@ class OrderManager:
                 price=price,
                 size=size,
                 placed_at=time.time(),
+                side=side,
                 matched_size=ZERO,
                 seconds_to_end_at_entry=seconds_to_end,
             )
@@ -190,6 +195,7 @@ class OrderManager:
                     price=price,
                     size=size,
                     placed_at=time.time(),
+                    side=side,
                     matched_size=ZERO,
                     seconds_to_end_at_entry=seconds_to_end,
                 )
@@ -320,6 +326,7 @@ class OrderManager:
                             price=state.price,
                             size=state.size,
                             placed_at=state.placed_at,
+                            side=state.side,
                             matched_size=state.size,
                             last_status_check_at=now,
                             seconds_to_end_at_entry=state.seconds_to_end_at_entry,
@@ -397,6 +404,7 @@ class OrderManager:
                 price=state.price,
                 size=state.size,
                 placed_at=state.placed_at,
+                side=state.side,
                 matched_size=state.matched_size,
                 last_status_check_at=now,
                 seconds_to_end_at_entry=state.seconds_to_end_at_entry,
@@ -434,6 +442,7 @@ class OrderManager:
             price=state.price,
             size=state.size,
             placed_at=state.placed_at,
+            side=state.side,
             matched_size=matched if matched > prev_matched else prev_matched,
             last_status_check_at=now,
             seconds_to_end_at_entry=state.seconds_to_end_at_entry,

@@ -98,6 +98,42 @@ class MarketInventory:
             filled_down_shares=self.filled_down_shares + shares,
         )
 
+    def reduce_up(self, shares: Decimal, price: Decimal) -> MarketInventory:
+        new_up = max(Decimal("0"), self.up_shares - shares)
+        ratio = new_up / self.up_shares if self.up_shares > 0 else Decimal("0")
+        return MarketInventory(
+            up_shares=new_up,
+            down_shares=self.down_shares,
+            up_cost=self.up_cost * ratio,
+            down_cost=self.down_cost,
+            last_up_fill_at=self.last_up_fill_at,
+            last_down_fill_at=self.last_down_fill_at,
+            last_up_fill_price=self.last_up_fill_price,
+            last_down_fill_price=self.last_down_fill_price,
+            last_top_up_at=self.last_top_up_at,
+            last_merge_at=self.last_merge_at,
+            filled_up_shares=max(Decimal("0"), self.filled_up_shares - shares),
+            filled_down_shares=self.filled_down_shares,
+        )
+
+    def reduce_down(self, shares: Decimal, price: Decimal) -> MarketInventory:
+        new_down = max(Decimal("0"), self.down_shares - shares)
+        ratio = new_down / self.down_shares if self.down_shares > 0 else Decimal("0")
+        return MarketInventory(
+            up_shares=self.up_shares,
+            down_shares=new_down,
+            up_cost=self.up_cost,
+            down_cost=self.down_cost * ratio,
+            last_up_fill_at=self.last_up_fill_at,
+            last_down_fill_at=self.last_down_fill_at,
+            last_up_fill_price=self.last_up_fill_price,
+            last_down_fill_price=self.last_down_fill_price,
+            last_top_up_at=self.last_top_up_at,
+            last_merge_at=self.last_merge_at,
+            filled_up_shares=self.filled_up_shares,
+            filled_down_shares=max(Decimal("0"), self.filled_down_shares - shares),
+        )
+
     def mark_top_up(self, at: float) -> MarketInventory:
         return MarketInventory(
             up_shares=self.up_shares,
@@ -133,6 +169,7 @@ class OrderState:
     price: Decimal
     size: Decimal
     placed_at: float  # time.time()
+    side: str = "BUY"
     matched_size: Decimal = field(default_factory=lambda: Decimal("0"))
     last_status_check_at: Optional[float] = None
     seconds_to_end_at_entry: Optional[int] = None

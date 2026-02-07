@@ -17,7 +17,7 @@ class CompleteSetConfig:
     # Time window
     min_seconds_to_end: int = 0
     max_seconds_to_end: int = 3600
-    order_cancel_buffer_sec: int = 45
+    no_new_orders_sec: int = 45
 
     # Edge
     min_edge: Decimal = Decimal("0.01")
@@ -46,7 +46,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         assets=tuple(assets),
         min_seconds_to_end=cs.get("min_seconds_to_end", 0),
         max_seconds_to_end=cs.get("max_seconds_to_end", 3600),
-        order_cancel_buffer_sec=cs.get("order_cancel_buffer_sec", 45),
+        no_new_orders_sec=cs.get("no_new_orders_sec", 45),
         min_edge=Decimal(str(cs.get("min_edge", "0.01"))),
         bankroll_usd=Decimal(str(cs.get("bankroll_usd", "100"))),
         max_order_bankroll_fraction=Decimal(str(cs.get("max_order_bankroll_fraction", "0.05"))),

@@ -4,7 +4,7 @@ Per-window lifecycle:
 1. No position: buy cheapest leg if ask < (1 - min_edge) / 2 (FOK)
 2. One leg filled: hedge the other if first_vwap + second_ask < 1 - min_edge (FOK)
 3. Both legs filled (hedged >= min_merge_shares): mark complete, merge
-4. Cancel buffer: stop trying when seconds_to_end < order_cancel_buffer_sec
+4. Buffer: stop new orders + sell unhedged legs when seconds_to_end < no_new_orders_sec
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ class Engine:
         log.info("  Min edge        : %s", self._cfg.min_edge)
         log.info("  Bankroll        : $%s", self._cfg.bankroll_usd)
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
-        log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
+        log.info("  No new orders   : %ds", self._cfg.no_new_orders_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
@@ -167,6 +167,20 @@ class Engine:
         if state.market is None or state.direction is None:
             return
         is_up = state.direction == Direction.UP
+
+        if state.side == "SELL":
+            self._inventory.record_sell_fill(state.market.slug, is_up, filled_shares, state.price)
+            log.info(
+                "%sSELL_FILL %s %s -%s shares @ %s%s",
+                C_YELLOW,
+                state.market.slug,
+                state.direction.value,
+                filled_shares,
+                state.price,
+                C_RESET,
+            )
+            return
+
         self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
         log.info(
             "%sFILL %s %s +%s shares @ %s%s",
@@ -234,7 +248,7 @@ class Engine:
                 if now - last_attempt < 15:
                     continue
                 seconds_to_end = int(market.end_time - now)
-                if seconds_to_end < self._cfg.order_cancel_buffer_sec:
+                if seconds_to_end < self._cfg.no_new_orders_sec:
                     continue
 
                 self._merge_last_attempt[slug] = now
@@ -277,7 +291,7 @@ class Engine:
                     continue
                 # Don't merge too close to resolution
                 seconds_to_end = int(market.end_time - now)
-                if seconds_to_end < self._cfg.order_cancel_buffer_sec:
+                if seconds_to_end < self._cfg.no_new_orders_sec:
                     continue
 
                 self._merge_last_attempt[slug] = now
@@ -532,9 +546,42 @@ class Engine:
         seconds_to_end = int(market.end_time - now)
         max_lifetime = 900 if market.market_type == "updown-15m" else 3600
 
-        # Pre-resolution buffer: cancel all orders
-        if 0 <= seconds_to_end < self._cfg.order_cancel_buffer_sec:
+        # Pre-resolution buffer: cancel pending orders and sell unhedged legs
+        if 0 <= seconds_to_end < self._cfg.no_new_orders_sec:
             self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
+
+            # Sell unhedged single legs at bid (FOK) to recover capital
+            inv = self._inventory.get_inventory(slug)
+            if inv.up_shares > ZERO and inv.down_shares == ZERO:
+                up_book = get_top_of_book(self._client, market.up_token_id)
+                if up_book and up_book.best_bid and up_book.best_bid > ZERO:
+                    if not self._order_mgr.has_order(market.up_token_id):
+                        log.info(
+                            "%sCLEANUP_SELL %s │ UP %s shares @ bid %s │ %ds left%s",
+                            C_YELLOW, slug, inv.up_shares, up_book.best_bid,
+                            seconds_to_end, C_RESET,
+                        )
+                        self._order_mgr.place_order(
+                            self._client, market, market.up_token_id, Direction.UP,
+                            up_book.best_bid, inv.up_shares, seconds_to_end,
+                            "CLEANUP_SELL", on_fill=self._handle_fill,
+                            order_type=OrderType.FOK, side="SELL",
+                        )
+            elif inv.down_shares > ZERO and inv.up_shares == ZERO:
+                down_book = get_top_of_book(self._client, market.down_token_id)
+                if down_book and down_book.best_bid and down_book.best_bid > ZERO:
+                    if not self._order_mgr.has_order(market.down_token_id):
+                        log.info(
+                            "%sCLEANUP_SELL %s │ DOWN %s shares @ bid %s │ %ds left%s",
+                            C_YELLOW, slug, inv.down_shares, down_book.best_bid,
+                            seconds_to_end, C_RESET,
+                        )
+                        self._order_mgr.place_order(
+                            self._client, market, market.down_token_id, Direction.DOWN,
+                            down_book.best_bid, inv.down_shares, seconds_to_end,
+                            "CLEANUP_SELL", on_fill=self._handle_fill,
+                            order_type=OrderType.FOK, side="SELL",
+                        )
             return
 
         # Outside lifetime
@@ -611,6 +658,11 @@ class Engine:
                 log.debug("FIRST_LEG_SKIP %s │ insufficient bankroll", slug)
                 return
 
+            # Skip if we already have a pending order for this token
+            if self._order_mgr.has_order(target_token):
+                log.debug("FIRST_LEG_SKIP %s │ pending order for %s", slug, side_label)
+                return
+
             log.info(
                 "%sFIRST_LEG %s │ %s ask=%s │ max_first=%.3f │ shares=%s │ %ds left%s",
                 C_GREEN, slug, side_label, target_ask, max_first_leg,
@@ -651,6 +703,10 @@ class Engine:
                               slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
                     return
 
+            if self._order_mgr.has_order(market.down_token_id):
+                log.debug("HEDGE_SKIP %s │ pending order for DOWN", slug)
+                return
+
             log.info(
                 "%sHEDGE_LEG %s │ DOWN ask=%s │ UP_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
                 C_GREEN, slug, down_ask, inv.up_vwap, edge,
@@ -688,6 +744,10 @@ class Engine:
                     log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
                               slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
                     return
+
+            if self._order_mgr.has_order(market.up_token_id):
+                log.debug("HEDGE_SKIP %s │ pending order for UP", slug)
+                return
 
             log.info(
                 "%sHEDGE_LEG %s │ UP ask=%s │ DOWN_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
