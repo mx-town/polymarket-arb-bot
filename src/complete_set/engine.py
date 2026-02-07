@@ -258,10 +258,16 @@ class Engine:
                 continue
 
             try:
+                # NegRisk adapter requires explicit amounts; standard CTF redeems all held
+                redeem_amount = 0
+                if pr.market.neg_risk:
+                    redeem_shares = max(pr.inventory.up_shares, pr.inventory.down_shares)
+                    redeem_amount = int(redeem_shares * (10 ** CTF_DECIMALS))
                 tx_hash = redeem_positions(
                     self._private_key, self._rpc_url, pr.market.condition_id,
                     funder_address=self._funder_address,
                     neg_risk=pr.market.neg_risk,
+                    amount=redeem_amount,
                 )
                 log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
                 self._pending_redemptions.pop(slug)
