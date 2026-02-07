@@ -4,7 +4,10 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
@@ -29,6 +32,15 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class _StripAnsiFormatter(logging.Formatter):
+    """Strip ANSI escape codes for clean log files."""
+    _ansi_re = re.compile(r'\033\[[0-9;]*m')
+
+    def format(self, record):
+        result = super().format(record)
+        return self._ansi_re.sub('', result)
+
+
 def _setup_logging(level_str: str) -> None:
     level = getattr(logging, level_str.upper(), logging.INFO)
     logging.basicConfig(
@@ -36,6 +48,19 @@ def _setup_logging(level_str: str) -> None:
         format="%(asctime)s │ %(name)-16s │ %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # File handler — full timestamps, no ANSI colors
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"complete_set_{datetime.now():%Y-%m-%d_%H%M%S}.log"
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(level)
+    fh.setFormatter(_StripAnsiFormatter(
+        fmt="%(asctime)s │ %(name)-16s │ %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(fh)
+
     for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

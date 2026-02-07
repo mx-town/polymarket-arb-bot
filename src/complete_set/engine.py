@@ -728,14 +728,14 @@ class Engine:
             lag_fill_at = inv.last_down_fill_at
             lagging_book = down_book
             lagging_token = market.down_token_id
-            lead_fill_price = inv.up_vwap  # VWAP instead of last fill
+            lead_fill_price = inv.last_up_fill_price or inv.up_vwap
         else:
             lagging = Direction.UP
             lead_fill_at = inv.last_down_fill_at
             lag_fill_at = inv.last_up_fill_at
             lagging_book = up_book
             lagging_token = market.up_token_id
-            lead_fill_price = inv.down_vwap  # VWAP instead of last fill
+            lead_fill_price = inv.last_down_fill_price or inv.down_vwap
 
         if lead_fill_at is None:
             log.debug("FAST_TOP_UP_SKIP %s no lead fill timestamp", market.slug)
