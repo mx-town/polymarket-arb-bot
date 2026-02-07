@@ -215,16 +215,16 @@ def discover_markets(assets: tuple[str, ...]) -> list[GabagoolMarket]:
                 if market and market.end_time > now:
                     markets.append(market)
 
-        # 1h markets
-        prefix_1h = _ASSET_PREFIXES_1H.get(asset)
-        if prefix_1h:
-            for slug in _candidate_1h_slugs(prefix_1h, now):
-                if slug in seen_slugs:
-                    continue
-                seen_slugs.add(slug)
-                market = _fetch_market_by_slug(slug)
-                if market and market.end_time > now:
-                    markets.append(market)
+        # 1h markets — disabled; only 15m markets are traded
+        # prefix_1h = _ASSET_PREFIXES_1H.get(asset)
+        # if prefix_1h:
+        #     for slug in _candidate_1h_slugs(prefix_1h, now):
+        #         if slug in seen_slugs:
+        #             continue
+        #         seen_slugs.add(slug)
+        #         market = _fetch_market_by_slug(slug)
+        #         if market and market.end_time > now:
+        #             markets.append(market)
 
     if markets:
         log.info("Discovered %d active markets", len(markets))

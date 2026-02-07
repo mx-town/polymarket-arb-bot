@@ -35,10 +35,10 @@ complete_set:
   imbalance_for_max_skew: 50   # Scaled down for smaller capital
 
   # Bankroll
-  bankroll_usd: 30  # 
-  max_order_bankroll_fraction: 0.20   # $6/order at $30 bankroll
+  bankroll_usd: 50
+  max_order_bankroll_fraction: 0.20   # $10/order at $50 bankroll
   max_total_bankroll_fraction: 0.50
-  max_shares_per_market: 12
+  max_shares_per_market: 20
 
   # Top-up (disabled until core spread capture validated)
   top_up_enabled: true
