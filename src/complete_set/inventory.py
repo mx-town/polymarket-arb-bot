@@ -75,17 +75,25 @@ class InventoryTracker:
                         shares[asset] = shares.get(asset, ZERO) + size_dec
         except Exception:
             # Fallback: no position data available
-            log.debug("Could not fetch positions, keeping existing data")
+            log.info("Could not fetch positions, keeping existing data")
             return
 
         self._shares_by_token = shares
 
-    def sync_inventory(self, markets: list[GabagoolMarket]) -> None:
+    def sync_inventory(
+        self, markets: list[GabagoolMarket], get_mid_price=None,
+    ) -> None:
         """Map token positions to per-market MarketInventory.
 
         In dry-run mode, only ensure market entries exist — never overwrite
         share counts since there's no on-chain data to merge.
+
+        When get_mid_price is provided and a chain position has zero cost
+        (newly discovered, no prior fills), estimate cost using mid-market
+        price so exposure calculations account for deployed capital.
         """
+        DEFAULT_PRICE = Decimal("0.50")
+
         for market in markets:
             if not market.up_token_id or not market.down_token_id:
                 continue
@@ -103,13 +111,48 @@ class InventoryTracker:
 
             if existing is None:
                 existing = MarketInventory()
+
+            # Bootstrap cost for newly discovered chain positions.
+            # Only fires when chain shows shares but existing cost is zero
+            # (first startup with pre-existing positions). Once fills
+            # accumulate real cost data, existing cost is preserved.
+            up_cost = existing.up_cost
+            down_cost = existing.down_cost
+            if chain_up > ZERO and up_cost == ZERO and existing.up_shares == ZERO:
+                mid = None
+                if get_mid_price is not None:
+                    try:
+                        mid = get_mid_price(market.up_token_id)
+                    except Exception:
+                        mid = None
+                up_cost = chain_up * (mid if mid is not None else DEFAULT_PRICE)
+            if chain_down > ZERO and down_cost == ZERO and existing.down_shares == ZERO:
+                mid = None
+                if get_mid_price is not None:
+                    try:
+                        mid = get_mid_price(market.down_token_id)
+                    except Exception:
+                        mid = None
+                down_cost = chain_down * (mid if mid is not None else DEFAULT_PRICE)
+
+            merged_up = max(chain_up, existing.up_shares)
+            merged_down = max(chain_down, existing.down_shares)
+
+            # Log when chain positions are loaded
+            if (up_cost != existing.up_cost or down_cost != existing.down_cost):
+                est_cost = (up_cost + down_cost).quantize(Decimal("0.01"))
+                log.info(
+                    "SYNC_POSITION %s U%s/D%s (est_cost=$%s)",
+                    market.slug, merged_up, merged_down, est_cost,
+                )
+
             # Use max() to merge: never reduce shares below what record_fill
             # has accumulated, even if CLOB positions haven't settled yet.
             self._inventory_by_market[market.slug] = MarketInventory(
-                up_shares=max(chain_up, existing.up_shares),
-                down_shares=max(chain_down, existing.down_shares),
-                up_cost=existing.up_cost,
-                down_cost=existing.down_cost,
+                up_shares=merged_up,
+                down_shares=merged_down,
+                up_cost=up_cost,
+                down_cost=down_cost,
                 last_up_fill_at=existing.last_up_fill_at,
                 last_down_fill_at=existing.last_down_fill_at,
                 last_up_fill_price=existing.last_up_fill_price,

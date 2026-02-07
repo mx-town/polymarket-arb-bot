@@ -82,6 +82,13 @@ class Engine:
         if not self._cfg.dry_run:
             self._cancel_orphaned_orders()
 
+        # Initial position sync — detect existing chain positions before first tick
+        self._active_markets = discover_markets(self._cfg.assets)
+        self._last_discovery = time.time()
+        self._inventory.refresh_if_stale(self._client)
+        self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
+        self._log_summary(time.time())
+
         tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
 
         try:
@@ -127,7 +134,7 @@ class Engine:
 
         # Refresh positions
         self._inventory.refresh_if_stale(self._client)
-        self._inventory.sync_inventory(self._active_markets)
+        self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
 
         # Evaluate each market
         for market in self._active_markets:
@@ -208,6 +215,13 @@ class Engine:
             log.info("STARTUP cancelled all orphaned orders")
         except Exception as e:
             log.warning("%sSTARTUP orphan cleanup failed: %s%s", C_YELLOW, e, C_RESET)
+
+    def _get_mid_price(self, token_id: str) -> Decimal | None:
+        """Return mid-market price for a token, or None if book is unavailable."""
+        tob = get_top_of_book(self._client, token_id)
+        if tob and tob.best_bid is not None and tob.best_ask is not None:
+            return (tob.best_bid + tob.best_ask) / 2
+        return None
 
     def _log_market_transitions(self, now: float) -> None:
         """Log markets entering/leaving the quotable time window."""
