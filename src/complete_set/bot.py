@@ -8,6 +8,7 @@ import sys
 
 import yaml
 from dotenv import load_dotenv
+from py_builder_relayer_client.client import RelayClient
 from py_builder_signing_sdk.config import BuilderConfig
 from py_builder_signing_sdk.sdk_types import BuilderApiKeyCreds
 from py_clob_client.client import ClobClient
@@ -109,7 +110,32 @@ def main():
     funder = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
 
     client = _init_client(cfg.dry_run)
-    engine = Engine(client, cfg, private_key=private_key, rpc_url=rpc_url, funder_address=funder)
+
+    # Create RelayClient for gasless merge/redeem (requires builder creds)
+    relay_client = None
+    if not cfg.dry_run and private_key:
+        builder_key = os.environ.get("POLYMARKET_BUILDER_KEY")
+        builder_secret = os.environ.get("POLYMARKET_BUILDER_SECRET")
+        builder_passphrase = os.environ.get("POLYMARKET_BUILDER_PASSPHRASE")
+        if builder_key and builder_secret and builder_passphrase:
+            relay_builder_config = BuilderConfig(
+                local_builder_creds=BuilderApiKeyCreds(
+                    key=builder_key,
+                    secret=builder_secret,
+                    passphrase=builder_passphrase,
+                ),
+            )
+            relay_client = RelayClient(
+                "https://relayer-v2.polymarket.com/",
+                CHAIN_ID,
+                private_key,
+                relay_builder_config,
+            )
+            log.info("INIT RelayClient ready for gasless merge/redeem")
+        else:
+            log.warning("INIT builder creds missing — merge/redeem disabled")
+
+    engine = Engine(client, cfg, relay_client=relay_client, rpc_url=rpc_url, funder_address=funder)
 
     try:
         asyncio.run(engine.run())

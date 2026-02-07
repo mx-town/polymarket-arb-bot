@@ -14,8 +14,13 @@ from decimal import Decimal
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book
-from complete_set.models import Direction, GabagoolMarket, PendingRedemption, ReplaceDecision, TopOfBook
-from complete_set.redeem import CTF_DECIMALS, merge_positions, redeem_positions
+from complete_set.models import (
+    Direction,
+    GabagoolMarket,
+    PendingRedemption,
+    ReplaceDecision,
+    TopOfBook,
+)
 from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
     MIN_ORDER_SIZE,
@@ -27,6 +32,7 @@ from complete_set.quote_calc import (
     calculate_skew_ticks,
     has_minimum_edge,
 )
+from complete_set.redeem import CTF_DECIMALS, merge_positions, redeem_positions
 
 log = logging.getLogger("cs.engine")
 
@@ -42,10 +48,13 @@ C_RESET = "\033[0m"
 
 
 class Engine:
-    def __init__(self, client, cfg: CompleteSetConfig, private_key: str = "", rpc_url: str = "", funder_address: str = ""):
+    def __init__(
+        self, client, cfg: CompleteSetConfig,
+        relay_client=None, rpc_url: str = "", funder_address: str = "",
+    ):
         self._client = client
         self._cfg = cfg
-        self._private_key = private_key
+        self._relay_client = relay_client
         self._rpc_url = rpc_url
         self._funder_address = funder_address
         self._order_mgr = OrderManager(dry_run=cfg.dry_run)
@@ -80,7 +89,13 @@ class Engine:
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
         log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
-        log.info("  Auto-redeem     : %s", "enabled" if not self._cfg.dry_run and self._rpc_url else "disabled (dry-run)" if self._cfg.dry_run else "disabled (no RPC URL)")
+        if not self._cfg.dry_run and self._relay_client:
+            redeem_mode = "enabled (relayer)"
+        elif self._cfg.dry_run:
+            redeem_mode = "disabled (dry-run)"
+        else:
+            redeem_mode = "disabled (no relayer)"
+        log.info("  Auto-redeem     : %s", redeem_mode)
         log.info("=" * 56)
 
         if not self._cfg.dry_run:
@@ -172,7 +187,7 @@ class Engine:
         """Merge hedged pairs on active markets, then redeem resolved positions."""
         # ── Merge hedged pairs back to USDC on active markets ──
         # At most one merge per tick to avoid stalling the event loop
-        if not self._cfg.dry_run and self._private_key and self._rpc_url:
+        if not self._cfg.dry_run and self._relay_client:
             for market in self._active_markets:
                 slug = market.slug
                 inv = self._inventory.get_inventory(slug)
@@ -197,9 +212,8 @@ class Engine:
                 amount_base = int(hedged * (10 ** CTF_DECIMALS))
                 try:
                     tx_hash = merge_positions(
-                        self._private_key, self._rpc_url,
+                        self._relay_client,
                         market.condition_id, amount_base,
-                        funder_address=self._funder_address,
                         neg_risk=market.neg_risk,
                     )
                     self._inventory.reduce_merged(slug, hedged)
@@ -252,8 +266,8 @@ class Engine:
                 self._pending_redemptions.pop(slug)
                 continue
 
-            if not self._private_key or not self._rpc_url:
-                log.warning("%sREDEEM_SKIP %s no credentials configured%s", C_YELLOW, slug, C_RESET)
+            if not self._relay_client:
+                log.warning("%sREDEEM_SKIP %s no relayer configured%s", C_YELLOW, slug, C_RESET)
                 self._pending_redemptions.pop(slug)
                 continue
 
@@ -264,8 +278,7 @@ class Engine:
                     redeem_shares = max(pr.inventory.up_shares, pr.inventory.down_shares)
                     redeem_amount = int(redeem_shares * (10 ** CTF_DECIMALS))
                 tx_hash = redeem_positions(
-                    self._private_key, self._rpc_url, pr.market.condition_id,
-                    funder_address=self._funder_address,
+                    self._relay_client, pr.market.condition_id,
                     neg_risk=pr.market.neg_risk,
                     amount=redeem_amount,
                 )
