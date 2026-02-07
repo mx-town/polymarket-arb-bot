@@ -15,7 +15,7 @@ from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book
 from complete_set.models import Direction, GabagoolMarket, PendingRedemption, ReplaceDecision, TopOfBook
-from complete_set.redeem import redeem_positions
+from complete_set.redeem import CTF_DECIMALS, merge_positions, redeem_positions
 from complete_set.order_mgr import OrderManager
 from complete_set.quote_calc import (
     MIN_ORDER_SIZE,
@@ -76,6 +76,7 @@ class Engine:
         log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
         log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
+        log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
         log.info("  Auto-redeem     : %s", "enabled" if not self._cfg.dry_run and self._rpc_url else "disabled (dry-run)" if self._cfg.dry_run else "disabled (no RPC URL)")
         log.info("=" * 56)
 
@@ -146,8 +147,8 @@ class Engine:
         # Check pending orders for fills
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
 
-        # Check pending redemptions
-        self._check_redemptions(now)
+        # Check merges and pending redemptions
+        self._check_settlements(now)
 
     def _handle_fill(self, state, filled_shares: Decimal) -> None:
         if state.market is None or state.direction is None:
@@ -164,8 +165,50 @@ class Engine:
             C_RESET,
         )
 
-    def _check_redemptions(self, now: float) -> None:
-        """Attempt to redeem resolved positions that are past the settlement delay."""
+    def _check_settlements(self, now: float) -> None:
+        """Merge hedged pairs on active markets, then redeem resolved positions."""
+        # ── Merge hedged pairs back to USDC on active markets ──
+        if not self._cfg.dry_run and self._private_key and self._rpc_url:
+            for market in self._active_markets:
+                inv = self._inventory.get_inventory(market.slug)
+                hedged = min(inv.up_shares, inv.down_shares)
+                if hedged < self._cfg.min_merge_shares:
+                    continue
+                if not market.condition_id:
+                    continue
+
+                # Convert share amount to base units (6 decimals for CTF on Polygon)
+                amount_base = int(hedged * (10 ** CTF_DECIMALS))
+                try:
+                    tx_hash = merge_positions(
+                        self._private_key, self._rpc_url,
+                        market.condition_id, amount_base,
+                    )
+                    self._inventory.reduce_merged(market.slug, hedged)
+                    log.info(
+                        "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
+                        C_GREEN, market.slug, hedged, tx_hash, C_RESET,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "%sMERGE_FAILED %s │ hedged=%s │ %s%s",
+                        C_YELLOW, market.slug, hedged, e, C_RESET,
+                    )
+        elif self._cfg.dry_run:
+            for market in self._active_markets:
+                inv = self._inventory.get_inventory(market.slug)
+                hedged = min(inv.up_shares, inv.down_shares)
+                if hedged < self._cfg.min_merge_shares:
+                    continue
+                if not market.condition_id:
+                    continue
+                self._inventory.reduce_merged(market.slug, hedged)
+                log.info(
+                    "DRY_MERGE %s │ merged=%s shares → freed $%s",
+                    market.slug, hedged, hedged,
+                )
+
+        # ── Redeem resolved positions ──
         for slug in list(self._pending_redemptions):
             pr = self._pending_redemptions[slug]
             if now < pr.eligible_at:
@@ -249,7 +292,7 @@ class Engine:
         open_orders = self._order_mgr.get_open_orders()
         all_inv = self._inventory.get_all_inventories()
         exposure = calculate_exposure(open_orders, all_inv)
-        ord_notional, inventory_cost, at_risk_cost = calculate_exposure_breakdown(
+        ord_notional, unhedged_exp, total_exp = calculate_exposure_breakdown(
             open_orders, all_inv,
         )
         open_count = len(open_orders)
@@ -297,9 +340,9 @@ class Engine:
             pnl_color, realized, unrealized, total_pnl, C_RESET,
         )
         log.info(
-            "  EXPOSURE orders=$%s │ inventory=$%s │ total=$%s │ remaining=$%s",
+            "  EXPOSURE orders=$%s │ unhedged=$%s │ total=$%s │ remaining=$%s",
             ord_notional.quantize(Decimal("0.01")),
-            inventory_cost.quantize(Decimal("0.01")),
+            unhedged_exp.quantize(Decimal("0.01")),
             exposure.quantize(Decimal("0.01")),
             remaining.quantize(Decimal("0.01")),
         )

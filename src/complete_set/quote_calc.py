@@ -256,11 +256,11 @@ def calculate_exposure(
     open_orders: dict,
     inventories: dict[str, MarketInventory],
 ) -> Decimal:
-    """Calculate current capital exposure from open orders + inventory cost basis.
+    """Calculate current capital exposure from open orders + unhedged inventory.
 
-    Uses actual USDC spent (up_cost + down_cost) rather than estimating.
-    This avoids overstating deployed capital — hedged pairs bought below $1
-    were previously counted at $1, which blocked new quotes as edge grew.
+    Matches Java reference: exposure = open_orders_notional + unhedged_imbalance × $0.50.
+    Hedged pairs are risk-neutral (redeemable for $1) so they don't consume bankroll.
+    Only the unhedged imbalance represents real directional risk.
     """
     orders_notional = ZERO
     for state in open_orders.values():
@@ -270,23 +270,25 @@ def calculate_exposure(
         remaining = max(ZERO, state.size - matched)
         orders_notional += state.price * remaining
 
-    inventory_cost = ZERO
+    unhedged_exposure = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
-        inventory_cost += inv.up_cost + inv.down_cost
+        abs_imbalance = abs(inv.imbalance)
+        if abs_imbalance > ZERO:
+            unhedged_exposure += abs_imbalance * Decimal("0.50")
 
-    return orders_notional + inventory_cost
+    return orders_notional + unhedged_exposure
 
 
 def calculate_exposure_breakdown(
     open_orders: dict,
     inventories: dict[str, MarketInventory],
 ) -> tuple[Decimal, Decimal, Decimal]:
-    """Return (orders_notional, inventory_cost, at_risk_cost) for logging.
+    """Return (orders_notional, unhedged_exposure, total_exposure) for logging.
 
-    - inventory_cost: actual USDC spent on all shares (up_cost + down_cost)
-    - at_risk_cost: portion of inventory that is unhedged (imbalance * vwap of excess side)
+    - unhedged_exposure: imbalance × $0.50 (matches Java reference formula)
+    - total_exposure: orders + unhedged (what counts against bankroll)
     """
     orders_notional = ZERO
     for state in open_orders.values():
@@ -296,18 +298,13 @@ def calculate_exposure_breakdown(
         remaining = max(ZERO, state.size - matched)
         orders_notional += state.price * remaining
 
-    inventory_cost = ZERO
-    at_risk_cost = ZERO
+    unhedged_exposure = ZERO
     for inv in inventories.values():
         if inv is None:
             continue
-        inventory_cost += inv.up_cost + inv.down_cost
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
-            if inv.imbalance > ZERO:
-                vwap = inv.up_vwap or Decimal("0.50")
-            else:
-                vwap = inv.down_vwap or Decimal("0.50")
-            at_risk_cost += abs_imbalance * vwap
+            unhedged_exposure += abs_imbalance * Decimal("0.50")
 
-    return orders_notional, inventory_cost, at_risk_cost
+    total = orders_notional + unhedged_exposure
+    return orders_notional, unhedged_exposure, total

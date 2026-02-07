@@ -70,6 +70,15 @@ class InventoryTracker:
                         asset = getattr(p, "asset_id", None) or getattr(p, "asset", None)
                         size = getattr(p, "size", None) or getattr(p, "balance", "0")
 
+                    # Skip redeemable positions — resolved but unredeemed markets
+                    # would inflate phantom exposure (matches Java syncInventory)
+                    if isinstance(p, dict):
+                        redeemable = p.get("redeemable", False)
+                    else:
+                        redeemable = getattr(p, "redeemable", False)
+                    if redeemable:
+                        continue
+
                     if asset and size:
                         size_dec = abs(Decimal(str(size)))
                         shares[asset] = shares.get(asset, ZERO) + size_dec
@@ -217,6 +226,40 @@ class InventoryTracker:
                 "CLEAR_INVENTORY %s (was U%s/D%s)",
                 slug, removed.up_shares, removed.down_shares,
             )
+
+    def reduce_merged(self, slug: str, merged_shares: Decimal) -> None:
+        """Reduce inventory after a successful merge.
+
+        Removes merged_shares from both legs and reduces cost proportionally.
+        """
+        inv = self._inventory_by_market.get(slug)
+        if inv is None:
+            return
+
+        new_up = max(ZERO, inv.up_shares - merged_shares)
+        new_down = max(ZERO, inv.down_shares - merged_shares)
+
+        # Reduce cost proportionally to shares removed
+        if inv.up_shares > ZERO:
+            up_cost = inv.up_cost * (new_up / inv.up_shares)
+        else:
+            up_cost = ZERO
+        if inv.down_shares > ZERO:
+            down_cost = inv.down_cost * (new_down / inv.down_shares)
+        else:
+            down_cost = ZERO
+
+        self._inventory_by_market[slug] = MarketInventory(
+            up_shares=new_up,
+            down_shares=new_down,
+            up_cost=up_cost,
+            down_cost=down_cost,
+            last_up_fill_at=inv.last_up_fill_at,
+            last_down_fill_at=inv.last_down_fill_at,
+            last_up_fill_price=inv.last_up_fill_price,
+            last_down_fill_price=inv.last_down_fill_price,
+            last_top_up_at=inv.last_top_up_at,
+        )
 
     def get_all_inventories(self) -> dict[str, MarketInventory]:
         """Get all inventories for exposure calculation."""

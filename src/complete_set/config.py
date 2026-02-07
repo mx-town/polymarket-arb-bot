@@ -49,6 +49,9 @@ class CompleteSetConfig:
     fast_top_up_cooldown_millis: int = 15000
     fast_top_up_min_edge: Decimal = Decimal("0.0")
 
+    # Merge (convert hedged pairs back to USDC mid-session)
+    min_merge_shares: Decimal = Decimal("5")  # matches Polymarket min order size
+
     # Taker mode
     taker_enabled: bool = False
     taker_max_edge: Decimal = Decimal("0.015")
@@ -89,6 +92,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         fast_top_up_max_seconds=cs.get("fast_top_up_max_seconds", 120),
         fast_top_up_cooldown_millis=cs.get("fast_top_up_cooldown_millis", 15000),
         fast_top_up_min_edge=Decimal(str(cs.get("fast_top_up_min_edge", "0.0"))),
+        min_merge_shares=Decimal(str(cs.get("min_merge_shares", "5"))),
         taker_enabled=cs.get("taker_enabled", False),
         taker_max_edge=Decimal(str(cs.get("taker_max_edge", "0.015"))),
         taker_max_spread=Decimal(str(cs.get("taker_max_spread", "0.02"))),

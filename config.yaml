@@ -3,54 +3,55 @@ trading:
   max_position_size: 5
 
 late_entry:
-  entry_window_sec: 30      # Enter in last 30 seconds
-  exit_buffer_sec: 5        # Exit 5s before resolution
-  min_favorite_spread: 0.20  # Favorite must lead by 20%+
-  max_favorite_price: 0.95   # Don't buy above 0.95
-  take_profit_pct: 0.15      # Take profit at 15% gain
+  entry_window_sec: 30
+  exit_buffer_sec: 5
+  min_favorite_spread: 0.20
+  max_favorite_price: 0.95
+  take_profit_pct: 0.15
 
 polling:
   interval_sec: 1
 
 assets:
   - bitcoin
-  - ethereum
-  - solana
-  - xrp
 
-# Complete-set arbitrage strategy (Gabagool replica)
+# Complete-set arbitrage (OPTIMIZED for fixed exposure formula)
 complete_set:
   enabled: true
-  dry_run: false
-  refresh_millis: 500          # Tick interval
-  min_replace_millis: 10000    # Min age before order replacement
-  improve_ticks: 2             # Ticks above best bid for maker quote
-  assets: [bitcoin]            # Single asset while validating
+  dry_run: true
+  refresh_millis: 500
+  min_replace_millis: 10000
+  improve_ticks: 2
+  assets: [bitcoin]
   min_seconds_to_end: 0
   max_seconds_to_end: 900
 
   # Edge & skew
-  min_edge: 0.01               # 1% minimum complete-set edge
+  min_edge: 0.01
   max_skew_ticks: 1
-  imbalance_for_max_skew: 50   # Scaled down for smaller capital
+  imbalance_for_max_skew: 100            # Higher, matches Java
 
-  # Bankroll
-  bankroll_usd: 50
-  max_order_bankroll_fraction: 0.20   # $10/order at $50 bankroll
-  max_total_bankroll_fraction: 0.50
-  max_shares_per_market: 20
+  # Bankroll - AGGRESSIVE because hedged pairs are free
+  bankroll_usd: 60
+  max_order_bankroll_fraction: 0.25      # $15 per market
+  max_total_bankroll_fraction: 0.80      # $48 total (!)
+  max_shares_per_market: 30              # 2x more shares
 
-  # Top-up (disabled until core spread capture validated)
+  # Top-up
   top_up_enabled: true
-  top_up_seconds_to_end: 60
-  top_up_min_shares: 2
+  top_up_seconds_to_end: 120             # More aggressive
+  top_up_min_shares: 3
   fast_top_up_enabled: true
   fast_top_up_min_seconds: 3
-  fast_top_up_max_seconds: 120
-  fast_top_up_cooldown_millis: 15000
-  fast_top_up_min_edge: 0.0  # 0.0 = breakeven-or-better hedging (matches Java default)
+  fast_top_up_max_seconds: 180
+  fast_top_up_cooldown_millis: 10000
+  fast_top_up_min_edge: 0.0
 
-  # Taker mode (disabled by default)
+  # Taker mode (still disabled for now)
   taker_enabled: false
   taker_max_edge: 0.015
   taker_max_spread: 0.02
+
+  # Cancel/timeout
+  stale_order_timeout_millis: 300000
+  min_cancel_buffer_sec: 45
