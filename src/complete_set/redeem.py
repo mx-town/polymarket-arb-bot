@@ -212,7 +212,7 @@ def _ensure_ctf_approval(
     log.info("MERGE_APPROVE setting %s as ERC1155 operator for proxy %s", operator_checksum, funder_checksum)
 
     # Encode setApprovalForAll and route through ProxyWalletFactory
-    approval_data = erc1155.encodeABI("setApprovalForAll", [operator_checksum, True])
+    approval_data = erc1155.encode_abi("setApprovalForAll", [operator_checksum, True])
     _send_proxy_tx(
         w3, account,
         [(1, ctf_checksum, 0, bytes.fromhex(approval_data[2:]))],
@@ -275,11 +275,11 @@ def merge_positions(
     # ── Execute merge ──
     if neg_risk:
         adapter = w3.eth.contract(address=target_checksum, abi=NEG_RISK_MERGE_ABI)
-        merge_data = adapter.encodeABI("mergePositions", [condition_bytes, amount])
+        merge_data = adapter.encode_abi("mergePositions", [condition_bytes, amount])
     else:
         ctf_checksum = Web3.to_checksum_address(CTF_ADDRESS)
         ctf_contract = w3.eth.contract(address=ctf_checksum, abi=MERGE_ABI)
-        merge_data = ctf_contract.encodeABI("mergePositions", [
+        merge_data = ctf_contract.encode_abi("mergePositions", [
             Web3.to_checksum_address(USDC_ADDRESS),
             PARENT_COLLECTION_ID,
             condition_bytes,
@@ -343,11 +343,11 @@ def redeem_positions(
         # Route through ProxyWalletFactory
         if neg_risk:
             adapter = w3.eth.contract(address=target_checksum, abi=NEG_RISK_REDEEM_ABI)
-            redeem_data = adapter.encodeABI("redeemPositions", [condition_bytes, [amount, amount]])
+            redeem_data = adapter.encode_abi("redeemPositions", [condition_bytes, [amount, amount]])
         else:
             ctf_checksum = Web3.to_checksum_address(CTF_ADDRESS)
             ctf_contract = w3.eth.contract(address=ctf_checksum, abi=REDEEM_ABI)
-            redeem_data = ctf_contract.encodeABI("redeemPositions", [
+            redeem_data = ctf_contract.encode_abi("redeemPositions", [
                 Web3.to_checksum_address(USDC_ADDRESS),
                 PARENT_COLLECTION_ID,
                 condition_bytes,
