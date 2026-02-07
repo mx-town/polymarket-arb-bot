@@ -6,8 +6,9 @@ Translates OrderManager.java. Tracks at most 1 order per token_id.
 from __future__ import annotations
 
 import logging
+import math
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Callable, Optional
 
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -17,7 +18,6 @@ from complete_set.models import (
     Direction,
     GabagoolMarket,
     OrderState,
-    ReplaceDecision,
 )
 
 log = logging.getLogger("cs.orders")
@@ -63,8 +63,9 @@ class OrderManager:
         seconds_to_end: int,
         reason: str = "QUOTE",
         on_fill: Optional[Callable] = None,
+        order_type: Optional[OrderType] = None,
     ) -> bool:
-        """Place a BUY GTC limit order. Returns True on success."""
+        """Place a BUY limit order. Returns True on success."""
         label = (
             f"{market.slug[:40]} │ {direction.value} "
             f"@ {price} x{size} ({reason}, {seconds_to_end}s left)"
@@ -89,6 +90,38 @@ class OrderManager:
             return True
 
         try:
+            ot = order_type or OrderType.GTC
+
+            # FOK (taker) orders require price*size ≤ 2 decimals (maker amount)
+            # and size ≤ 4 decimals (taker amount).
+            # py_clob_client internally rounds size to 2 decimals, so we must
+            # ensure cents * (size*100) % 100 == 0.
+            # step = 100 / gcd(cents, 100) / 100.
+            if ot == OrderType.FOK:
+                cents = int(price * 100)
+                g = math.gcd(cents, 100)
+                step = Decimal(100 // g) / Decimal(100)
+                size = (size / step).to_integral_value(rounding=ROUND_DOWN) * step
+                if size <= ZERO:
+                    log.warning("FOK size rounded to zero, skipping %s", token_id[:16])
+                    return False
+
+                # Polymarket requires min $1 notional for marketable FOK BUY orders
+                min_notional = Decimal("1")
+                notional = price * size
+                if notional < min_notional:
+                    min_size = math.ceil(float(min_notional / price / step)) * step
+                    log.debug(
+                        "FOK_MIN_NOTIONAL %s │ %s x %s = $%s < $1 │ bumping to %s",
+                        token_id[:16], price, size, notional, min_size,
+                    )
+                    size = min_size
+
+                label = (
+                    f"{market.slug[:40]} │ {direction.value} "
+                    f"@ {price} x{size} ({reason}, {seconds_to_end}s left)"
+                )
+
             log.info("PLACE %s", label)
             order = client.create_order(
                 OrderArgs(
@@ -98,7 +131,7 @@ class OrderManager:
                     side=BUY,
                 )
             )
-            resp = client.post_order(order, OrderType.GTC)
+            resp = client.post_order(order, ot)
 
             # Extract order ID from response
             order_id = None
@@ -111,7 +144,7 @@ class OrderManager:
 
             if not order_id:
                 log.warning("%sOrder submission returned null orderId for %s%s", C_YELLOW, market.slug, C_RESET)
-                # Insert sentinel so maybe_replace returns SKIP for min_replace_millis
+                # Insert sentinel to prevent duplicate submissions
                 self._orders[token_id] = OrderState(
                     order_id="",
                     market=market,
@@ -136,17 +169,19 @@ class OrderManager:
                 matched_size=ZERO,
                 seconds_to_end_at_entry=seconds_to_end,
             )
-            log.info("%sPLACED %s (order=%s)%s", C_GREEN, label, order_id, C_RESET)
+            log.info("%sPLACED %s (order=%s, type=%s)%s", C_GREEN, label, order_id, ot.value if hasattr(ot, 'value') else ot, C_RESET)
             return True
 
         except Exception as e:
             error_str = str(e).lower()
             is_balance_error = "balance" in error_str or "allowance" in error_str
             log.error("%sFAILED %s │ %s (balance_error=%s)%s", C_RED, label, e, is_balance_error, C_RESET)
-            if not is_balance_error:
-                # Insert sentinel so maybe_replace returns SKIP for min_replace_millis.
-                # Skip sentinel for balance errors — no order exists to track,
-                # and the sentinel would cause cancel→retry spam.
+            # Sentinel prevents duplicate submissions for GTC orders that
+            # might be on the book despite the error.  Skip for:
+            # - Balance errors: no order exists to track
+            # - FOK orders: terminal by nature, nothing on the book
+            is_fok = (order_type == OrderType.FOK)
+            if not is_balance_error and not is_fok:
                 self._orders[token_id] = OrderState(
                     order_id="",
                     market=market,
@@ -159,41 +194,6 @@ class OrderManager:
                     seconds_to_end_at_entry=seconds_to_end,
                 )
             return False
-
-    # -----------------------------------------------------------------
-    # Replace decision
-    # -----------------------------------------------------------------
-
-    def maybe_replace(
-        self,
-        token_id: str,
-        new_price: Decimal,
-        new_size: Decimal,
-        min_replace_millis: int,
-        min_price_change: Decimal = ZERO,
-        max_price: Decimal | None = None,
-    ) -> ReplaceDecision:
-        """Decide whether to skip, place new, or replace existing order."""
-        # Respect price ceiling from filled opposite leg
-        if max_price is not None and new_price > max_price:
-            return ReplaceDecision.SKIP
-
-        existing = self._orders.get(token_id)
-        if existing is None:
-            return ReplaceDecision.PLACE
-
-        age_ms = (time.time() - existing.placed_at) * 1000
-        if age_ms < min_replace_millis:
-            return ReplaceDecision.SKIP
-
-        price_delta = abs(existing.price - new_price)
-        same_size = existing.size == new_size
-
-        # Skip if price moved less than the minimum threshold
-        if price_delta < min_price_change and same_size:
-            return ReplaceDecision.SKIP
-
-        return ReplaceDecision.REPLACE
 
     # -----------------------------------------------------------------
     # Cancel

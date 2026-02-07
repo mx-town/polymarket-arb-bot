@@ -143,8 +143,41 @@ class InventoryTracker:
                         mid = None
                 down_cost = chain_down * (mid if mid is not None else DEFAULT_PRICE)
 
-            merged_up = max(chain_up, existing.up_shares)
-            merged_down = max(chain_down, existing.down_shares)
+            # Trust chain when it's lower, UNLESS a recent fill (<10s) might
+            # not have settled yet.  This fixes phantom inventory after a
+            # merge confirms on-chain but the tracker missed reduce_merged().
+            # Also skip upward inflation after a recent merge (<30s) to prevent
+            # leftover unmerged shares from re-inflating with wrong cost/VWAP.
+            now_sync = time.time()
+            last_up_fill = existing.last_up_fill_at or 0
+            last_down_fill = existing.last_down_fill_at or 0
+            last_merge = existing.last_merge_at or 0
+            recent_up_fill = (now_sync - last_up_fill) < 10 if last_up_fill else False
+            recent_down_fill = (now_sync - last_down_fill) < 10 if last_down_fill else False
+            recent_merge = (now_sync - last_merge) < 30 if last_merge else False
+
+            if recent_up_fill:
+                merged_up = existing.up_shares
+            elif recent_merge:
+                # After merge: trust chain downward, but don't inflate upward
+                merged_up = min(chain_up, existing.up_shares) if chain_up < existing.up_shares else existing.up_shares
+            else:
+                merged_up = chain_up if chain_up < existing.up_shares else max(chain_up, existing.up_shares)
+            if recent_down_fill:
+                merged_down = existing.down_shares
+            elif recent_merge:
+                merged_down = min(chain_down, existing.down_shares) if chain_down < existing.down_shares else existing.down_shares
+            else:
+                merged_down = chain_down if chain_down < existing.down_shares else max(chain_down, existing.down_shares)
+
+            # Log when chain corrects phantom inventory
+            if merged_up < existing.up_shares or merged_down < existing.down_shares:
+                log.info(
+                    "%sSYNC_CORRECT %s │ tracker U%s/D%s → chain U%s/D%s%s",
+                    C_YELLOW, market.slug,
+                    existing.up_shares, existing.down_shares,
+                    merged_up, merged_down, C_RESET,
+                )
 
             # Log when chain positions are loaded
             if (up_cost != existing.up_cost or down_cost != existing.down_cost):
@@ -154,8 +187,13 @@ class InventoryTracker:
                     market.slug, merged_up, merged_down, est_cost,
                 )
 
-            # Use max() to merge: never reduce shares below what record_fill
-            # has accumulated, even if CLOB positions haven't settled yet.
+            # Adjust cost proportionally when chain changes share count
+            # (preserves VWAP whether shares go up or down)
+            if merged_up != existing.up_shares and existing.up_shares > ZERO:
+                up_cost = up_cost * (merged_up / existing.up_shares)
+            if merged_down != existing.down_shares and existing.down_shares > ZERO:
+                down_cost = down_cost * (merged_down / existing.down_shares)
+
             self._inventory_by_market[market.slug] = MarketInventory(
                 up_shares=merged_up,
                 down_shares=merged_down,
@@ -166,6 +204,9 @@ class InventoryTracker:
                 last_up_fill_price=existing.last_up_fill_price,
                 last_down_fill_price=existing.last_down_fill_price,
                 last_top_up_at=existing.last_top_up_at,
+                last_merge_at=existing.last_merge_at,
+                filled_up_shares=existing.filled_up_shares,
+                filled_down_shares=existing.filled_down_shares,
             )
 
     def record_fill(
@@ -248,13 +289,21 @@ class InventoryTracker:
 
         # Reduce cost proportionally to shares removed
         if inv.up_shares > ZERO:
-            up_cost = inv.up_cost * (new_up / inv.up_shares)
+            up_ratio = new_up / inv.up_shares
+            up_cost = inv.up_cost * up_ratio
         else:
+            up_ratio = ZERO
             up_cost = ZERO
         if inv.down_shares > ZERO:
-            down_cost = inv.down_cost * (new_down / inv.down_shares)
+            down_ratio = new_down / inv.down_shares
+            down_cost = inv.down_cost * down_ratio
         else:
+            down_ratio = ZERO
             down_cost = ZERO
+
+        # Reduce filled shares proportionally
+        new_filled_up = inv.filled_up_shares * up_ratio if inv.up_shares > ZERO else ZERO
+        new_filled_down = inv.filled_down_shares * down_ratio if inv.down_shares > ZERO else ZERO
 
         self._inventory_by_market[slug] = MarketInventory(
             up_shares=new_up,
@@ -266,6 +315,9 @@ class InventoryTracker:
             last_up_fill_price=inv.last_up_fill_price,
             last_down_fill_price=inv.last_down_fill_price,
             last_top_up_at=inv.last_top_up_at,
+            last_merge_at=time.time(),
+            filled_up_shares=new_filled_up,
+            filled_down_shares=new_filled_down,
         )
 
     def get_all_inventories(self) -> dict[str, MarketInventory]:

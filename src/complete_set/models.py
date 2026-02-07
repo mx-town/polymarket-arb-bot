@@ -50,6 +50,9 @@ class MarketInventory:
     last_up_fill_price: Optional[Decimal] = None
     last_down_fill_price: Optional[Decimal] = None
     last_top_up_at: Optional[float] = None
+    last_merge_at: Optional[float] = None
+    filled_up_shares: Decimal = field(default_factory=lambda: Decimal("0"))
+    filled_down_shares: Decimal = field(default_factory=lambda: Decimal("0"))
 
     @property
     def imbalance(self) -> Decimal:
@@ -74,6 +77,9 @@ class MarketInventory:
             last_up_fill_price=fill_price,
             last_down_fill_price=self.last_down_fill_price,
             last_top_up_at=self.last_top_up_at,
+            last_merge_at=self.last_merge_at,
+            filled_up_shares=self.filled_up_shares + shares,
+            filled_down_shares=self.filled_down_shares,
         )
 
     def add_down(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
@@ -87,6 +93,9 @@ class MarketInventory:
             last_up_fill_price=self.last_up_fill_price,
             last_down_fill_price=fill_price,
             last_top_up_at=self.last_top_up_at,
+            last_merge_at=self.last_merge_at,
+            filled_up_shares=self.filled_up_shares,
+            filled_down_shares=self.filled_down_shares + shares,
         )
 
     def mark_top_up(self, at: float) -> MarketInventory:
@@ -100,6 +109,9 @@ class MarketInventory:
             last_up_fill_price=self.last_up_fill_price,
             last_down_fill_price=self.last_down_fill_price,
             last_top_up_at=at,
+            last_merge_at=self.last_merge_at,
+            filled_up_shares=self.filled_up_shares,
+            filled_down_shares=self.filled_down_shares,
         )
 
 

@@ -1,7 +1,10 @@
-"""Strategy tick loop — the brain of the complete-set arbitrage.
+"""Strategy tick loop — two-phase asymmetric hedge for complete-set arbitrage.
 
-Translates GabagoolDirectionalEngine.java.
-Runs a tick every refresh_millis (default 500ms), evaluating each active market.
+Per-window lifecycle:
+1. No position: buy cheapest leg if ask < (1 - min_edge) / 2 (FOK)
+2. One leg filled: hedge the other if first_vwap + second_ask < 1 - min_edge (FOK)
+3. Both legs filled (hedged >= min_merge_shares): mark complete, merge
+4. Cancel buffer: stop trying when seconds_to_end < order_cancel_buffer_sec
 """
 
 from __future__ import annotations
@@ -18,20 +21,14 @@ from complete_set.models import (
     Direction,
     GabagoolMarket,
     PendingRedemption,
-    ReplaceDecision,
-    TopOfBook,
 )
 from complete_set.order_mgr import OrderManager
+from py_clob_client.clob_types import OrderType
 from complete_set.quote_calc import (
-    MIN_ORDER_SIZE,
     calculate_balanced_shares,
     calculate_dynamic_edge,
-    calculate_entry_price,
     calculate_exposure,
     calculate_exposure_breakdown,
-    calculate_shares,
-    calculate_skew_ticks,
-    has_minimum_edge,
 )
 from complete_set.redeem import CTF_DECIMALS, get_ctf_balances, get_usdc_balance, merge_positions, redeem_positions
 
@@ -64,10 +61,12 @@ class Engine:
         self._active_markets: list[GabagoolMarket] = []
         self._last_discovery: float = 0.0
         self._prev_quotable_slugs: set[str] = set()
-        self._balance_failures: dict[str, int] = {}  # market slug -> consecutive failures
+        self._completed_markets: set[str] = set()
         self._pending_redemptions: dict[str, PendingRedemption] = {}
         self._merge_failures: dict[str, int] = {}  # slug -> consecutive failures
         self._merge_last_attempt: dict[str, float] = {}  # slug -> timestamp
+        self._pending_merge_task: dict[str, asyncio.Task] = {}   # slug -> Task
+        self._pending_redeem_task: dict[str, asyncio.Task] = {}  # slug -> Task
         self._start_time: float = time.time()
         self._last_session_log: float = 0.0
 
@@ -75,19 +74,13 @@ class Engine:
         """Main event loop."""
         mode = "DRY RUN" if self._cfg.dry_run else "LIVE"
         log.info("=" * 56)
-        log.info("  Complete-Set Arb Engine v0.1.0  [%s]", mode)
+        log.info("  Complete-Set Arb Engine v0.3.0 TWO-PHASE  [%s]", mode)
         log.info("=" * 56)
         log.info("  Assets          : %s", ", ".join(self._cfg.assets))
         log.info("  Tick interval   : %dms", self._cfg.refresh_millis)
         log.info("  Min edge        : %s", self._cfg.min_edge)
         log.info("  Bankroll        : $%s", self._cfg.bankroll_usd)
-        log.info("  Improve ticks   : %d", self._cfg.improve_ticks)
-        log.info("  Min replace     : %dms / %d ticks", self._cfg.min_replace_millis, self._cfg.min_replace_ticks)
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
-        log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
-        log.info("  Top-up min shr  : %s", self._cfg.top_up_min_shares)
-        log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
-        log.info("  Taker mode      : %s", self._cfg.taker_enabled)
         log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
         if not self._cfg.dry_run and self._w3 and self._account:
@@ -129,9 +122,10 @@ class Engine:
             old_market_lookup = {m.slug: m for m in self._active_markets}
             self._active_markets = discover_markets(self._cfg.assets)
             self._last_discovery = now
-            self._balance_failures.clear()
             # Prune inventory and cancel orphaned orders for expired markets
             active_slugs = {m.slug for m in self._active_markets}
+            # Clear completed status only for markets that rotated out
+            self._completed_markets &= active_slugs
             for slug in list(self._inventory.get_all_inventories()):
                 if slug not in active_slugs:
                     inv = self._inventory.get_inventory(slug)
@@ -183,39 +177,68 @@ class Engine:
             state.price,
             C_RESET,
         )
+        # Check if hedge is complete (both legs filled above min_merge_shares)
+        inv = self._inventory.get_inventory(state.market.slug)
+        hedged = min(inv.up_shares, inv.down_shares)
+        if hedged >= self._cfg.min_merge_shares:
+            self._completed_markets.add(state.market.slug)
+            edge = ONE - (inv.up_vwap + inv.down_vwap) if inv.up_vwap and inv.down_vwap else ZERO
+            log.info(
+                "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
+                C_GREEN, state.market.slug, hedged, edge, C_RESET,
+            )
 
     def _check_settlements(self, now: float) -> None:
         """Merge hedged pairs on active markets, then redeem resolved positions."""
         # ── Merge hedged pairs back to USDC on active markets ──
-        # At most one merge per tick to avoid stalling the event loop
         if not self._cfg.dry_run and self._w3 and self._account:
+            # Phase A — Harvest completed merge tasks
+            for slug in list(self._pending_merge_task):
+                task = self._pending_merge_task[slug]
+                if not task.done():
+                    continue
+                del self._pending_merge_task[slug]
+                merged_display = task._merge_meta[0]
+                try:
+                    tx_hash = task.result()
+                    self._inventory.reduce_merged(slug, merged_display)
+                    self._merge_failures.pop(slug, None)
+                    # Allow re-entry on this market for another cycle
+                    self._completed_markets.discard(slug)
+                    log.info(
+                        "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
+                        C_GREEN, slug, merged_display, tx_hash, C_RESET,
+                    )
+                except Exception as e:
+                    failures = self._merge_failures.get(slug, 0) + 1
+                    self._merge_failures[slug] = failures
+                    log.warning(
+                        "%sMERGE_FAILED %s │ attempt %d/5 │ %s%s",
+                        C_YELLOW, slug, failures, e, C_RESET,
+                    )
+
+            # Phase B — Launch new merges (one per tick, non-blocking)
             for market in self._active_markets:
                 slug = market.slug
+                if slug in self._pending_merge_task:
+                    continue
                 inv = self._inventory.get_inventory(slug)
                 hedged = min(inv.up_shares, inv.down_shares)
                 if hedged < self._cfg.min_merge_shares:
                     continue
                 if not market.condition_id:
                     continue
-                # Skip after 5 failures (first 1-2 may fail during settlement delay)
                 if self._merge_failures.get(slug, 0) >= 5:
                     continue
-                # Cooldown: 15s between attempts per market
                 last_attempt = self._merge_last_attempt.get(slug, 0.0)
                 if now - last_attempt < 15:
                     continue
-                # Wait for on-chain settlement after last fill (Polygon ~5s)
-                last_fill = max(inv.last_up_fill_at or 0, inv.last_down_fill_at or 0)
-                if last_fill > 0 and now - last_fill < 10:
-                    continue
-                # Don't merge too close to resolution — just wait for redeem
                 seconds_to_end = int(market.end_time - now)
                 if seconds_to_end < self._cfg.order_cancel_buffer_sec:
                     continue
 
                 self._merge_last_attempt[slug] = now
 
-                # Query actual on-chain balances to avoid reverts from inventory drift
                 try:
                     actual_up, actual_down = get_ctf_balances(
                         self._rpc_url, self._funder_address,
@@ -230,27 +253,14 @@ class Engine:
                     log.debug("MERGE_SKIP %s │ on-chain balance too low (up=%d, down=%d)", slug, actual_up, actual_down)
                     continue
 
-                try:
-                    tx_hash = merge_positions(
-                        self._w3, self._account, self._funder_address,
-                        market.condition_id, amount_base,
-                        neg_risk=market.neg_risk,
-                    )
-                    merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
-                    self._inventory.reduce_merged(slug, merged_display)
-                    self._merge_failures.pop(slug, None)
-                    log.info(
-                        "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
-                        C_GREEN, slug, merged_display, tx_hash, C_RESET,
-                    )
-                except Exception as e:
-                    failures = self._merge_failures.get(slug, 0) + 1
-                    self._merge_failures[slug] = failures
-                    log.warning(
-                        "%sMERGE_FAILED %s │ amount_base=%d │ attempt %d/5 │ %s%s",
-                        C_YELLOW, slug, amount_base, failures, e, C_RESET,
-                    )
-                # Only one merge per tick — don't block the loop further
+                merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
+                task = asyncio.ensure_future(asyncio.to_thread(
+                    merge_positions, self._w3, self._account, self._funder_address,
+                    market.condition_id, amount_base, neg_risk=market.neg_risk,
+                ))
+                task._merge_meta = (merged_display,)  # type: ignore[attr-defined]
+                self._pending_merge_task[slug] = task
+                log.info("MERGE_LAUNCHED %s │ amount=%s shares", slug, merged_display)
                 break
         elif self._cfg.dry_run:
             for market in self._active_markets:
@@ -265,10 +275,6 @@ class Engine:
                 last_attempt = self._merge_last_attempt.get(slug, 0.0)
                 if now - last_attempt < 15:
                     continue
-                # Wait for settlement after last fill (mirror live 10s delay)
-                last_fill = max(inv.last_up_fill_at or 0, inv.last_down_fill_at or 0)
-                if last_fill > 0 and now - last_fill < 10:
-                    continue
                 # Don't merge too close to resolution
                 seconds_to_end = int(market.end_time - now)
                 if seconds_to_end < self._cfg.order_cancel_buffer_sec:
@@ -276,6 +282,8 @@ class Engine:
 
                 self._merge_last_attempt[slug] = now
                 self._inventory.reduce_merged(slug, hedged)
+                # Allow re-entry on this market for another cycle
+                self._completed_markets.discard(slug)
                 log.info(
                     "DRY_MERGE %s │ merged=%s shares → freed $%s",
                     slug, hedged, hedged,
@@ -284,8 +292,28 @@ class Engine:
                 break
 
         # ── Redeem resolved positions ──
+        # Phase A — Harvest completed redeem tasks
+        for slug in list(self._pending_redeem_task):
+            task = self._pending_redeem_task[slug]
+            if not task.done():
+                continue
+            del self._pending_redeem_task[slug]
+            try:
+                tx_hash = task.result()
+                log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
+                self._pending_redemptions.pop(slug, None)
+            except Exception as e:
+                pr = self._pending_redemptions.get(slug)
+                if pr:
+                    pr.attempts += 1
+                    pr.last_attempt_at = now
+                log.warning("%sREDEEM_FAILED %s │ %s%s", C_YELLOW, slug, e, C_RESET)
+
+        # Phase B — Launch new redeems
         for slug in list(self._pending_redemptions):
             pr = self._pending_redemptions[slug]
+            if slug in self._pending_redeem_task:
+                continue
             if now < pr.eligible_at:
                 continue
             if pr.attempts >= 3:
@@ -309,24 +337,17 @@ class Engine:
                 self._pending_redemptions.pop(slug)
                 continue
 
-            try:
-                # NegRisk adapter requires explicit amounts; standard CTF redeems all held
-                redeem_amount = 0
-                if pr.market.neg_risk:
-                    redeem_shares = max(pr.inventory.up_shares, pr.inventory.down_shares)
-                    redeem_amount = int(redeem_shares * (10 ** CTF_DECIMALS))
-                tx_hash = redeem_positions(
-                    self._w3, self._account, self._funder_address,
-                    pr.market.condition_id,
-                    neg_risk=pr.market.neg_risk,
-                    amount=redeem_amount,
-                )
-                log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
-                self._pending_redemptions.pop(slug)
-            except Exception as e:
-                pr.attempts += 1
-                pr.last_attempt_at = now
-                log.warning("%sREDEEM_ATTEMPT %s failed (%d/3): %s%s", C_YELLOW, slug, pr.attempts, e, C_RESET)
+            redeem_amount = 0
+            if pr.market.neg_risk:
+                redeem_shares = max(pr.inventory.up_shares, pr.inventory.down_shares)
+                redeem_amount = int(redeem_shares * (10 ** CTF_DECIMALS))
+
+            task = asyncio.ensure_future(asyncio.to_thread(
+                redeem_positions, self._w3, self._account, self._funder_address,
+                pr.market.condition_id, neg_risk=pr.market.neg_risk, amount=redeem_amount,
+            ))
+            self._pending_redeem_task[slug] = task
+            log.info("REDEEM_LAUNCHED %s", slug)
 
     def _cancel_orphaned_orders(self) -> None:
         """Cancel all open orders on the CLOB from a previous session."""
@@ -426,9 +447,10 @@ class Engine:
 
         # ── SUMMARY header ──
         log.info(
-            "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s │ "
+            "── SUMMARY ── markets=%d │ open_orders=%d │ completed=%d │ exposure=$%s │ "
             "bankroll=$%s (%s%% used) │ wallet=%s │ %srealized=$%s │ unrealized=$%s │ total=$%s%s",
-            len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
+            len(self._active_markets), open_count, len(self._completed_markets),
+            exposure.quantize(Decimal("0.01")),
             bankroll, pct_used, wallet_str,
             pnl_color, realized, unrealized, total_pnl, C_RESET,
         )
@@ -458,11 +480,12 @@ class Engine:
                     at_risk = (abs_imbalance * vwap).quantize(Decimal("0.01"))
                 else:
                     at_risk = Decimal("0.00")
+                completed_str = " [DONE]" if market.slug in self._completed_markets else ""
                 log.info(
-                    "  POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ at_risk=$%s",
+                    "  POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ at_risk=$%s%s",
                     market.slug[-40:],
                     inv.up_shares, inv.down_shares, hedged,
-                    cost, at_risk,
+                    cost, at_risk, completed_str,
                 )
 
                 # UNREALIZED line for hedged positions
@@ -487,64 +510,41 @@ class Engine:
             dn_bid = down_book.best_bid if down_book else None
             dn_ask = down_book.best_ask if down_book else None
 
-            up_entry = calculate_entry_price(
-                up_book, TICK_SIZE, self._cfg.improve_ticks, 0
-            ) if up_book and up_bid is not None and up_ask is not None else None
-            dn_entry = calculate_entry_price(
-                down_book, TICK_SIZE, self._cfg.improve_ticks, 0
-            ) if down_book and dn_bid is not None and dn_ask is not None else None
-
             edge_str = "?"
-            if up_entry and dn_entry:
-                edge = ONE - (up_entry + dn_entry)
+            if up_ask and dn_ask:
+                edge = ONE - (up_ask + dn_ask)
                 edge_str = f"{edge:.3f}"
 
             log.debug(
-                "  MARKET %s │ %ds │ book=U[%s/%s] D[%s/%s] │ edge=%s",
+                "  MARKET %s │ %ds │ book=U[%s/%s] D[%s/%s] │ ask_edge=%s",
                 market.slug[-30:], ste,
                 up_bid, up_ask, dn_bid, dn_ask, edge_str,
             )
 
-            # ORDERS line: only if inventory or active orders exist
-            up_order = self._order_mgr.get_order(market.up_token_id)
-            dn_order = self._order_mgr.get_order(market.down_token_id)
-            has_orders = up_order is not None or dn_order is not None
-            has_inv = inv.up_shares > ZERO or inv.down_shares > ZERO
-
-            if has_inv or has_orders:
-                up_ord_str = f"U@{up_order.price}" if up_order else "---"
-                dn_ord_str = f"D@{dn_order.price}" if dn_order else "---"
-                vwap_seg = ""
-                if inv.up_vwap is not None or inv.down_vwap is not None:
-                    up_vwap_str = f"U{inv.up_vwap:.2f}" if inv.up_vwap is not None else "U---"
-                    dn_vwap_str = f"D{inv.down_vwap:.2f}" if inv.down_vwap is not None else "D---"
-                    vwap_seg = f" │ vwap={up_vwap_str}/{dn_vwap_str}"
-                log.debug(
-                    "  ORDERS %s │ inv=U%s/D%s(h%s)%s │ ord=%s %s",
-                    market.slug[-30:],
-                    inv.up_shares, inv.down_shares, hedged,
-                    vwap_seg, up_ord_str, dn_ord_str,
-                )
-
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
+        """Two-phase hedge: buy cheap leg first, then hedge the other when profitable."""
+        slug = market.slug
+
+        # Already hedged this window — skip
+        if slug in self._completed_markets:
+            return
+
         seconds_to_end = int(market.end_time - now)
         max_lifetime = 900 if market.market_type == "updown-15m" else 3600
 
-        # Pre-resolution buffer: cancel all orders to avoid buying worthless shares
+        # Pre-resolution buffer: cancel all orders
         if 0 <= seconds_to_end < self._cfg.order_cancel_buffer_sec:
             self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
             return
 
         # Outside lifetime
         if seconds_to_end < 0 or seconds_to_end > max_lifetime:
-            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_LIFETIME", self._handle_fill)
             return
 
         # Outside configured time window
         min_ste = max(0, self._cfg.min_seconds_to_end)
         max_ste = min(max_lifetime, max(min_ste, self._cfg.max_seconds_to_end))
         if seconds_to_end < min_ste or seconds_to_end > max_ste:
-            self._order_mgr.cancel_market_orders(self._client, market, "OUTSIDE_TIME_WINDOW", self._handle_fill)
             return
 
         # Fetch TOB for both legs
@@ -552,452 +552,152 @@ class Engine:
         down_book = get_top_of_book(self._client, market.down_token_id)
 
         if not up_book or not down_book:
-            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE", self._handle_fill)
             return
-        if up_book.best_bid is None or up_book.best_ask is None:
-            self._order_mgr.cancel_order(self._client, market.up_token_id, "BOOK_STALE", self._handle_fill)
-            return
-        if down_book.best_bid is None or down_book.best_ask is None:
-            self._order_mgr.cancel_order(self._client, market.down_token_id, "BOOK_STALE", self._handle_fill)
+        if up_book.best_ask is None or down_book.best_ask is None:
             return
 
-        inv = self._inventory.get_inventory(market.slug)
-        skew_up, skew_down = calculate_skew_ticks(
-            inv, self._cfg.max_skew_ticks, self._cfg.imbalance_for_max_skew
-        )
+        up_ask = up_book.best_ask
+        down_ask = down_book.best_ask
 
-        # Fast top-up after recent fill
-        self._maybe_fast_top_up(market, inv, up_book, down_book, seconds_to_end)
-
-        # Near-end taker top-up
-        if self._cfg.top_up_enabled and seconds_to_end <= self._cfg.top_up_seconds_to_end:
-            abs_imbalance = abs(inv.imbalance)
-            if abs_imbalance >= self._cfg.top_up_min_shares:
-                if inv.imbalance > ZERO:
-                    lagging = Direction.DOWN
-                    lagging_book = down_book
-                    lagging_token = market.down_token_id
-                else:
-                    lagging = Direction.UP
-                    lagging_book = up_book
-                    lagging_token = market.up_token_id
-                self._maybe_top_up_lagging(
-                    market, lagging_token, lagging, lagging_book, seconds_to_end,
-                    abs_imbalance, "TOP_UP",
-                )
-
-        # Calculate entry prices
-        up_entry = calculate_entry_price(up_book, TICK_SIZE, self._cfg.improve_ticks, skew_up)
-        down_entry = calculate_entry_price(down_book, TICK_SIZE, self._cfg.improve_ticks, skew_down)
-        if up_entry is None or down_entry is None:
-            self._order_mgr.cancel_market_orders(self._client, market, "BOOK_STALE", self._handle_fill)
-            return
-
-        # Edge check — don't cancel existing orders, just skip new quotes.
-        # Existing orders were placed when edge was sufficient; let them ride
-        # until stale timeout or a valid replacement comes along.
-        # Dynamic edge: widen requirement for wide-spread markets
+        # Dynamic edge based on worst spread
         worst_spread = max(
-            up_book.best_ask - up_book.best_bid,
-            down_book.best_ask - down_book.best_bid,
+            (up_book.best_ask - up_book.best_bid) if up_book.best_bid is not None else Decimal("0.10"),
+            (down_book.best_ask - down_book.best_bid) if down_book.best_bid is not None else Decimal("0.10"),
         )
         dynamic_edge = calculate_dynamic_edge(worst_spread, self._cfg.min_edge)
-        if not has_minimum_edge(up_entry, down_entry, dynamic_edge):
-            log.debug("Skipping %s - insufficient edge (%.3f < %.3f)", market.slug,
-                       ONE - (up_entry + down_entry), dynamic_edge)
-            return
 
-        # Optional taker mode
-        planned_edge = ONE - (up_entry + down_entry)
-        if self._should_take(planned_edge, up_book, down_book):
-            take_leg = self._decide_taker_leg(inv, up_book, down_book)
-            if take_leg == Direction.UP:
-                self._maybe_take_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end)
-                self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down)
-                return
-            elif take_leg == Direction.DOWN:
-                self._maybe_take_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end)
-                self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up)
-                return
-
-        # Maker mode: quote both legs with balanced share count
-        exposure = calculate_exposure(
-            self._order_mgr.get_open_orders(),
-            self._inventory.get_all_inventories(),
-        )
-        balanced = calculate_balanced_shares(
-            market.slug, up_entry, down_entry, self._cfg, seconds_to_end, exposure,
-        )
-
-        # Skip overweight side when imbalance is significant
-        abs_imbalance = abs(inv.imbalance)
-        skip_up = abs_imbalance >= self._cfg.top_up_min_shares and inv.imbalance > ZERO
-        skip_down = abs_imbalance >= self._cfg.top_up_min_shares and inv.imbalance < ZERO
-
-        if not skip_up:
-            self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up, pre_shares=balanced)
-        if not skip_down:
-            self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down, pre_shares=balanced)
-
-    def _maybe_quote_token(
-        self,
-        market: GabagoolMarket,
-        token_id: str,
-        direction: Direction,
-        book: TopOfBook,
-        seconds_to_end: int,
-        skew_ticks: int,
-        pre_shares: Decimal | None = None,
-    ) -> None:
-        if self._balance_failures.get(market.slug, 0) >= 3:
-            return
-
-        entry_price = calculate_entry_price(book, TICK_SIZE, self._cfg.improve_ticks, skew_ticks)
-        if entry_price is None:
-            return
-
-        # Combined VWAP gate: if accumulated fills have consumed all edge, stop quoting
-        inv = self._inventory.get_inventory(market.slug)
-        if inv.up_vwap is not None and inv.down_vwap is not None:
-            combined_vwap = inv.up_vwap + inv.down_vwap
-            if combined_vwap >= ONE - self._cfg.min_edge:
-                log.debug(
-                    "VWAP_GATE %s combined_vwap=%s >= max=%s, skip",
-                    market.slug, combined_vwap, ONE - self._cfg.min_edge,
-                )
-                return
-
-        # Cap price based on already-filled opposite leg
-        max_price: Decimal | None = None
-        if direction == Direction.UP and inv.down_shares > ZERO and inv.down_vwap is not None:
-            max_price = ONE - inv.down_vwap - self._cfg.min_edge
-            if entry_price > max_price:
-                log.debug(
-                    "PRICE_CAP %s UP entry=%s > max=%s (down_vwap=%s)",
-                    market.slug, entry_price, max_price, inv.down_vwap,
-                )
-                return
-        elif direction == Direction.DOWN and inv.up_shares > ZERO and inv.up_vwap is not None:
-            max_price = ONE - inv.up_vwap - self._cfg.min_edge
-            if entry_price > max_price:
-                log.debug(
-                    "PRICE_CAP %s DOWN entry=%s > max=%s (up_vwap=%s)",
-                    market.slug, entry_price, max_price, inv.up_vwap,
-                )
-                return
-
-        if pre_shares is not None:
-            shares = pre_shares
-        else:
-            exposure = calculate_exposure(
-                self._order_mgr.get_open_orders(),
-                self._inventory.get_all_inventories(),
-            )
-            shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
-        if shares is None:
-            return
-
-        min_price_change = TICK_SIZE * self._cfg.min_replace_ticks
-        decision = self._order_mgr.maybe_replace(
-            token_id, entry_price, shares, self._cfg.min_replace_millis,
-            min_price_change=min_price_change,
-            max_price=max_price,
-        )
-        if decision == ReplaceDecision.SKIP:
-            return
-
-        if decision == ReplaceDecision.REPLACE:
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_PRICE", self._handle_fill)
-
-        reason = "REPLACE" if decision == ReplaceDecision.REPLACE else "QUOTE"
-        success = self._order_mgr.place_order(
-            self._client, market, token_id, direction,
-            entry_price, shares, seconds_to_end, reason,
-            on_fill=self._handle_fill,
-        )
-        if not success:
-            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
-        else:
-            self._balance_failures.pop(market.slug, None)
-
-    def _maybe_take_token(
-        self,
-        market: GabagoolMarket,
-        token_id: str,
-        direction: Direction,
-        book: TopOfBook,
-        seconds_to_end: int,
-    ) -> None:
-        if self._balance_failures.get(market.slug, 0) >= 3:
-            return
-
-        if book.best_ask is None or book.best_ask > Decimal("0.99"):
-            return
+        # Current inventory state
+        inv = self._inventory.get_inventory(slug)
+        has_up = inv.filled_up_shares >= self._cfg.min_merge_shares
+        has_down = inv.filled_down_shares >= self._cfg.min_merge_shares
 
         exposure = calculate_exposure(
             self._order_mgr.get_open_orders(),
             self._inventory.get_all_inventories(),
         )
-        shares = calculate_shares(market.slug, book.best_ask, self._cfg, seconds_to_end, exposure)
-        if shares is None:
-            return
 
-        existing = self._order_mgr.get_order(token_id)
-        if existing:
-            age_ms = (time.time() - existing.placed_at) * 1000
-            if age_ms < self._cfg.min_replace_millis:
-                return
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TAKER", self._handle_fill)
+        # ── Phase 1: No position — buy cheapest leg if ask < (1 - edge) / 2 ──
+        if not has_up and not has_down:
+            max_first_leg = (ONE - dynamic_edge) / 2
 
-        log.info(
-            "%sTAKER %s on %s at ask %s (size=%s, %ds left)%s",
-            C_GREEN, direction.value, market.slug, book.best_ask, shares, seconds_to_end, C_RESET,
-        )
-        success = self._order_mgr.place_order(
-            self._client, market, token_id, direction,
-            book.best_ask, shares, seconds_to_end, "TAKER",
-            on_fill=self._handle_fill,
-        )
-        if not success:
-            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
-        else:
-            self._balance_failures.pop(market.slug, None)
+            # Determine which side to buy
+            buy_up = up_ask <= max_first_leg
+            buy_down = down_ask <= max_first_leg
 
-    def _maybe_fast_top_up(
-        self,
-        market: GabagoolMarket,
-        inv,
-        up_book: TopOfBook,
-        down_book: TopOfBook,
-        seconds_to_end: int,
-    ) -> None:
-        if not self._cfg.fast_top_up_enabled:
-            return
-
-        imbalance = inv.imbalance
-        abs_imbalance = abs(imbalance)
-        if abs_imbalance < self._cfg.top_up_min_shares:
-            return
-
-        now = time.time()
-        if (
-            inv.last_top_up_at is not None
-            and (now - inv.last_top_up_at) * 1000 < self._cfg.fast_top_up_cooldown_millis
-        ):
-            return
-
-        # Determine lagging leg
-        if imbalance > ZERO:
-            lagging = Direction.DOWN
-            lead_fill_at = inv.last_up_fill_at
-            lag_fill_at = inv.last_down_fill_at
-            lagging_book = down_book
-            lagging_token = market.down_token_id
-            lead_fill_price = inv.last_up_fill_price or inv.up_vwap
-        else:
-            lagging = Direction.UP
-            lead_fill_at = inv.last_down_fill_at
-            lag_fill_at = inv.last_up_fill_at
-            lagging_book = up_book
-            lagging_token = market.up_token_id
-            lead_fill_price = inv.last_down_fill_price or inv.down_vwap
-
-        if lead_fill_at is None:
-            log.debug("FAST_TOP_UP_SKIP %s no lead fill timestamp", market.slug)
-            return
-
-        since_lead_fill = now - lead_fill_at
-        log.debug(
-            "FAST_TOP_UP_CHECK %s imbalance=%s lagging=%s lead_fill=%.1fs ago "
-            "lag_fill=%s spread=%s",
-            market.slug, imbalance, lagging.value, since_lead_fill,
-            f"{now - lag_fill_at:.1f}s ago" if lag_fill_at else "none",
-            f"{lagging_book.best_ask - lagging_book.best_bid}"
-            if lagging_book.best_bid is not None and lagging_book.best_ask is not None
-            else "?",
-        )
-        if (
-            since_lead_fill < self._cfg.fast_top_up_min_seconds
-            or since_lead_fill > self._cfg.fast_top_up_max_seconds
-        ):
-            log.debug(
-                "FAST_TOP_UP_SKIP %s since_lead=%.1fs outside [%s, %s]",
-                market.slug, since_lead_fill,
-                self._cfg.fast_top_up_min_seconds, self._cfg.fast_top_up_max_seconds,
-            )
-            return
-
-        # Lag fill must be before lead fill (or absent), but ignore fills
-        # that resulted from our own top-up (lag_fill_at >= last_top_up_at).
-        if lag_fill_at is not None and lag_fill_at >= lead_fill_at:
-            if inv.last_top_up_at is None or lag_fill_at < inv.last_top_up_at:
-                log.debug("FAST_TOP_UP_SKIP %s lag fill after lead fill", market.slug)
+            if not buy_up and not buy_down:
+                log.debug(
+                    "FIRST_LEG_SKIP %s │ U_ask=%s D_ask=%s > max_first=%.3f",
+                    slug, up_ask, down_ask, max_first_leg,
+                )
                 return
 
-        if lagging_book.best_bid is None or lagging_book.best_ask is None:
-            log.debug("FAST_TOP_UP_SKIP %s no book for lagging side", market.slug)
-            return
-        spread = lagging_book.best_ask - lagging_book.best_bid
-        if spread > self._cfg.taker_max_spread:
-            log.debug(
-                "FAST_TOP_UP_SKIP %s spread %s > max %s",
-                market.slug, spread, self._cfg.taker_max_spread,
-            )
-            return
-
-        # Check hedged edge (use 0.0 for breakeven-or-better hedging)
-        if lead_fill_price is None:
-            if lagging == Direction.DOWN:
-                lead_fill_price = up_book.best_bid
+            # Pick the cheaper side (if both qualify)
+            if buy_up and (up_ask <= down_ask or not buy_down):
+                target_ask = up_ask
+                target_dir = Direction.UP
+                target_token = market.up_token_id
+                side_label = "UP"
             else:
-                lead_fill_price = down_book.best_bid
-        if lead_fill_price is not None:
-            hedged_edge = ONE - (lead_fill_price + lagging_book.best_ask)
-            if hedged_edge < self._cfg.fast_top_up_min_edge:
+                target_ask = down_ask
+                target_dir = Direction.DOWN
+                target_token = market.down_token_id
+                side_label = "DOWN"
+
+            # Size using balanced calculation (both asks) for bankroll-appropriate size
+            shares = calculate_balanced_shares(
+                slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
+            )
+            if shares is None:
+                log.debug("FIRST_LEG_SKIP %s │ insufficient bankroll", slug)
+                return
+
+            log.info(
+                "%sFIRST_LEG %s │ %s ask=%s │ max_first=%.3f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, side_label, target_ask, max_first_leg,
+                shares, seconds_to_end, C_RESET,
+            )
+
+            self._order_mgr.place_order(
+                self._client, market, target_token, target_dir,
+                target_ask, shares, seconds_to_end, "FIRST_LEG",
+                on_fill=self._handle_fill,
+                order_type=OrderType.FOK,
+            )
+            return
+
+        # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──
+        if has_up and not has_down:
+            # Need: up_vwap + down_ask < 1.0 - dynamic_edge
+            if inv.up_vwap is None:
+                return
+            combined = inv.up_vwap + down_ask
+            edge = ONE - combined
+            if edge < dynamic_edge:
                 log.debug(
-                    "FAST_TOP_UP_SKIP %s hedged_edge=%s < min_edge=%s",
-                    market.slug, hedged_edge, self._cfg.fast_top_up_min_edge,
+                    "HEDGE_SKIP %s │ UP_vwap=%s + D_ask=%s = %.3f │ edge=%.3f < %.3f",
+                    slug, inv.up_vwap, down_ask, combined, edge, dynamic_edge,
                 )
                 return
 
-        self._inventory.mark_top_up(market.slug)
-        self._maybe_top_up_lagging(
-            market, lagging_token, lagging, lagging_book, seconds_to_end,
-            abs_imbalance, "FAST_TOP_UP",
-        )
+            # Match first leg's filled share count; check bankroll
+            hedge_shares = inv.filled_up_shares
+            hedge_notional = hedge_shares * down_ask
+            bankroll = self._cfg.bankroll_usd
+            if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
+                total_cap = bankroll * self._cfg.max_total_bankroll_fraction
+                remaining = total_cap - exposure
+                if hedge_notional > remaining:
+                    log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
+                              slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
+                    return
 
-    def _maybe_top_up_lagging(
-        self,
-        market: GabagoolMarket,
-        token_id: str,
-        direction: Direction,
-        book: TopOfBook,
-        seconds_to_end: int,
-        imbalance_shares: Decimal,
-        reason: str,
-    ) -> None:
-        if self._balance_failures.get(market.slug, 0) >= 3:
-            log.debug("TOP_UP_SKIP %s too many balance failures", market.slug)
-            return
-        if imbalance_shares < Decimal("0.01"):
-            log.debug("TOP_UP_SKIP %s imbalance too small (%s)", market.slug, imbalance_shares)
-            return
-        if book.best_ask is None or book.best_ask > Decimal("0.99"):
-            log.debug("TOP_UP_SKIP %s bad ask (%s)", market.slug, book.best_ask)
+            log.info(
+                "%sHEDGE_LEG %s │ DOWN ask=%s │ UP_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, down_ask, inv.up_vwap, edge,
+                hedge_shares, seconds_to_end, C_RESET,
+            )
+
+            self._order_mgr.place_order(
+                self._client, market, market.down_token_id, Direction.DOWN,
+                down_ask, hedge_shares, seconds_to_end, "HEDGE_LEG",
+                on_fill=self._handle_fill,
+                order_type=OrderType.FOK,
+            )
             return
 
-        # Check spread
-        if book.best_bid is not None:
-            spread = book.best_ask - book.best_bid
-            if spread > self._cfg.taker_max_spread:
+        if has_down and not has_up:
+            # Need: down_vwap + up_ask < 1.0 - dynamic_edge
+            if inv.down_vwap is None:
+                return
+            combined = inv.down_vwap + up_ask
+            edge = ONE - combined
+            if edge < dynamic_edge:
                 log.debug(
-                    "TOP_UP_SKIP %s spread %s > max %s",
-                    market.slug, spread, self._cfg.taker_max_spread,
+                    "HEDGE_SKIP %s │ D_vwap=%s + U_ask=%s = %.3f │ edge=%.3f < %.3f",
+                    slug, inv.down_vwap, up_ask, combined, edge, dynamic_edge,
                 )
                 return
 
-        top_up_shares = imbalance_shares
+            hedge_shares = inv.filled_down_shares
+            hedge_notional = hedge_shares * up_ask
+            bankroll = self._cfg.bankroll_usd
+            if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
+                total_cap = bankroll * self._cfg.max_total_bankroll_fraction
+                remaining = total_cap - exposure
+                if hedge_notional > remaining:
+                    log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
+                              slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
+                    return
 
-        bankroll = self._cfg.bankroll_usd
+            log.info(
+                "%sHEDGE_LEG %s │ UP ask=%s │ DOWN_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, up_ask, inv.down_vwap, edge,
+                hedge_shares, seconds_to_end, C_RESET,
+            )
 
-        # Per-order cap
-        if bankroll > ZERO and self._cfg.max_order_bankroll_fraction > ZERO:
-            per_order_cap = bankroll * self._cfg.max_order_bankroll_fraction
-            cap = (per_order_cap / book.best_ask).quantize(Decimal("0.01"))
-            top_up_shares = min(top_up_shares, cap)
-
-        # If capping would strand a sub-minimum remainder, take the full imbalance
-        remainder = imbalance_shares - top_up_shares
-        if ZERO < remainder < MIN_ORDER_SIZE:
-            top_up_shares = imbalance_shares
-
-        # NOTE: total bankroll cap intentionally skipped for top-ups.
-        # Top-ups hedge an existing imbalance — they reduce risk, not add it.
-        # The per-order cap above still limits individual top-up size.
-
-        top_up_shares = top_up_shares.quantize(Decimal("0.01"))
-        if top_up_shares < Decimal("0.01"):
-            log.debug("TOP_UP_SKIP %s capped shares too small", market.slug)
-            return
-
-        # Cancel existing order if any
-        existing = self._order_mgr.get_order(token_id)
-        if existing:
-            age_ms = (time.time() - existing.placed_at) * 1000
-            if age_ms < self._cfg.min_replace_millis:
-                log.debug(
-                    "TOP_UP_SKIP %s existing order too young (%dms < %dms)",
-                    market.slug, age_ms, self._cfg.min_replace_millis,
-                )
-                return
-            self._order_mgr.cancel_order(self._client, token_id, "REPLACE_TOP_UP", self._handle_fill)
-
-        log.info(
-            "%sTOP-UP %s on %s at ask %s (imbalance=%s, shares=%s, %ds left) [%s]%s",
-            C_YELLOW, direction.value, market.slug, book.best_ask,
-            imbalance_shares, top_up_shares, seconds_to_end, reason, C_RESET,
-        )
-        success = self._order_mgr.place_order(
-            self._client, market, token_id, direction,
-            book.best_ask, top_up_shares, seconds_to_end, reason,
-            on_fill=self._handle_fill,
-        )
-        if not success:
-            self._balance_failures[market.slug] = self._balance_failures.get(market.slug, 0) + 1
-        else:
-            self._balance_failures.pop(market.slug, None)
-
-    def _should_take(
-        self, edge: Decimal, up_book: TopOfBook, down_book: TopOfBook
-    ) -> bool:
-        if not self._cfg.taker_enabled:
-            return False
-        if edge > self._cfg.taker_max_edge:
-            return False
-
-        up_spread = up_book.best_ask - up_book.best_bid
-        down_spread = down_book.best_ask - down_book.best_bid
-
-        if up_spread > self._cfg.taker_max_spread or down_spread > self._cfg.taker_max_spread:
-            return False
-
-        log.debug(
-            "Taker mode triggered - edge=%s, upSpread=%s, downSpread=%s",
-            edge, up_spread, down_spread,
-        )
-        return True
-
-    def _decide_taker_leg(self, inv, up_book: TopOfBook, down_book: TopOfBook):
-        bid_up = up_book.best_bid
-        ask_up = up_book.best_ask
-        bid_down = down_book.best_bid
-        ask_down = down_book.best_ask
-
-        if None in (bid_up, ask_up, bid_down, ask_down):
-            return None
-
-        edge_take_up = ONE - (ask_up + bid_down)
-        edge_take_down = ONE - (bid_up + ask_down)
-        min_edge = self._cfg.fast_top_up_min_edge
-
-        up_ok = edge_take_up >= min_edge
-        down_ok = edge_take_down >= min_edge
-
-        if not up_ok and not down_ok:
-            return None
-        if up_ok and not down_ok:
-            return Direction.UP
-        if down_ok and not up_ok:
-            return Direction.DOWN
-
-        if edge_take_up > edge_take_down:
-            return Direction.UP
-        if edge_take_down > edge_take_up:
-            return Direction.DOWN
-
-        imbalance = inv.imbalance
-        if imbalance > ZERO:
-            return Direction.DOWN
-        if imbalance < ZERO:
-            return Direction.UP
-        return Direction.UP
+            self._order_mgr.place_order(
+                self._client, market, market.up_token_id, Direction.UP,
+                up_ask, hedge_shares, seconds_to_end, "HEDGE_LEG",
+                on_fill=self._handle_fill,
+                order_type=OrderType.FOK,
+            )

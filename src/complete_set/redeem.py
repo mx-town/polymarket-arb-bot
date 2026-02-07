@@ -270,9 +270,9 @@ def _send_safe_tx(
     ])
 
     # Submit the outer transaction from EOA to Safe
-    eoa_nonce = w3.eth.get_transaction_count(from_addr, "pending")
+    eoa_nonce = w3.eth.get_transaction_count(from_addr, "latest")
     gas_price_raw = w3.eth.gas_price
-    gas_price = math.ceil(gas_price_raw * 1.10)
+    gas_price = math.ceil(gas_price_raw * 1.50)
 
     try:
         gas_estimate = w3.eth.estimate_gas({
