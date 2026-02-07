@@ -42,11 +42,12 @@ C_RESET = "\033[0m"
 
 
 class Engine:
-    def __init__(self, client, cfg: CompleteSetConfig, private_key: str = "", rpc_url: str = ""):
+    def __init__(self, client, cfg: CompleteSetConfig, private_key: str = "", rpc_url: str = "", funder_address: str = ""):
         self._client = client
         self._cfg = cfg
         self._private_key = private_key
         self._rpc_url = rpc_url
+        self._funder_address = funder_address
         self._order_mgr = OrderManager(dry_run=cfg.dry_run)
         self._inventory = InventoryTracker(dry_run=cfg.dry_run)
         self._active_markets: list[GabagoolMarket] = []
@@ -180,8 +181,8 @@ class Engine:
                     continue
                 if not market.condition_id:
                     continue
-                # Skip after 3 failures (likely a permanent issue like missing approval)
-                if self._merge_failures.get(slug, 0) >= 3:
+                # Skip after 5 failures (first 1-2 may fail during settlement delay)
+                if self._merge_failures.get(slug, 0) >= 5:
                     continue
                 # Cooldown: 60s between attempts per market
                 last_attempt = self._merge_last_attempt.get(slug, 0.0)
@@ -198,6 +199,8 @@ class Engine:
                     tx_hash = merge_positions(
                         self._private_key, self._rpc_url,
                         market.condition_id, amount_base,
+                        funder_address=self._funder_address,
+                        neg_risk=market.neg_risk,
                     )
                     self._inventory.reduce_merged(slug, hedged)
                     self._merge_failures.pop(slug, None)
@@ -209,7 +212,7 @@ class Engine:
                     failures = self._merge_failures.get(slug, 0) + 1
                     self._merge_failures[slug] = failures
                     log.warning(
-                        "%sMERGE_FAILED %s │ hedged=%s │ attempt %d/3 │ %s%s",
+                        "%sMERGE_FAILED %s │ hedged=%s │ attempt %d/5 │ %s%s",
                         C_YELLOW, slug, hedged, failures, e, C_RESET,
                     )
                 # Only one merge per tick — don't block the loop further
@@ -257,6 +260,8 @@ class Engine:
             try:
                 tx_hash = redeem_positions(
                     self._private_key, self._rpc_url, pr.market.condition_id,
+                    funder_address=self._funder_address,
+                    neg_risk=pr.market.neg_risk,
                 )
                 log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
                 self._pending_redemptions.pop(slug)
@@ -426,7 +431,7 @@ class Engine:
                 edge = ONE - (up_entry + dn_entry)
                 edge_str = f"{edge:.3f}"
 
-            log.info(
+            log.debug(
                 "  MARKET %s │ %ds │ book=U[%s/%s] D[%s/%s] │ edge=%s",
                 market.slug[-30:], ste,
                 up_bid, up_ask, dn_bid, dn_ask, edge_str,
@@ -446,7 +451,7 @@ class Engine:
                     up_vwap_str = f"U{inv.up_vwap:.2f}" if inv.up_vwap is not None else "U---"
                     dn_vwap_str = f"D{inv.down_vwap:.2f}" if inv.down_vwap is not None else "D---"
                     vwap_seg = f" │ vwap={up_vwap_str}/{dn_vwap_str}"
-                log.info(
+                log.debug(
                     "  ORDERS %s │ inv=U%s/D%s(h%s)%s │ ord=%s %s",
                     market.slug[-30:],
                     inv.up_shares, inv.down_shares, hedged,

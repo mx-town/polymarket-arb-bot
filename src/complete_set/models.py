@@ -36,6 +36,7 @@ class GabagoolMarket:
     end_time: float  # epoch seconds
     market_type: str  # "updown-15m" or "up-or-down"
     condition_id: str = ""  # needed for on-chain redemption contract call
+    neg_risk: bool = False  # NegRisk markets use NegRiskAdapter for merge/redeem
 
 
 @dataclass

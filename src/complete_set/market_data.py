@@ -154,6 +154,7 @@ def _fetch_market_by_slug(slug: str) -> Optional[GabagoolMarket]:
             return None
 
         condition_id = first_market.get("conditionId", "")
+        neg_risk = bool(first_market.get("negRisk", False))
 
         return GabagoolMarket(
             slug=event_slug,
@@ -162,6 +163,7 @@ def _fetch_market_by_slug(slug: str) -> Optional[GabagoolMarket]:
             end_time=end_time,
             market_type=market_type,
             condition_id=condition_id,
+            neg_risk=neg_risk,
         )
 
     except Exception as e:

@@ -18,7 +18,7 @@ assets:
 # Complete-set arbitrage (OPTIMIZED for fixed exposure formula)
 complete_set:
   enabled: true
-  dry_run: true
+  dry_run: false
   refresh_millis: 500
   min_replace_millis: 10000
   improve_ticks: 2
@@ -31,11 +31,11 @@ complete_set:
   max_skew_ticks: 1
   imbalance_for_max_skew: 100            # Higher, matches Java
 
-  # Bankroll - AGGRESSIVE because hedged pairs are free
-  bankroll_usd: 60
-  max_order_bankroll_fraction: 0.25      # $15 per market
-  max_total_bankroll_fraction: 0.80      # $48 total (!)
-  max_shares_per_market: 30              # 2x more shares
+  # Bankroll — $30, conservative sizing
+  bankroll_usd: 30
+  max_order_bankroll_fraction: 0.25      # $7.50 per order
+  max_total_bankroll_fraction: 0.80      # $24 total deployed
+  max_shares_per_market: 15              # keep positions small
 
   # Top-up
   top_up_enabled: true

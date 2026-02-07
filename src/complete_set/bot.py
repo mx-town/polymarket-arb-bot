@@ -106,9 +106,10 @@ def main():
 
     private_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
     rpc_url = os.environ.get("POLYGON_RPC_URL", "")
+    funder = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
 
     client = _init_client(cfg.dry_run)
-    engine = Engine(client, cfg, private_key=private_key, rpc_url=rpc_url)
+    engine = Engine(client, cfg, private_key=private_key, rpc_url=rpc_url, funder_address=funder)
 
     try:
         asyncio.run(engine.run())
