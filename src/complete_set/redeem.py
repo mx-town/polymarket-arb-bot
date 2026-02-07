@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 
-from py_builder_relayer_client.models import OperationType, SafeTransaction
 from web3 import Web3
 
 log = logging.getLogger("cs.redeem")
@@ -213,18 +212,8 @@ def merge_positions(
     merge_target, merge_data = _encode_merge(condition_id, amount, neg_risk)
 
     transactions = [
-        SafeTransaction(
-            to=Web3.to_checksum_address(CTF_ADDRESS),
-            operation=OperationType.Call,
-            data=approval_data,
-            value="0",
-        ),
-        SafeTransaction(
-            to=merge_target,
-            operation=OperationType.Call,
-            data=merge_data,
-            value="0",
-        ),
+        {"to": Web3.to_checksum_address(CTF_ADDRESS), "data": approval_data, "value": "0"},
+        {"to": merge_target, "data": merge_data, "value": "0"},
     ]
 
     resp = relay_client.execute(transactions, "merge positions")
@@ -258,12 +247,7 @@ def redeem_positions(
     redeem_target, redeem_data = _encode_redeem(condition_id, neg_risk, amount)
 
     transactions = [
-        SafeTransaction(
-            to=redeem_target,
-            operation=OperationType.Call,
-            data=redeem_data,
-            value="0",
-        ),
+        {"to": redeem_target, "data": redeem_data, "value": "0"},
     ]
 
     resp = relay_client.execute(transactions, "redeem positions")
