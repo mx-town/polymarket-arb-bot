@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from py_builder_relayer_client.models import OperationType, SafeTransaction
 from web3 import Web3
 
 log = logging.getLogger("cs.redeem")
@@ -212,14 +213,29 @@ def merge_positions(
     merge_target, merge_data = _encode_merge(condition_id, amount, neg_risk)
 
     transactions = [
-        {"to": Web3.to_checksum_address(CTF_ADDRESS), "data": approval_data, "value": "0"},
-        {"to": merge_target, "data": merge_data, "value": "0"},
+        SafeTransaction(
+            to=Web3.to_checksum_address(CTF_ADDRESS),
+            operation=OperationType.Call,
+            data=approval_data,
+            value="0",
+        ),
+        SafeTransaction(
+            to=merge_target,
+            operation=OperationType.Call,
+            data=merge_data,
+            value="0",
+        ),
     ]
 
     resp = relay_client.execute(transactions, "merge positions")
     log.info("MERGE_SUBMITTED tx_id=%s │ waiting for confirmation", resp.transaction_id)
 
-    resp.wait()
+    result = resp.wait()
+    if result is None:
+        raise RuntimeError(
+            f"Merge reverted on-chain (tx_id={resp.transaction_id}, "
+            f"tx_hash={resp.transaction_hash})"
+        )
     tx_hash = resp.transaction_hash
     log.info("MERGE_CONFIRMED tx=%s", tx_hash)
     return tx_hash
@@ -247,13 +263,23 @@ def redeem_positions(
     redeem_target, redeem_data = _encode_redeem(condition_id, neg_risk, amount)
 
     transactions = [
-        {"to": redeem_target, "data": redeem_data, "value": "0"},
+        SafeTransaction(
+            to=redeem_target,
+            operation=OperationType.Call,
+            data=redeem_data,
+            value="0",
+        ),
     ]
 
     resp = relay_client.execute(transactions, "redeem positions")
     log.info("REDEEM_SUBMITTED tx_id=%s │ waiting for confirmation", resp.transaction_id)
 
-    resp.wait()
+    result = resp.wait()
+    if result is None:
+        raise RuntimeError(
+            f"Redeem reverted on-chain (tx_id={resp.transaction_id}, "
+            f"tx_hash={resp.transaction_hash})"
+        )
     tx_hash = resp.transaction_hash
     log.info("REDEEM_CONFIRMED tx=%s", tx_hash)
     return tx_hash

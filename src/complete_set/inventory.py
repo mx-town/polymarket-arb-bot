@@ -10,6 +10,8 @@ import logging
 import time
 from decimal import Decimal
 
+from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+
 from complete_set.models import GabagoolMarket, MarketInventory
 
 log = logging.getLogger("cs.inventory")
@@ -34,7 +36,7 @@ class InventoryTracker:
         self.session_realized_pnl: Decimal = ZERO
         self.session_total_deployed: Decimal = ZERO
 
-    def refresh_if_stale(self, client) -> None:
+    def refresh_if_stale(self, client, markets: list[GabagoolMarket] | None = None) -> None:
         """Refresh positions from CLOB if cache is stale (>5s).
 
         In dry-run mode, skip entirely — inventory comes from record_fill.
@@ -46,47 +48,43 @@ class InventoryTracker:
         if now - self._last_refresh < CACHE_TTL_SECONDS:
             return
 
+        token_ids: set[str] = set()
+        if markets:
+            for m in markets:
+                if m.up_token_id:
+                    token_ids.add(m.up_token_id)
+                if m.down_token_id:
+                    token_ids.add(m.down_token_id)
+
+        if not token_ids:
+            return
+
         try:
-            self._fetch_positions(client)
+            self._fetch_positions(client, token_ids)
             self._last_refresh = now
         except Exception as e:
-            # Keep stale data, update timestamp to avoid hammering
             self._last_refresh = now
             log.debug("positions refresh failed: %s", e)
 
-    def _fetch_positions(self, client) -> None:
-        """Fetch all positions and aggregate shares by token_id."""
+    def _fetch_positions(self, client, token_ids: set[str]) -> None:
+        """Fetch balances for each token_id via get_balance_allowance."""
         shares: dict[str, Decimal] = {}
 
-        try:
-            # py-clob-client may return positions differently
-            # Try the get_balances or similar endpoint
-            positions = client.get_balances()
-            if positions:
-                for p in positions:
-                    if isinstance(p, dict):
-                        asset = p.get("asset_id") or p.get("asset")
-                        size = p.get("size") or p.get("balance", "0")
-                    else:
-                        asset = getattr(p, "asset_id", None) or getattr(p, "asset", None)
-                        size = getattr(p, "size", None) or getattr(p, "balance", "0")
-
-                    # Skip redeemable positions — resolved but unredeemed markets
-                    # would inflate phantom exposure (matches Java syncInventory)
-                    if isinstance(p, dict):
-                        redeemable = p.get("redeemable", False)
-                    else:
-                        redeemable = getattr(p, "redeemable", False)
-                    if redeemable:
-                        continue
-
-                    if asset and size:
-                        size_dec = abs(Decimal(str(size)))
-                        shares[asset] = shares.get(asset, ZERO) + size_dec
-        except Exception:
-            # Fallback: no position data available
-            log.info("Could not fetch positions, keeping existing data")
-            return
+        for tid in token_ids:
+            try:
+                resp = client.get_balance_allowance(
+                    params=BalanceAllowanceParams(
+                        asset_type=AssetType.CONDITIONAL,
+                        token_id=tid,
+                    )
+                )
+                bal_str = resp.get("balance", "0") if isinstance(resp, dict) else getattr(resp, "balance", "0")
+                bal_raw = Decimal(str(bal_str))
+                bal = bal_raw / Decimal("1000000")  # CTF tokens use 6 decimals
+                if bal > ZERO:
+                    shares[tid] = bal
+            except Exception as e:
+                log.debug("balance fetch failed for %s: %s", tid[:16], e)
 
         self._shares_by_token = shares
 

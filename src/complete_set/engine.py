@@ -104,7 +104,7 @@ class Engine:
         # Initial position sync — detect existing chain positions before first tick
         self._active_markets = discover_markets(self._cfg.assets)
         self._last_discovery = time.time()
-        self._inventory.refresh_if_stale(self._client)
+        self._inventory.refresh_if_stale(self._client, self._active_markets)
         self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
         self._log_summary(time.time())
 
@@ -152,7 +152,7 @@ class Engine:
             self._log_summary(now)
 
         # Refresh positions
-        self._inventory.refresh_if_stale(self._client)
+        self._inventory.refresh_if_stale(self._client, self._active_markets)
         self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
 
         # Evaluate each market
@@ -202,6 +202,10 @@ class Engine:
                 # Cooldown: 60s between attempts per market
                 last_attempt = self._merge_last_attempt.get(slug, 0.0)
                 if now - last_attempt < 60:
+                    continue
+                # Wait for on-chain settlement after last fill (Polygon ~5s)
+                last_fill = max(inv.last_up_fill_at or 0, inv.last_down_fill_at or 0)
+                if last_fill > 0 and now - last_fill < 10:
                     continue
                 # Don't merge too close to resolution — just wait for redeem
                 seconds_to_end = int(market.end_time - now)
