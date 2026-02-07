@@ -199,9 +199,9 @@ class Engine:
                 # Skip after 5 failures (first 1-2 may fail during settlement delay)
                 if self._merge_failures.get(slug, 0) >= 5:
                     continue
-                # Cooldown: 60s between attempts per market
+                # Cooldown: 15s between attempts per market
                 last_attempt = self._merge_last_attempt.get(slug, 0.0)
-                if now - last_attempt < 60:
+                if now - last_attempt < 15:
                     continue
                 # Wait for on-chain settlement after last fill (Polygon ~5s)
                 last_fill = max(inv.last_up_fill_at or 0, inv.last_down_fill_at or 0)
@@ -577,8 +577,16 @@ class Engine:
         balanced = calculate_balanced_shares(
             market.slug, up_entry, down_entry, self._cfg, seconds_to_end, exposure,
         )
-        self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up, pre_shares=balanced)
-        self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down, pre_shares=balanced)
+
+        # Skip overweight side when imbalance is significant
+        abs_imbalance = abs(inv.imbalance)
+        skip_up = abs_imbalance >= self._cfg.top_up_min_shares and inv.imbalance > ZERO
+        skip_down = abs_imbalance >= self._cfg.top_up_min_shares and inv.imbalance < ZERO
+
+        if not skip_up:
+            self._maybe_quote_token(market, market.up_token_id, Direction.UP, up_book, seconds_to_end, skew_up, pre_shares=balanced)
+        if not skip_down:
+            self._maybe_quote_token(market, market.down_token_id, Direction.DOWN, down_book, seconds_to_end, skew_down, pre_shares=balanced)
 
     def _maybe_quote_token(
         self,
@@ -597,16 +605,18 @@ class Engine:
         if entry_price is None:
             return
 
-        # Hard cap: skip quoting if hedged inventory already at limit
+        # Hard cap: skip quoting if THIS direction already at limit
+        headroom = None
         if self._cfg.max_shares_per_market > ZERO:
             inv = self._inventory.get_inventory(market.slug)
-            hedged = min(inv.up_shares, inv.down_shares)
-            if hedged >= self._cfg.max_shares_per_market:
+            dir_shares = inv.up_shares if direction == Direction.UP else inv.down_shares
+            if dir_shares >= self._cfg.max_shares_per_market:
                 log.debug(
-                    "Skipping %s %s - at max_shares_per_market (%s hedged)",
-                    market.slug, direction.value, hedged,
+                    "Skipping %s %s - at max_shares_per_market (%s shares)",
+                    market.slug, direction.value, dir_shares,
                 )
                 return
+            headroom = self._cfg.max_shares_per_market - dir_shares
 
         if pre_shares is not None:
             shares = pre_shares
@@ -618,6 +628,16 @@ class Engine:
             shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
         if shares is None:
             return
+
+        # Clamp to remaining headroom under per-side cap
+        if headroom is not None and shares > headroom:
+            shares = headroom
+            if shares < MIN_ORDER_SIZE:
+                log.debug(
+                    "Skipping %s %s - headroom too small (%s < min)",
+                    market.slug, direction.value, shares,
+                )
+                return
 
         min_price_change = TICK_SIZE * self._cfg.min_replace_ticks
         decision = self._order_mgr.maybe_replace(
@@ -685,13 +705,12 @@ class Engine:
             self._balance_failures.pop(market.slug, None)
 
     def _is_at_max_shares(self, market: GabagoolMarket) -> bool:
-        """Return True if hedged inventory has reached max_shares_per_market."""
+        """Return True if both sides have reached max_shares_per_market."""
         cap = self._cfg.max_shares_per_market
         if cap <= ZERO:
             return False
         inv = self._inventory.get_inventory(market.slug)
-        hedged = min(inv.up_shares, inv.down_shares)
-        return hedged >= cap
+        return min(inv.up_shares, inv.down_shares) >= cap
 
     def _maybe_fast_top_up(
         self,
