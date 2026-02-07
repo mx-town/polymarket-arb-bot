@@ -16,11 +16,19 @@ from typing import Optional
 import requests
 from zoneinfo import ZoneInfo
 
+from py_clob_client.clob_types import BookParams
+
 from complete_set.models import GabagoolMarket, TopOfBook
 
 log = logging.getLogger("cs.market_data")
 
 _book_log_ts: dict[str, float] = {}  # token_id -> last log time
+
+# ---------------------------------------------------------------------------
+# TOB cache — avoids redundant HTTP fetches within the same tick
+# ---------------------------------------------------------------------------
+_tob_cache: dict[str, tuple[Optional[TopOfBook], float]] = {}  # token_id -> (tob, mono_ts)
+_TOB_TTL = 0.4  # seconds — slightly under 500ms tick interval
 
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 ET = ZoneInfo("America/New_York")
@@ -266,52 +274,94 @@ def _extract_size(entry) -> Optional[Decimal]:
     return Decimal(str(raw))
 
 
+def _parse_book_to_tob(book, token_id: str) -> Optional[TopOfBook]:
+    """Parse a raw order book (dict or object) into a TopOfBook."""
+    if isinstance(book, dict):
+        bids = book.get("bids") or []
+        asks = book.get("asks") or []
+    else:
+        bids = getattr(book, "bids", None) or []
+        asks = getattr(book, "asks", None) or []
+
+    bids = sorted(bids, key=lambda e: _extract_price(e) or Decimal(0), reverse=True)
+    asks = sorted(asks, key=lambda e: _extract_price(e) or Decimal("999"), reverse=False)
+
+    best_bid = _extract_price(bids[0]) if bids else None
+    best_bid_size = _extract_size(bids[0]) if bids else None
+    best_ask = _extract_price(asks[0]) if asks else None
+    best_ask_size = _extract_size(asks[0]) if asks else None
+
+    now = time.monotonic()
+    if now - _book_log_ts.get(token_id, 0) >= 5:
+        _book_log_ts[token_id] = now
+        log.debug(
+            "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
+            token_id[:16], len(bids), len(asks), best_bid, best_ask,
+            (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
+        )
+
+    if best_bid is None and best_ask is None:
+        return None
+
+    return TopOfBook(
+        best_bid=best_bid,
+        best_ask=best_ask,
+        best_bid_size=best_bid_size,
+        best_ask_size=best_ask_size,
+        updated_at=time.time(),
+    )
+
+
 def get_top_of_book(client, token_id: str) -> Optional[TopOfBook]:
     """Fetch top-of-book from CLOB order book endpoint.
 
-    Uses py-clob-client's client.get_order_book(token_id).
-    Returns None if both sides are empty.
+    Uses a per-token TTL cache to avoid redundant HTTP fetches within
+    the same tick.  Falls back to client.get_order_book() on cache miss.
     """
+    # Check cache
+    cached = _tob_cache.get(token_id)
+    if cached is not None:
+        tob, ts = cached
+        if time.monotonic() - ts < _TOB_TTL:
+            return tob
+
     try:
         book = client.get_order_book(token_id)
-
-        if isinstance(book, dict):
-            bids = book.get("bids") or []
-            asks = book.get("asks") or []
-        else:
-            bids = getattr(book, "bids", None) or []
-            asks = getattr(book, "asks", None) or []
-
-        # Sort: bids descending by price, asks ascending by price.
-        # Server usually returns sorted, but py-clob-client doesn't guarantee it.
-        bids = sorted(bids, key=lambda e: _extract_price(e) or Decimal(0), reverse=True)
-        asks = sorted(asks, key=lambda e: _extract_price(e) or Decimal("999"), reverse=False)
-
-        best_bid = _extract_price(bids[0]) if bids else None
-        best_bid_size = _extract_size(bids[0]) if bids else None
-        best_ask = _extract_price(asks[0]) if asks else None
-        best_ask_size = _extract_size(asks[0]) if asks else None
-
-        now = time.monotonic()
-        if now - _book_log_ts.get(token_id, 0) >= 5:
-            _book_log_ts[token_id] = now
-            log.debug(
-                "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
-                token_id[:16], len(bids), len(asks), best_bid, best_ask,
-                (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
-            )
-
-        if best_bid is None and best_ask is None:
-            return None
-
-        return TopOfBook(
-            best_bid=best_bid,
-            best_ask=best_ask,
-            best_bid_size=best_bid_size,
-            best_ask_size=best_ask_size,
-            updated_at=time.time(),
-        )
-
+        tob = _parse_book_to_tob(book, token_id)
+        _tob_cache[token_id] = (tob, time.monotonic())
+        return tob
     except Exception as e:
         log.debug("Error fetching order book for %s: %s", token_id, e)
         return None
+
+
+def prefetch_order_books(client, markets: list[GabagoolMarket]) -> None:
+    """Batch-fetch all order books in a single HTTP POST and populate cache.
+
+    Uses client.get_order_books() so one round-trip replaces N sequential
+    calls in _tick_core / _evaluate_market / _log_summary.
+    """
+    if not markets:
+        return
+    params: list[BookParams] = []
+    token_id_set: set[str] = set()
+    for m in markets:
+        params.append(BookParams(token_id=m.up_token_id))
+        token_id_set.add(m.up_token_id)
+        params.append(BookParams(token_id=m.down_token_id))
+        token_id_set.add(m.down_token_id)
+
+    try:
+        raw_books = client.get_order_books(params)
+        now_mono = time.monotonic()
+        for book in raw_books:
+            # Match by asset_id — batch response order is NOT guaranteed
+            tid = getattr(book, "asset_id", None)
+            if isinstance(book, dict):
+                tid = book.get("asset_id", tid)
+            if not tid or tid not in token_id_set:
+                continue
+            tob = _parse_book_to_tob(book, tid)
+            _tob_cache[tid] = (tob, now_mono)
+    except Exception as e:
+        log.debug("Batch order book fetch failed: %s", e)

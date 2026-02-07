@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
-from complete_set.market_data import discover_markets, get_top_of_book
+from complete_set.market_data import discover_markets, get_top_of_book, prefetch_order_books
 from complete_set.models import (
     Direction,
     GabagoolMarket,
@@ -24,6 +24,7 @@ from complete_set.models import (
 )
 from complete_set.order_mgr import OrderManager
 from py_clob_client.clob_types import OrderType
+from complete_set.volatility import analyze_swings, check_entry_momentum, clear_market_history, record_prices
 from complete_set.quote_calc import (
     calculate_balanced_shares,
     calculate_dynamic_edge,
@@ -67,11 +68,14 @@ class Engine:
         self._merge_last_attempt: dict[str, float] = {}  # slug -> timestamp
         self._pending_merge_task: dict[str, asyncio.Task] = {}   # slug -> Task
         self._pending_redeem_task: dict[str, asyncio.Task] = {}  # slug -> Task
+        self._stop_loss_at: dict[str, float] = {}  # slug -> last stop-loss timestamp
         self._start_time: float = time.time()
         self._last_session_log: float = 0.0
         self._bg_discovery: asyncio.Task | None = None
         self._bg_refresh: asyncio.Task | None = None
         self._cached_wallet_bal: str = "n/a"
+        self._last_summary_log: float = 0.0
+        self._last_wallet_refresh: float = 0.0
 
     async def run(self) -> None:
         """Main event loop."""
@@ -86,6 +90,14 @@ class Engine:
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
         log.info("  No new orders   : %ds", self._cfg.no_new_orders_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
+        log.info("  Vol filter      : %s (swing≥%s, eff≤%s, rev≥%d)",
+                 "ON" if self._cfg.volatility_filter_enabled else "OFF",
+                 self._cfg.vol_min_swing, self._cfg.vol_max_efficiency, self._cfg.vol_min_reversals)
+        log.info("  Momentum check  : %s (lookback=%d, bounce≥%s)",
+                 "ON" if self._cfg.momentum_check_enabled else "OFF",
+                 self._cfg.momentum_lookback_samples, self._cfg.momentum_bounce_threshold)
+        log.info("  Stop-loss       : %s (≥$%s loss)",
+                 "ON" if self._cfg.stop_loss_enabled else "OFF", self._cfg.stop_loss_cents)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
@@ -103,7 +115,6 @@ class Engine:
         self._last_discovery = time.time()
         self._inventory.refresh_if_stale(self._client, self._active_markets)
         self._inventory.sync_inventory(self._active_markets, get_mid_price=self._get_mid_price)
-        self._log_summary(time.time())
 
         tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
 
@@ -163,6 +174,10 @@ class Engine:
 
     def _tick_core(self, now: float) -> None:
         """Synchronous evaluate phase - runs in thread pool."""
+        # Batch-fetch all order books in one HTTP POST — cache feeds
+        # get_top_of_book() calls in _evaluate_market and _log_summary.
+        prefetch_order_books(self._client, self._active_markets)
+
         self._inventory.sync_inventory(
             self._active_markets, get_mid_price=self._get_mid_price,
         )
@@ -172,6 +187,11 @@ class Engine:
             except Exception as e:
                 log.error("%sError evaluating %s: %s%s", C_RED, market.slug, e, C_RESET)
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
+
+        # Periodic summary — runs in thread pool with cached TOB
+        if now - self._last_summary_log >= 30:
+            self._last_summary_log = now
+            self._log_summary(now)
 
     def _apply_discovery(self, new_markets: list[GabagoolMarket], now: float) -> None:
         """Apply results from background discovery."""
@@ -193,12 +213,13 @@ class Engine:
                     )
                     log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
                 self._inventory.clear_market(slug)
+                clear_market_history(slug)
+                self._stop_loss_at.pop(slug, None)
         for token_id in list(self._order_mgr.get_open_orders()):
             order = self._order_mgr.get_order(token_id)
             if order and order.market and order.market.slug not in active_slugs:
                 self._order_mgr.cancel_order(self._client, token_id, "MARKET_EXPIRED", self._handle_fill)
         self._log_market_transitions(now)
-        self._log_summary(now)
 
     def _handle_fill(self, state, filled_shares: Decimal) -> None:
         if state.market is None or state.direction is None:
@@ -420,14 +441,12 @@ class Engine:
         return (tx_hash, merged_display)
 
     def _refresh_wallet_balance(self) -> None:
-        """Launch background wallet balance refresh."""
-        def _fetch():
-            try:
-                bal = get_usdc_balance(self._rpc_url, self._funder_address)
-                self._cached_wallet_bal = f"${bal.quantize(Decimal('0.01'))}"
-            except Exception:
-                self._cached_wallet_bal = "err"
-        asyncio.ensure_future(asyncio.to_thread(_fetch))
+        """Refresh wallet balance synchronously (called from thread pool)."""
+        try:
+            bal = get_usdc_balance(self._rpc_url, self._funder_address)
+            self._cached_wallet_bal = f"${bal.quantize(Decimal('0.01'))}"
+        except Exception:
+            self._cached_wallet_bal = "err"
 
     def _get_mid_price(self, token_id: str) -> Decimal | None:
         """Return mid-market price for a token, or None if book is unavailable."""
@@ -502,9 +521,10 @@ class Engine:
                 pnl_color, runtime_str, realized, unrealized, total_pnl, roi, C_RESET,
             )
 
-        # ── Wallet balance (cached, refreshed in background) ──
+        # ── Wallet balance (cached, refreshed in background every 60s) ──
         wallet_str = self._cached_wallet_bal
-        if self._rpc_url and self._funder_address:
+        if self._rpc_url and self._funder_address and now - self._last_wallet_refresh >= 60:
+            self._last_wallet_refresh = now
             self._refresh_wallet_balance()
 
         # ── SUMMARY header ──
@@ -599,8 +619,10 @@ class Engine:
             self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
 
             # Sell unhedged single legs at bid (FOK) to recover capital
+            # Skip dust positions that would round to zero after truncation
+            min_sell = Decimal("0.01")
             inv = self._inventory.get_inventory(slug)
-            if inv.up_shares > ZERO and inv.down_shares == ZERO:
+            if inv.up_shares >= min_sell and inv.down_shares == ZERO:
                 up_book = get_top_of_book(self._client, market.up_token_id)
                 if up_book and up_book.best_bid and up_book.best_bid > ZERO:
                     if not self._order_mgr.has_order(market.up_token_id):
@@ -615,7 +637,7 @@ class Engine:
                             "CLEANUP_SELL", on_fill=self._handle_fill,
                             order_type=OrderType.FOK, side="SELL",
                         )
-            elif inv.down_shares > ZERO and inv.up_shares == ZERO:
+            elif inv.down_shares >= min_sell and inv.up_shares == ZERO:
                 down_book = get_top_of_book(self._client, market.down_token_id)
                 if down_book and down_book.best_bid and down_book.best_bid > ZERO:
                     if not self._order_mgr.has_order(market.down_token_id):
@@ -654,6 +676,9 @@ class Engine:
         up_ask = up_book.best_ask
         down_ask = down_book.best_ask
 
+        # Record prices for volatility tracking (always, even if we skip entry)
+        record_prices(slug, up_ask, down_ask)
+
         # Dynamic edge based on worst spread
         worst_spread = max(
             (up_book.best_ask - up_book.best_bid) if up_book.best_bid is not None else Decimal("0.10"),
@@ -666,6 +691,46 @@ class Engine:
         has_up = inv.filled_up_shares >= self._cfg.min_merge_shares
         has_down = inv.filled_down_shares >= self._cfg.min_merge_shares
 
+        # ── Stop-loss: sell naked leg if unrealized loss exceeds threshold ──
+        if self._cfg.stop_loss_enabled and (has_up != has_down):
+            if has_up and not has_down:
+                sl_bid = up_book.best_bid
+                sl_vwap = inv.up_vwap
+                sl_token = market.up_token_id
+                sl_dir = Direction.UP
+                sl_shares = inv.up_shares
+                sl_label = "UP"
+            else:
+                sl_bid = down_book.best_bid
+                sl_vwap = inv.down_vwap
+                sl_token = market.down_token_id
+                sl_dir = Direction.DOWN
+                sl_shares = inv.down_shares
+                sl_label = "DOWN"
+
+            if sl_bid and sl_vwap and (sl_vwap - sl_bid) >= self._cfg.stop_loss_cents:
+                # Back off 30s after a balance error to avoid hammering
+                last_sl = self._stop_loss_at.get(slug, 0.0)
+                if now - last_sl < 30:
+                    return
+                if not self._order_mgr.has_order(sl_token):
+                    loss = sl_vwap - sl_bid
+                    log.info(
+                        "%sSTOP_LOSS %s │ %s vwap=%s bid=%s loss=%s │ SELL %s shares%s",
+                        C_RED, slug, sl_label, sl_vwap, sl_bid, loss,
+                        sl_shares, C_RESET,
+                    )
+                    ok = self._order_mgr.place_order(
+                        self._client, market, sl_token, sl_dir,
+                        sl_bid, sl_shares, seconds_to_end,
+                        "STOP_LOSS", on_fill=self._handle_fill,
+                        order_type=OrderType.FOK, side="SELL",
+                    )
+                    # Always set cooldown: on success to prevent re-entry,
+                    # on failure (balance error) to stop hammering
+                    self._stop_loss_at[slug] = time.time()
+                    return
+
         exposure = calculate_exposure(
             self._order_mgr.get_open_orders(),
             self._inventory.get_all_inventories(),
@@ -674,6 +739,36 @@ class Engine:
         # ── Phase 1: No position — buy cheapest leg if ask < (1 - edge) / 2 ──
         if not has_up and not has_down:
             max_first_leg = (ONE - dynamic_edge) / 2
+
+            # Stop-loss cooldown: skip entry for 60s after a stop-loss on this market
+            last_sl = self._stop_loss_at.get(slug, 0.0)
+            if now - last_sl < 60:
+                log.debug("FIRST_LEG_SKIP %s │ stop-loss cooldown (%ds ago)", slug, int(now - last_sl))
+                return
+
+            # Volatility filter: skip if market is trending or calm
+            if self._cfg.volatility_filter_enabled:
+                signal = analyze_swings(
+                    slug,
+                    min_samples=self._cfg.vol_min_samples,
+                    lookback_seconds=self._cfg.vol_lookback_seconds,
+                    min_swing=self._cfg.vol_min_swing,
+                    max_efficiency=self._cfg.vol_max_efficiency,
+                    min_reversals=self._cfg.vol_min_reversals,
+                )
+                if signal is None:
+                    log.debug("VOL_FILTER %s │ WAIT insufficient samples", slug)
+                    return
+                if not signal.is_oscillating:
+                    log.debug(
+                        "VOL_FILTER %s │ SKIP swing=%.3f eff=%.2f reversals=%d",
+                        slug, signal.up_swing, signal.efficiency, signal.direction_changes,
+                    )
+                    return
+                log.debug(
+                    "VOL_FILTER %s │ PASS swing=%.3f eff=%.2f reversals=%d",
+                    slug, signal.up_swing, signal.efficiency, signal.direction_changes,
+                )
 
             # Determine which side to buy
             buy_up = up_ask <= max_first_leg
@@ -697,6 +792,33 @@ class Engine:
                 target_dir = Direction.DOWN
                 target_token = market.down_token_id
                 side_label = "DOWN"
+
+            # Momentum check: skip if cheap side is still falling
+            if self._cfg.momentum_check_enabled:
+                momentum_ok = check_entry_momentum(
+                    slug, side_label.lower(),
+                    lookback_samples=self._cfg.momentum_lookback_samples,
+                    bounce_threshold=self._cfg.momentum_bounce_threshold,
+                )
+                if momentum_ok is False:
+                    log.debug(
+                        "MOMENTUM_SKIP %s │ %s still falling, no bounce",
+                        slug, side_label,
+                    )
+                    return
+                if momentum_ok is True:
+                    # Calculate bounce for logging
+                    from complete_set.volatility import _prob_history
+                    buf = _prob_history.get(slug)
+                    if buf:
+                        window = list(buf)[-self._cfg.momentum_lookback_samples:]
+                        prices = [s.up_ask if side_label == "UP" else s.down_ask for s in window]
+                        trough = min(prices)
+                        bounce = prices[-1] - trough
+                        log.debug(
+                            "MOMENTUM_PASS %s │ %s bounced +%s from trough %s",
+                            slug, side_label, bounce, trough,
+                        )
 
             # Size using balanced calculation (both asks) for bankroll-appropriate size
             shares = calculate_balanced_shares(

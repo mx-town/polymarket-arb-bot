@@ -125,9 +125,9 @@ class InventoryTracker:
             last_up_fill = existing.last_up_fill_at or 0
             last_down_fill = existing.last_down_fill_at or 0
             last_merge = existing.last_merge_at or 0
-            recent_up_fill = (now_sync - last_up_fill) < 10 if last_up_fill else False
-            recent_down_fill = (now_sync - last_down_fill) < 10 if last_down_fill else False
-            recent_merge = (now_sync - last_merge) < 30 if last_merge else False
+            recent_up_fill = (now_sync - last_up_fill) < 45 if last_up_fill else False
+            recent_down_fill = (now_sync - last_down_fill) < 45 if last_down_fill else False
+            recent_merge = (now_sync - last_merge) < 45 if last_merge else False
 
             # Bootstrap cost for newly discovered chain positions.
             # Only fires when chain shows shares but existing cost is zero

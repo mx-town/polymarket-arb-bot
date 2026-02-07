@@ -113,6 +113,13 @@ class OrderManager:
                 notional = price * size
                 if notional < min_notional:
                     min_size = math.ceil(float(min_notional / price / step)) * step
+                    if side == "SELL":
+                        # Can't sell more than we hold — skip if position too small
+                        log.warning(
+                            "FOK_MIN_NOTIONAL %s │ SELL %s x %s = $%s < $1 │ need %s shares, skipping",
+                            token_id[:16], price, size, notional, min_size,
+                        )
+                        return False
                     log.debug(
                         "FOK_MIN_NOTIONAL %s │ %s x %s = $%s < $1 │ bumping to %s",
                         token_id[:16], price, size, notional, min_size,

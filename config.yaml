@@ -29,3 +29,17 @@ complete_set:
   max_total_bankroll_fraction: 0.80
   min_merge_shares: 5
   no_new_orders_sec: 90
+  # Volatility filter — only enter oscillating markets
+  volatility_filter_enabled: true
+  vol_lookback_seconds: 120
+  vol_min_samples: 20
+  vol_min_swing: 0.05
+  vol_max_efficiency: 0.60
+  vol_min_reversals: 2
+  # Momentum check — only enter when cheap side has bounced
+  momentum_check_enabled: true
+  momentum_lookback_samples: 6
+  momentum_bounce_threshold: 0.01
+  # Stop-loss — sell naked leg when loss exceeds threshold
+  stop_loss_enabled: true
+  stop_loss_cents: 0.10

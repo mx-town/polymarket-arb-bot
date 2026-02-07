@@ -30,6 +30,23 @@ class CompleteSetConfig:
     # Merge
     min_merge_shares: Decimal = Decimal("5")
 
+    # Volatility filter
+    volatility_filter_enabled: bool = True
+    vol_lookback_seconds: float = 120.0
+    vol_min_samples: int = 20
+    vol_min_swing: Decimal = Decimal("0.05")
+    vol_max_efficiency: Decimal = Decimal("0.60")
+    vol_min_reversals: int = 2
+
+    # Momentum check
+    momentum_check_enabled: bool = True
+    momentum_lookback_samples: int = 6
+    momentum_bounce_threshold: Decimal = Decimal("0.01")
+
+    # Stop-loss
+    stop_loss_enabled: bool = True
+    stop_loss_cents: Decimal = Decimal("0.10")
+
 
 def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
     """Load CompleteSetConfig from config.yaml's complete_set section."""
@@ -52,4 +69,18 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         max_order_bankroll_fraction=Decimal(str(cs.get("max_order_bankroll_fraction", "0.05"))),
         max_total_bankroll_fraction=Decimal(str(cs.get("max_total_bankroll_fraction", "0.50"))),
         min_merge_shares=Decimal(str(cs.get("min_merge_shares", "5"))),
+        # Volatility filter
+        volatility_filter_enabled=cs.get("volatility_filter_enabled", True),
+        vol_lookback_seconds=float(cs.get("vol_lookback_seconds", 120.0)),
+        vol_min_samples=int(cs.get("vol_min_samples", 20)),
+        vol_min_swing=Decimal(str(cs.get("vol_min_swing", "0.05"))),
+        vol_max_efficiency=Decimal(str(cs.get("vol_max_efficiency", "0.60"))),
+        vol_min_reversals=int(cs.get("vol_min_reversals", 2)),
+        # Momentum check
+        momentum_check_enabled=cs.get("momentum_check_enabled", True),
+        momentum_lookback_samples=int(cs.get("momentum_lookback_samples", 6)),
+        momentum_bounce_threshold=Decimal(str(cs.get("momentum_bounce_threshold", "0.01"))),
+        # Stop-loss
+        stop_loss_enabled=cs.get("stop_loss_enabled", True),
+        stop_loss_cents=Decimal(str(cs.get("stop_loss_cents", "0.10"))),
     )
