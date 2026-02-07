@@ -11,7 +11,7 @@ from typing import Any
 class CompleteSetConfig:
     enabled: bool = True
     dry_run: bool = True
-    refresh_millis: int = 500
+    refresh_millis: int = 2000
     min_replace_millis: int = 5000
     min_replace_ticks: int = 2
     improve_ticks: int = 2
@@ -42,7 +42,7 @@ class CompleteSetConfig:
     # Top-up
     top_up_enabled: bool = True
     top_up_seconds_to_end: int = 60
-    top_up_min_shares: Decimal = Decimal("10")
+    top_up_min_shares: Decimal = Decimal("2")
     fast_top_up_enabled: bool = True
     fast_top_up_min_seconds: int = 3
     fast_top_up_max_seconds: int = 120
@@ -66,7 +66,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
     return CompleteSetConfig(
         enabled=cs.get("enabled", True),
         dry_run=cs.get("dry_run", True),
-        refresh_millis=cs.get("refresh_millis", 500),
+        refresh_millis=cs.get("refresh_millis", 2000),
         min_replace_millis=cs.get("min_replace_millis", 5000),
         min_replace_ticks=cs.get("min_replace_ticks", 2),
         improve_ticks=cs.get("improve_ticks", 2),
@@ -83,7 +83,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         _max_shares_per_market=Decimal(str(cs.get("max_shares_per_market", "0"))),
         top_up_enabled=cs.get("top_up_enabled", True),
         top_up_seconds_to_end=cs.get("top_up_seconds_to_end", 60),
-        top_up_min_shares=Decimal(str(cs.get("top_up_min_shares", "10"))),
+        top_up_min_shares=Decimal(str(cs.get("top_up_min_shares", "2"))),
         fast_top_up_enabled=cs.get("fast_top_up_enabled", True),
         fast_top_up_min_seconds=cs.get("fast_top_up_min_seconds", 3),
         fast_top_up_max_seconds=cs.get("fast_top_up_max_seconds", 120),

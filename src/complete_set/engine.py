@@ -72,6 +72,7 @@ class Engine:
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
         log.info("  Max shares/mkt  : %s", self._cfg.max_shares_per_market)
         log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
+        log.info("  Top-up min shr  : %s", self._cfg.top_up_min_shares)
         log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
         log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
