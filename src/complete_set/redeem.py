@@ -1,15 +1,17 @@
-"""On-chain merge/redeem of Polymarket positions via the Builder Relayer.
+"""On-chain merge/redeem of Polymarket positions via Gnosis Safe.
 
-Uses the Polymarket Relayer Client for gasless, atomic execution.
-The relayer routes transactions through the user's proxy wallet (Safe),
-handling nonce management, gas, and batching automatically.
+Sends direct on-chain transactions through the user's Gnosis Safe (1-of-1),
+bypassing the rate-limited Builder Relayer entirely.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import time
 
-from py_builder_relayer_client.models import OperationType, SafeTransaction
+from eth_account import Account
+from eth_account.signers.local import LocalAccount
 from web3 import Web3
 
 log = logging.getLogger("cs.redeem")
@@ -115,18 +117,53 @@ NEG_RISK_REDEEM_ABI = [
     }
 ]
 
+SAFE_ABI = [
+    {
+        "name": "execTransaction",
+        "type": "function",
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+            {"name": "operation", "type": "uint8"},
+            {"name": "safeTxGas", "type": "uint256"},
+            {"name": "baseGas", "type": "uint256"},
+            {"name": "gasPrice", "type": "uint256"},
+            {"name": "gasToken", "type": "address"},
+            {"name": "refundReceiver", "type": "address"},
+            {"name": "signatures", "type": "bytes"},
+        ],
+        "outputs": [{"name": "success", "type": "bool"}],
+    },
+    {
+        "name": "nonce",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
+    {
+        "name": "getTransactionHash",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+            {"name": "operation", "type": "uint8"},
+            {"name": "safeTxGas", "type": "uint256"},
+            {"name": "baseGas", "type": "uint256"},
+            {"name": "gasPrice", "type": "uint256"},
+            {"name": "gasToken", "type": "address"},
+            {"name": "refundReceiver", "type": "address"},
+            {"name": "_nonce", "type": "uint256"},
+        ],
+        "outputs": [{"name": "", "type": "bytes32"}],
+    },
+]
+
 
 # ── Helpers ──
-
-def _encode_approval(operator_address: str) -> str:
-    """Encode setApprovalForAll(operator, true) on the CTF ERC1155."""
-    ctf = Web3().eth.contract(
-        address=Web3.to_checksum_address(CTF_ADDRESS), abi=ERC1155_ABI,
-    )
-    return ctf.encode_abi("setApprovalForAll", [
-        Web3.to_checksum_address(operator_address), True,
-    ])
-
 
 def _encode_merge(condition_id: str, amount: int, neg_risk: bool) -> tuple[str, str]:
     """Encode merge calldata. Returns (target_address, encoded_data)."""
@@ -169,6 +206,116 @@ def _encode_redeem(condition_id: str, neg_risk: bool, amount: int = 0) -> tuple[
     return target, data
 
 
+ZERO_ADDR = "0x0000000000000000000000000000000000000000"
+
+
+def _send_safe_tx(
+    w3: Web3,
+    account: LocalAccount,
+    safe_address: str,
+    to: str,
+    data: bytes,
+    chain_id: int = 137,
+) -> str:
+    """Execute a call through a Gnosis Safe v1.3.0 (1-of-1 multisig).
+
+    Builds an execTransaction call with the EOA owner's signature,
+    then submits it on-chain from the EOA.
+    """
+    safe_cs = Web3.to_checksum_address(safe_address)
+    to_cs = Web3.to_checksum_address(to)
+    from_addr = account.address
+
+    safe = w3.eth.contract(address=safe_cs, abi=SAFE_ABI)
+
+    # Get the Safe's current nonce
+    safe_nonce = safe.functions.nonce().call()
+
+    # Get the Safe transaction hash to sign
+    # operation=0 (Call), safeTxGas=0, baseGas=0, gasPrice=0,
+    # gasToken=0x0, refundReceiver=0x0 — EOA pays gas directly
+    safe_tx_hash = safe.functions.getTransactionHash(
+        to_cs, 0, data, 0,  # to, value, data, operation=CALL
+        0, 0, 0,             # safeTxGas, baseGas, gasPrice
+        ZERO_ADDR, ZERO_ADDR,  # gasToken, refundReceiver
+        safe_nonce,
+    ).call()
+
+    # Sign the hash with the EOA (owner of the 1-of-1 Safe)
+    signed = Account.unsafe_sign_hash(safe_tx_hash, account.key)
+    # Pack signature as r(32) + s(32) + v(1)
+    signature = (
+        signed.r.to_bytes(32, "big")
+        + signed.s.to_bytes(32, "big")
+        + signed.v.to_bytes(1, "big")
+    )
+
+    # Encode the execTransaction call
+    exec_data = safe.encode_abi("execTransaction", [
+        to_cs, 0, data, 0,
+        0, 0, 0,
+        ZERO_ADDR, ZERO_ADDR,
+        signature,
+    ])
+
+    # Submit the outer transaction from EOA to Safe
+    eoa_nonce = w3.eth.get_transaction_count(from_addr, "pending")
+    gas_price_raw = w3.eth.gas_price
+    gas_price = math.ceil(gas_price_raw * 1.10)
+
+    try:
+        gas_estimate = w3.eth.estimate_gas({
+            "from": from_addr,
+            "to": safe_cs,
+            "data": exec_data,
+            "value": 0,
+        })
+        gas_limit = max(21_000, math.ceil(gas_estimate * 1.25))
+    except Exception as e:
+        log.warning("Gas estimate failed, using fallback 500k: %s", e)
+        gas_limit = 500_000
+
+    tx = {
+        "chainId": chain_id,
+        "from": from_addr,
+        "to": safe_cs,
+        "data": exec_data,
+        "value": 0,
+        "gas": gas_limit,
+        "gasPrice": gas_price,
+        "nonce": eoa_nonce,
+    }
+
+    signed_tx = account.sign_transaction(tx)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    tx_hash_hex = tx_hash.hex()
+    log.info(
+        "TX_SENT hash=%s safe_nonce=%d eoa_nonce=%d gas=%d",
+        tx_hash_hex, safe_nonce, eoa_nonce, gas_limit,
+    )
+
+    # Poll for receipt: 60 attempts x 1s
+    for attempt in range(60):
+        time.sleep(1)
+        try:
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+            if receipt is not None:
+                if receipt["status"] != 1:
+                    raise RuntimeError(
+                        f"Transaction reverted on-chain (tx={tx_hash_hex}, "
+                        f"gasUsed={receipt['gasUsed']})"
+                    )
+                log.info("TX_CONFIRMED hash=%s gasUsed=%d", tx_hash_hex, receipt["gasUsed"])
+                return tx_hash_hex
+        except Exception as e:
+            if "reverted" in str(e).lower():
+                raise
+            if attempt >= 59:
+                raise RuntimeError(f"Receipt not found after 60s (tx={tx_hash_hex})") from e
+
+    raise RuntimeError(f"Receipt not found after 60s (tx={tx_hash_hex})")
+
+
 def _compute_position_id(condition_id_hex: str, index_set: int) -> int:
     """Compute ERC1155 token ID for a CTF position."""
     condition_bytes = bytes.fromhex(condition_id_hex.removeprefix("0x"))
@@ -202,15 +349,15 @@ def get_ctf_balances(
 
 
 def merge_positions(
-    relay_client,
+    w3: Web3,
+    account: LocalAccount,
+    safe_address: str,
     condition_id: str,
     amount: int,
     neg_risk: bool = False,
+    chain_id: int = 137,
 ) -> str:
-    """Merge hedged UP+DOWN positions back to USDC via the Polymarket Relayer.
-
-    Sends an atomic batch: [setApprovalForAll, mergePositions].
-    Approval is idempotent — if already set, it's a gasless no-op.
+    """Merge hedged UP+DOWN positions back to USDC via Gnosis Safe.
 
     amount is in base units (6 decimals).  Returns tx hash hex string.
     """
@@ -218,52 +365,28 @@ def merge_positions(
         raise ValueError("condition_id is empty — cannot merge")
 
     target_label = "NegRiskAdapter" if neg_risk else "CTF"
-    target_address = NEG_RISK_ADAPTER if neg_risk else CTF_ADDRESS
     log.info(
         "MERGE_INIT target=%s │ condition=%s │ amount=%d │ neg_risk=%s",
         target_label, condition_id, amount, neg_risk,
     )
 
-    # Build batch: approval + merge
-    approval_data = _encode_approval(target_address)
     merge_target, merge_data = _encode_merge(condition_id, amount, neg_risk)
-
-    transactions = [
-        SafeTransaction(
-            to=Web3.to_checksum_address(CTF_ADDRESS),
-            operation=OperationType.Call,
-            data=approval_data,
-            value="0",
-        ),
-        SafeTransaction(
-            to=merge_target,
-            operation=OperationType.Call,
-            data=merge_data,
-            value="0",
-        ),
-    ]
-
-    resp = relay_client.execute(transactions, "merge positions")
-    log.info("MERGE_SUBMITTED tx_id=%s │ waiting for confirmation", resp.transaction_id)
-
-    result = resp.wait()
-    if result is None:
-        raise RuntimeError(
-            f"Merge reverted on-chain (tx_id={resp.transaction_id}, "
-            f"tx_hash={resp.transaction_hash})"
-        )
-    tx_hash = resp.transaction_hash
+    inner_data = bytes.fromhex(merge_data.removeprefix("0x"))
+    tx_hash = _send_safe_tx(w3, account, safe_address, merge_target, inner_data, chain_id)
     log.info("MERGE_CONFIRMED tx=%s", tx_hash)
     return tx_hash
 
 
 def redeem_positions(
-    relay_client,
+    w3: Web3,
+    account: LocalAccount,
+    safe_address: str,
     condition_id: str,
     neg_risk: bool = False,
     amount: int = 0,
+    chain_id: int = 137,
 ) -> str:
-    """Redeem resolved positions on-chain via the Polymarket Relayer.
+    """Redeem resolved positions on-chain via Gnosis Safe.
 
     Returns tx hash hex string.
     """
@@ -277,25 +400,7 @@ def redeem_positions(
     )
 
     redeem_target, redeem_data = _encode_redeem(condition_id, neg_risk, amount)
-
-    transactions = [
-        SafeTransaction(
-            to=redeem_target,
-            operation=OperationType.Call,
-            data=redeem_data,
-            value="0",
-        ),
-    ]
-
-    resp = relay_client.execute(transactions, "redeem positions")
-    log.info("REDEEM_SUBMITTED tx_id=%s │ waiting for confirmation", resp.transaction_id)
-
-    result = resp.wait()
-    if result is None:
-        raise RuntimeError(
-            f"Redeem reverted on-chain (tx_id={resp.transaction_id}, "
-            f"tx_hash={resp.transaction_hash})"
-        )
-    tx_hash = resp.transaction_hash
+    inner_data = bytes.fromhex(redeem_data.removeprefix("0x"))
+    tx_hash = _send_safe_tx(w3, account, safe_address, redeem_target, inner_data, chain_id)
     log.info("REDEEM_CONFIRMED tx=%s", tx_hash)
     return tx_hash

@@ -35,7 +35,6 @@ complete_set:
   bankroll_usd: 30
   max_order_bankroll_fraction: 0.25      # $7.50 per order
   max_total_bankroll_fraction: 0.80      # $24 total deployed
-  max_shares_per_market: 15              # keep positions small
 
   # Top-up
   top_up_enabled: true

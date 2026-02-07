@@ -50,11 +50,12 @@ C_RESET = "\033[0m"
 class Engine:
     def __init__(
         self, client, cfg: CompleteSetConfig,
-        relay_client=None, rpc_url: str = "", funder_address: str = "",
+        w3=None, account=None, rpc_url: str = "", funder_address: str = "",
     ):
         self._client = client
         self._cfg = cfg
-        self._relay_client = relay_client
+        self._w3 = w3
+        self._account = account
         self._rpc_url = rpc_url
         self._funder_address = funder_address
         self._order_mgr = OrderManager(dry_run=cfg.dry_run)
@@ -82,19 +83,18 @@ class Engine:
         log.info("  Improve ticks   : %d", self._cfg.improve_ticks)
         log.info("  Min replace     : %dms / %d ticks", self._cfg.min_replace_millis, self._cfg.min_replace_ticks)
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
-        log.info("  Max shares/mkt  : %s", self._cfg.max_shares_per_market)
         log.info("  Top-up enabled  : %s", self._cfg.top_up_enabled)
         log.info("  Top-up min shr  : %s", self._cfg.top_up_min_shares)
         log.info("  Fast top-up     : %s", self._cfg.fast_top_up_enabled)
         log.info("  Taker mode      : %s", self._cfg.taker_enabled)
         log.info("  Cancel buffer   : %ds", self._cfg.order_cancel_buffer_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
-        if not self._cfg.dry_run and self._relay_client:
-            redeem_mode = "enabled (relayer)"
+        if not self._cfg.dry_run and self._w3 and self._account:
+            redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
             redeem_mode = "disabled (dry-run)"
         else:
-            redeem_mode = "disabled (no relayer)"
+            redeem_mode = "disabled (no w3/account)"
         log.info("  Auto-redeem     : %s", redeem_mode)
         log.info("=" * 56)
 
@@ -187,7 +187,7 @@ class Engine:
         """Merge hedged pairs on active markets, then redeem resolved positions."""
         # ── Merge hedged pairs back to USDC on active markets ──
         # At most one merge per tick to avoid stalling the event loop
-        if not self._cfg.dry_run and self._relay_client:
+        if not self._cfg.dry_run and self._w3 and self._account:
             for market in self._active_markets:
                 slug = market.slug
                 inv = self._inventory.get_inventory(slug)
@@ -231,7 +231,7 @@ class Engine:
 
                 try:
                     tx_hash = merge_positions(
-                        self._relay_client,
+                        self._w3, self._account, self._funder_address,
                         market.condition_id, amount_base,
                         neg_risk=market.neg_risk,
                     )
@@ -286,8 +286,8 @@ class Engine:
                 self._pending_redemptions.pop(slug)
                 continue
 
-            if not self._relay_client:
-                log.warning("%sREDEEM_SKIP %s no relayer configured%s", C_YELLOW, slug, C_RESET)
+            if not self._w3 or not self._account:
+                log.warning("%sREDEEM_SKIP %s no w3/account configured%s", C_YELLOW, slug, C_RESET)
                 self._pending_redemptions.pop(slug)
                 continue
 
@@ -298,7 +298,8 @@ class Engine:
                     redeem_shares = max(pr.inventory.up_shares, pr.inventory.down_shares)
                     redeem_amount = int(redeem_shares * (10 ** CTF_DECIMALS))
                 tx_hash = redeem_positions(
-                    self._relay_client, pr.market.condition_id,
+                    self._w3, self._account, self._funder_address,
+                    pr.market.condition_id,
                     neg_risk=pr.market.neg_risk,
                     amount=redeem_amount,
                 )
@@ -621,19 +622,6 @@ class Engine:
         if entry_price is None:
             return
 
-        # Hard cap: skip quoting if THIS direction already at limit
-        headroom = None
-        if self._cfg.max_shares_per_market > ZERO:
-            inv = self._inventory.get_inventory(market.slug)
-            dir_shares = inv.up_shares if direction == Direction.UP else inv.down_shares
-            if dir_shares >= self._cfg.max_shares_per_market:
-                log.debug(
-                    "Skipping %s %s - at max_shares_per_market (%s shares)",
-                    market.slug, direction.value, dir_shares,
-                )
-                return
-            headroom = self._cfg.max_shares_per_market - dir_shares
-
         if pre_shares is not None:
             shares = pre_shares
         else:
@@ -644,16 +632,6 @@ class Engine:
             shares = calculate_shares(market.slug, entry_price, self._cfg, seconds_to_end, exposure)
         if shares is None:
             return
-
-        # Clamp to remaining headroom under per-side cap
-        if headroom is not None and shares > headroom:
-            shares = headroom
-            if shares < MIN_ORDER_SIZE:
-                log.debug(
-                    "Skipping %s %s - headroom too small (%s < min)",
-                    market.slug, direction.value, shares,
-                )
-                return
 
         min_price_change = TICK_SIZE * self._cfg.min_replace_ticks
         decision = self._order_mgr.maybe_replace(
@@ -720,14 +698,6 @@ class Engine:
         else:
             self._balance_failures.pop(market.slug, None)
 
-    def _is_at_max_shares(self, market: GabagoolMarket) -> bool:
-        """Return True if both sides have reached max_shares_per_market."""
-        cap = self._cfg.max_shares_per_market
-        if cap <= ZERO:
-            return False
-        inv = self._inventory.get_inventory(market.slug)
-        return min(inv.up_shares, inv.down_shares) >= cap
-
     def _maybe_fast_top_up(
         self,
         market: GabagoolMarket,
@@ -737,9 +707,6 @@ class Engine:
         seconds_to_end: int,
     ) -> None:
         if not self._cfg.fast_top_up_enabled:
-            return
-
-        if self._is_at_max_shares(market):
             return
 
         imbalance = inv.imbalance
@@ -847,9 +814,6 @@ class Engine:
         if self._balance_failures.get(market.slug, 0) >= 3:
             log.debug("TOP_UP_SKIP %s too many balance failures", market.slug)
             return
-        if self._is_at_max_shares(market):
-            log.debug("TOP_UP_SKIP %s at max_shares_per_market", market.slug)
-            return
         if imbalance_shares < Decimal("0.01"):
             log.debug("TOP_UP_SKIP %s imbalance too small (%s)", market.slug, imbalance_shares)
             return
@@ -868,20 +832,6 @@ class Engine:
                 return
 
         top_up_shares = imbalance_shares
-
-        # Per-side cap: clamp top-up to remaining headroom under max_shares_per_market
-        if self._cfg.max_shares_per_market > ZERO:
-            inv = self._inventory.get_inventory(market.slug)
-            dir_shares = inv.up_shares if direction == Direction.UP else inv.down_shares
-            if dir_shares >= self._cfg.max_shares_per_market:
-                log.debug(
-                    "TOP_UP_SKIP %s %s at per-side max (%s shares)",
-                    market.slug, direction.value, dir_shares,
-                )
-                return
-            headroom = self._cfg.max_shares_per_market - dir_shares
-            if top_up_shares > headroom:
-                top_up_shares = headroom
 
         bankroll = self._cfg.bankroll_usd
 

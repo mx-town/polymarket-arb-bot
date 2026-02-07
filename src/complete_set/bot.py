@@ -8,10 +8,11 @@ import sys
 
 import yaml
 from dotenv import load_dotenv
-from py_builder_relayer_client.client import RelayClient
+from eth_account import Account
 from py_builder_signing_sdk.config import BuilderConfig
 from py_builder_signing_sdk.sdk_types import BuilderApiKeyCreds
 from py_clob_client.client import ClobClient
+from web3 import Web3
 
 from complete_set.config import load_complete_set_config
 from complete_set.engine import Engine
@@ -111,31 +112,17 @@ def main():
 
     client = _init_client(cfg.dry_run)
 
-    # Create RelayClient for gasless merge/redeem (requires builder creds)
-    relay_client = None
-    if not cfg.dry_run and private_key:
-        builder_key = os.environ.get("POLYMARKET_BUILDER_KEY")
-        builder_secret = os.environ.get("POLYMARKET_BUILDER_SECRET")
-        builder_passphrase = os.environ.get("POLYMARKET_BUILDER_PASSPHRASE")
-        if builder_key and builder_secret and builder_passphrase:
-            relay_builder_config = BuilderConfig(
-                local_builder_creds=BuilderApiKeyCreds(
-                    key=builder_key,
-                    secret=builder_secret,
-                    passphrase=builder_passphrase,
-                ),
-            )
-            relay_client = RelayClient(
-                "https://relayer-v2.polymarket.com/",
-                CHAIN_ID,
-                private_key,
-                relay_builder_config,
-            )
-            log.info("INIT RelayClient ready for gasless merge/redeem")
-        else:
-            log.warning("INIT builder creds missing — merge/redeem disabled")
+    # Create Web3 + Account for direct on-chain merge/redeem
+    w3 = None
+    account = None
+    if not cfg.dry_run and private_key and rpc_url:
+        w3 = Web3(Web3.HTTPProvider(rpc_url))
+        account = Account.from_key(private_key)
+        log.info("INIT Web3+Account ready for on-chain merge/redeem (addr=%s)", account.address)
+    elif not cfg.dry_run:
+        log.warning("INIT missing private key or RPC URL — merge/redeem disabled")
 
-    engine = Engine(client, cfg, relay_client=relay_client, rpc_url=rpc_url, funder_address=funder)
+    engine = Engine(client, cfg, w3=w3, account=account, rpc_url=rpc_url, funder_address=funder)
 
     try:
         asyncio.run(engine.run())

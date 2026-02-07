@@ -9,7 +9,6 @@ description = "Late-entry bot for Polymarket 15m crypto Up/Down markets"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
-    "py-builder-relayer-client",
     "requests",
     "python-dotenv",
     "pyyaml",
