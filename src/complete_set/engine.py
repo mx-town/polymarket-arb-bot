@@ -54,6 +54,8 @@ class Engine:
         self._prev_quotable_slugs: set[str] = set()
         self._balance_failures: dict[str, int] = {}  # market slug -> consecutive failures
         self._pending_redemptions: dict[str, PendingRedemption] = {}
+        self._merge_failures: dict[str, int] = {}  # slug -> consecutive failures
+        self._merge_last_attempt: dict[str, float] = {}  # slug -> timestamp
         self._start_time: float = time.time()
         self._last_session_log: float = 0.0
 
@@ -168,32 +170,50 @@ class Engine:
     def _check_settlements(self, now: float) -> None:
         """Merge hedged pairs on active markets, then redeem resolved positions."""
         # ── Merge hedged pairs back to USDC on active markets ──
+        # At most one merge per tick to avoid stalling the event loop
         if not self._cfg.dry_run and self._private_key and self._rpc_url:
             for market in self._active_markets:
-                inv = self._inventory.get_inventory(market.slug)
+                slug = market.slug
+                inv = self._inventory.get_inventory(slug)
                 hedged = min(inv.up_shares, inv.down_shares)
                 if hedged < self._cfg.min_merge_shares:
                     continue
                 if not market.condition_id:
                     continue
+                # Skip after 3 failures (likely a permanent issue like missing approval)
+                if self._merge_failures.get(slug, 0) >= 3:
+                    continue
+                # Cooldown: 60s between attempts per market
+                last_attempt = self._merge_last_attempt.get(slug, 0.0)
+                if now - last_attempt < 60:
+                    continue
+                # Don't merge too close to resolution — just wait for redeem
+                seconds_to_end = int(market.end_time - now)
+                if seconds_to_end < self._cfg.order_cancel_buffer_sec:
+                    continue
 
-                # Convert share amount to base units (6 decimals for CTF on Polygon)
+                self._merge_last_attempt[slug] = now
                 amount_base = int(hedged * (10 ** CTF_DECIMALS))
                 try:
                     tx_hash = merge_positions(
                         self._private_key, self._rpc_url,
                         market.condition_id, amount_base,
                     )
-                    self._inventory.reduce_merged(market.slug, hedged)
+                    self._inventory.reduce_merged(slug, hedged)
+                    self._merge_failures.pop(slug, None)
                     log.info(
                         "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
-                        C_GREEN, market.slug, hedged, tx_hash, C_RESET,
+                        C_GREEN, slug, hedged, tx_hash, C_RESET,
                     )
                 except Exception as e:
+                    failures = self._merge_failures.get(slug, 0) + 1
+                    self._merge_failures[slug] = failures
                     log.warning(
-                        "%sMERGE_FAILED %s │ hedged=%s │ %s%s",
-                        C_YELLOW, market.slug, hedged, e, C_RESET,
+                        "%sMERGE_FAILED %s │ hedged=%s │ attempt %d/3 │ %s%s",
+                        C_YELLOW, slug, hedged, failures, e, C_RESET,
                     )
+                # Only one merge per tick — don't block the loop further
+                break
         elif self._cfg.dry_run:
             for market in self._active_markets:
                 inv = self._inventory.get_inventory(market.slug)
@@ -300,7 +320,8 @@ class Engine:
         bankroll = self._cfg.bankroll_usd
         total_cap = bankroll * self._cfg.max_total_bankroll_fraction if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO else bankroll
         remaining = max(ZERO, total_cap - exposure) if total_cap > ZERO else ZERO
-        pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
+        deployed = self._inventory.session_total_deployed
+        pct_used = (deployed / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
 
         # Compute total unrealized PnL across all inventories
         total_unrealized = ZERO
