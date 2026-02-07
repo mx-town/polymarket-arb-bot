@@ -32,7 +32,7 @@ from complete_set.quote_calc import (
     calculate_skew_ticks,
     has_minimum_edge,
 )
-from complete_set.redeem import CTF_DECIMALS, get_ctf_balances, merge_positions, redeem_positions
+from complete_set.redeem import CTF_DECIMALS, get_ctf_balances, get_usdc_balance, merge_positions, redeem_positions
 
 log = logging.getLogger("cs.engine")
 
@@ -414,12 +414,21 @@ class Engine:
                 pnl_color, runtime_str, realized, unrealized, total_pnl, roi, C_RESET,
             )
 
+        # ── Wallet balance ──
+        wallet_str = "n/a"
+        if self._rpc_url and self._funder_address:
+            try:
+                wallet_bal = get_usdc_balance(self._rpc_url, self._funder_address)
+                wallet_str = f"${wallet_bal.quantize(Decimal('0.01'))}"
+            except Exception:
+                wallet_str = "err"
+
         # ── SUMMARY header ──
         log.info(
             "── SUMMARY ── markets=%d │ open_orders=%d │ exposure=$%s │ "
-            "bankroll=$%s (%s%% used) │ %srealized=$%s │ unrealized=$%s │ total=$%s%s",
+            "bankroll=$%s (%s%% used) │ wallet=%s │ %srealized=$%s │ unrealized=$%s │ total=$%s%s",
             len(self._active_markets), open_count, exposure.quantize(Decimal("0.01")),
-            bankroll, pct_used,
+            bankroll, pct_used, wallet_str,
             pnl_color, realized, unrealized, total_pnl, C_RESET,
         )
         log.info(

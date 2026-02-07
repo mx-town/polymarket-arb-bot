@@ -33,7 +33,7 @@ complete_set:
 
   # Bankroll — $30, conservative sizing
   bankroll_usd: 30
-  max_order_bankroll_fraction: 0.25      # $7.50 per order
+  max_order_bankroll_fraction: 0.15      # $4.50 per order (~6 shares)
   max_total_bankroll_fraction: 0.80      # $24 total deployed
 
   # Top-up
@@ -44,7 +44,7 @@ complete_set:
   fast_top_up_min_seconds: 3
   fast_top_up_max_seconds: 180
   fast_top_up_cooldown_millis: 10000
-  fast_top_up_min_edge: 0.1
+  fast_top_up_min_edge: 0.05
 
   # Taker mode (still disabled for now)
   taker_enabled: false

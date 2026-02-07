@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from decimal import Decimal
 
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
@@ -31,6 +32,16 @@ INDEX_SETS = [1, 2]
 CTF_DECIMALS = 6
 
 # ── ABIs ──
+
+ERC20_BALANCE_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
 
 MERGE_ABI = [
     {
@@ -331,6 +342,16 @@ def _compute_position_id(condition_id_hex: str, index_set: int) -> int:
 
 
 # ── Public API ──
+
+def get_usdc_balance(rpc_url: str, wallet: str) -> Decimal:
+    """Query on-chain USDC balance for a wallet. Returns human-readable Decimal."""
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    usdc = w3.eth.contract(
+        address=Web3.to_checksum_address(USDC_ADDRESS), abi=ERC20_BALANCE_ABI,
+    )
+    raw = usdc.functions.balanceOf(Web3.to_checksum_address(wallet)).call()
+    return Decimal(raw) / Decimal(10 ** CTF_DECIMALS)
+
 
 def get_ctf_balances(
     rpc_url: str, wallet: str, up_token_id: str, down_token_id: str,
