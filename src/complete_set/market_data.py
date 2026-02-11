@@ -23,6 +23,7 @@ from complete_set.models import GabagoolMarket, TopOfBook
 log = logging.getLogger("cs.market_data")
 
 _book_log_ts: dict[str, float] = {}  # token_id -> last log time
+_book_prev: dict[str, tuple] = {}   # token_id -> (prev_bid, prev_ask) for lag tracking
 
 # ---------------------------------------------------------------------------
 # TOB cache — avoids redundant HTTP fetches within the same tick
@@ -292,12 +293,24 @@ def _parse_book_to_tob(book, token_id: str) -> Optional[TopOfBook]:
     best_ask_size = _extract_size(asks[0]) if asks else None
 
     now = time.monotonic()
-    if now - _book_log_ts.get(token_id, 0) >= 5:
+    if now - _book_log_ts.get(token_id, 0) >= 30:
         _book_log_ts[token_id] = now
         log.debug(
             "BOOK %s │ %d bids / %d asks │ best=%s/%s │ spread=%s",
             token_id[:16], len(bids), len(asks), best_bid, best_ask,
             (best_ask - best_bid) if best_bid is not None and best_ask is not None else "?",
+        )
+
+    # Log every TOB change
+    prev = _book_prev.get(token_id)
+    if prev != (best_bid, best_ask):
+        fetch_ts = time.time()
+        _book_prev[token_id] = (best_bid, best_ask)
+        log.debug(
+            "BOOK_CHANGE │ %.6f │ %s │ %s/%s → %s/%s",
+            fetch_ts, token_id[:16],
+            prev[0] if prev else "?", prev[1] if prev else "?",
+            best_bid, best_ask,
         )
 
     if best_bid is None and best_ask is None:

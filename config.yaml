@@ -14,11 +14,11 @@ polling:
 
 assets:
   - bitcoin
+  - ethereum
 
-# Complete-set arbitrage — ONE-SHOT balanced hedge
 complete_set:
   enabled: true
-  dry_run: false
+  dry_run: true
   refresh_millis: 500
   assets: [bitcoin]
   min_seconds_to_end: 0
@@ -29,17 +29,11 @@ complete_set:
   max_total_bankroll_fraction: 0.80
   min_merge_shares: 5
   no_new_orders_sec: 90
-  # Volatility filter — only enter oscillating markets
-  volatility_filter_enabled: true
-  vol_lookback_seconds: 120
-  vol_min_samples: 20
-  vol_min_swing: 0.05
-  vol_max_efficiency: 0.60
-  vol_min_reversals: 2
-  # Momentum check — only enter when cheap side has bounced
-  momentum_check_enabled: true
-  momentum_lookback_samples: 6
-  momentum_bounce_threshold: 0.01
-  # Stop-loss — sell naked leg when loss exceeds threshold
-  stop_loss_enabled: true
-  stop_loss_cents: 0.10
+  # Mean reversion — Binance BTC feed for directional entry
+  mean_reversion_enabled: true
+  mr_deviation_threshold: 0.0004   # 0.04%
+  mr_max_range_pct: 0.0010         # 0.10% — skip trending candles
+  mr_entry_window_sec: 600         # last 10 minutes (covers gap after SH window)
+  # Stop hunt — early entry (minutes 2-5 of candle)
+  sh_entry_start_sec: 780
+  sh_entry_end_sec: 600

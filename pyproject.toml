@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "web3",
+    "websockets>=12.0",
 ]
 
 [project.scripts]

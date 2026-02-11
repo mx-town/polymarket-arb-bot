@@ -61,7 +61,7 @@ def _setup_logging(level_str: str) -> None:
     ))
     logging.getLogger().addHandler(fh)
 
-    for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11", "web3"):
+    for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11", "web3", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 log = logging.getLogger("cs.bot")

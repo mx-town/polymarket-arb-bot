@@ -1,10 +1,11 @@
 """Strategy tick loop — two-phase asymmetric hedge for complete-set arbitrage.
 
 Per-window lifecycle:
-1. No position: buy cheapest leg if ask < (1 - min_edge) / 2 (FOK)
-2. One leg filled: hedge the other if first_vwap + second_ask < 1 - min_edge (FOK)
+1. No position: buy cheapest leg at bid+0.01 (GTC maker, 0% fee)
+2. One leg filled: hedge the other at bid+0.01 if first_vwap + maker_price < 1 - min_edge (GTC maker)
 3. Both legs filled (hedged >= min_merge_shares): mark complete, merge
-4. Buffer: stop new orders + sell unhedged legs when seconds_to_end < no_new_orders_sec
+4. Buffer: stop new orders + sell unhedged legs at bid (FOK taker) when seconds_to_end < no_new_orders_sec
+5. Repricing: every tick, if best_bid changed → cancel + repost at new bid+0.01
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from complete_set.models import (
 )
 from complete_set.order_mgr import OrderManager
 from py_clob_client.clob_types import OrderType
-from complete_set.volatility import analyze_swings, check_entry_momentum, clear_market_history, record_prices
+from complete_set.binance_ws import get_candle_state, set_market_window, start_binance_ws
+from complete_set.mean_reversion import MRDirection, StopHuntSignal, evaluate_mean_reversion, evaluate_stop_hunt
+from complete_set.volatility import clear_market_history, record_prices
 from complete_set.quote_calc import (
     calculate_balanced_shares,
     calculate_dynamic_edge,
@@ -43,6 +46,9 @@ TICK_SIZE = Decimal("0.01")  # Default Polymarket tick size
 C_GREEN = "\033[32m"
 C_RED = "\033[31m"
 C_YELLOW = "\033[33m"
+
+# Lag tracking: previous asks per market for real reprice lag measurement
+_prev_asks: dict[str, tuple[Decimal, Decimal]] = {}  # slug -> (prev_up_ask, prev_down_ask)
 C_RESET = "\033[0m"
 
 
@@ -68,7 +74,6 @@ class Engine:
         self._merge_last_attempt: dict[str, float] = {}  # slug -> timestamp
         self._pending_merge_task: dict[str, asyncio.Task] = {}   # slug -> Task
         self._pending_redeem_task: dict[str, asyncio.Task] = {}  # slug -> Task
-        self._stop_loss_at: dict[str, float] = {}  # slug -> last stop-loss timestamp
         self._start_time: float = time.time()
         self._last_session_log: float = 0.0
         self._bg_discovery: asyncio.Task | None = None
@@ -76,6 +81,7 @@ class Engine:
         self._cached_wallet_bal: str = "n/a"
         self._last_summary_log: float = 0.0
         self._last_wallet_refresh: float = 0.0
+        self._binance_ws_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         """Main event loop."""
@@ -90,14 +96,13 @@ class Engine:
         log.info("  Time window     : %d-%ds", self._cfg.min_seconds_to_end, self._cfg.max_seconds_to_end)
         log.info("  No new orders   : %ds", self._cfg.no_new_orders_sec)
         log.info("  Min merge shares: %s", self._cfg.min_merge_shares)
-        log.info("  Vol filter      : %s (swing≥%s, eff≤%s, rev≥%d)",
-                 "ON" if self._cfg.volatility_filter_enabled else "OFF",
-                 self._cfg.vol_min_swing, self._cfg.vol_max_efficiency, self._cfg.vol_min_reversals)
-        log.info("  Momentum check  : %s (lookback=%d, bounce≥%s)",
-                 "ON" if self._cfg.momentum_check_enabled else "OFF",
-                 self._cfg.momentum_lookback_samples, self._cfg.momentum_bounce_threshold)
-        log.info("  Stop-loss       : %s (≥$%s loss)",
-                 "ON" if self._cfg.stop_loss_enabled else "OFF", self._cfg.stop_loss_cents)
+        log.info("  Mean reversion  : %s (dev≥%s, range≤%s, window=%ds)",
+                 "ON" if self._cfg.mean_reversion_enabled else "OFF",
+                 self._cfg.mr_deviation_threshold, self._cfg.mr_max_range_pct,
+                 self._cfg.mr_entry_window_sec)
+        log.info("  Stop hunt       : %s (window=%d-%ds left)",
+                 "ON" if self._cfg.mean_reversion_enabled else "OFF",
+                 self._cfg.sh_entry_start_sec, self._cfg.sh_entry_end_sec)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
@@ -118,6 +123,11 @@ class Engine:
 
         tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
 
+        # Start Binance WS for mean-reversion signal
+        if self._cfg.mean_reversion_enabled:
+            self._binance_ws_task = asyncio.create_task(start_binance_ws())
+            log.info("BINANCE_WS │ background task started")
+
         try:
             while True:
                 await self._tick()
@@ -125,6 +135,8 @@ class Engine:
         except asyncio.CancelledError:
             log.info("Engine cancelled, shutting down")
         finally:
+            if self._binance_ws_task is not None:
+                self._binance_ws_task.cancel()
             self._order_mgr.cancel_all(self._client, "SHUTDOWN", self._handle_fill)
 
     async def _tick(self) -> None:
@@ -214,7 +226,6 @@ class Engine:
                     log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
                 self._inventory.clear_market(slug)
                 clear_market_history(slug)
-                self._stop_loss_at.pop(slug, None)
         for token_id in list(self._order_mgr.get_open_orders()):
             order = self._order_mgr.get_order(token_id)
             if order and order.market and order.market.slug not in active_slugs:
@@ -448,6 +459,18 @@ class Engine:
         except Exception:
             self._cached_wallet_bal = "err"
 
+    @staticmethod
+    def _resolve_entry_side(
+        direction: MRDirection,
+        up_ask: Decimal, down_ask: Decimal,
+        up_bid: Decimal | None, down_bid: Decimal | None,
+        market,
+    ) -> tuple[str, Decimal, Decimal | None, Direction, str, str]:
+        """Map MRDirection to (label, ask, bid, Direction, token_id, side_label)."""
+        if direction == MRDirection.BUY_UP:
+            return ("UP", up_ask, up_bid, Direction.UP, market.up_token_id, "UP")
+        return ("DOWN", down_ask, down_bid, Direction.DOWN, market.down_token_id, "DOWN")
+
     def _get_mid_price(self, token_id: str) -> Decimal | None:
         """Return mid-market price for a token, or None if book is unavailable."""
         tob = get_top_of_book(self._client, token_id)
@@ -675,6 +698,45 @@ class Engine:
 
         up_ask = up_book.best_ask
         down_ask = down_book.best_ask
+        up_bid = up_book.best_bid
+        down_bid = down_book.best_bid
+
+        # Lag trace: measure real reprice lag when book changes after BTC move
+        # Only track when both asks are in meaningful range (0.20-0.80)
+        candle_snap = get_candle_state()
+        _LAG_MIN = Decimal("0.20")
+        _LAG_MAX = Decimal("0.80")
+        if (candle_snap.current_price > ZERO
+                and _LAG_MIN <= up_ask <= _LAG_MAX and _LAG_MIN <= down_ask <= _LAG_MAX):
+            from complete_set.binance_ws import get_last_btc_move
+            tick_ts = time.time()
+            move_ts, move_dir = get_last_btc_move()
+            ask_sum = up_ask + down_ask
+            prev = _prev_asks.get(slug)
+            lag_str = ""
+            if prev is not None and move_ts > 0:
+                prev_up, prev_down = prev
+                # BTC up → UP ask should increase, DOWN ask should decrease
+                # BTC down → UP ask should decrease, DOWN ask should increase
+                up_changed = up_ask != prev_up
+                down_changed = down_ask != prev_down
+                if up_changed or down_changed:
+                    # Check if change is in expected direction
+                    up_correct = (move_dir == 1 and up_ask > prev_up) or (move_dir == -1 and up_ask < prev_up)
+                    down_correct = (move_dir == 1 and down_ask < prev_down) or (move_dir == -1 and down_ask > prev_down)
+                    if up_correct or down_correct:
+                        real_lag_ms = (tick_ts - move_ts) * 1000
+                        if real_lag_ms < 15_000:
+                            side = "U" if up_correct else "D"
+                            lag_str = f" │ REPRICE={real_lag_ms:.0f}ms ({side})"
+            _prev_asks[slug] = (up_ask, down_ask)
+            bid_sum = (up_bid + down_bid) if up_bid is not None and down_bid is not None else None
+            bid_str = f"{bid_sum:.3f}" if bid_sum is not None else "?"
+            log.debug(
+                "LAG_TRACE │ U=%.2f/%.2f D=%.2f/%.2f │ ask=%.3f bid=%s │ dev=%+.5f │ %s%s",
+                up_bid or ZERO, up_ask, down_bid or ZERO, down_ask,
+                ask_sum, bid_str, candle_snap.deviation, slug[:30], lag_str,
+            )
 
         # Record prices for volatility tracking (always, even if we skip entry)
         record_prices(slug, up_ask, down_ask)
@@ -691,179 +753,196 @@ class Engine:
         has_up = inv.filled_up_shares >= self._cfg.min_merge_shares
         has_down = inv.filled_down_shares >= self._cfg.min_merge_shares
 
-        # ── Stop-loss: sell naked leg if unrealized loss exceeds threshold ──
-        if self._cfg.stop_loss_enabled and (has_up != has_down):
-            if has_up and not has_down:
-                sl_bid = up_book.best_bid
-                sl_vwap = inv.up_vwap
-                sl_token = market.up_token_id
-                sl_dir = Direction.UP
-                sl_shares = inv.up_shares
-                sl_label = "UP"
-            else:
-                sl_bid = down_book.best_bid
-                sl_vwap = inv.down_vwap
-                sl_token = market.down_token_id
-                sl_dir = Direction.DOWN
-                sl_shares = inv.down_shares
-                sl_label = "DOWN"
-
-            if sl_bid and sl_vwap and (sl_vwap - sl_bid) >= self._cfg.stop_loss_cents:
-                # Back off 30s after a balance error to avoid hammering
-                last_sl = self._stop_loss_at.get(slug, 0.0)
-                if now - last_sl < 30:
-                    return
-                if not self._order_mgr.has_order(sl_token):
-                    loss = sl_vwap - sl_bid
-                    log.info(
-                        "%sSTOP_LOSS %s │ %s vwap=%s bid=%s loss=%s │ SELL %s shares%s",
-                        C_RED, slug, sl_label, sl_vwap, sl_bid, loss,
-                        sl_shares, C_RESET,
-                    )
-                    ok = self._order_mgr.place_order(
-                        self._client, market, sl_token, sl_dir,
-                        sl_bid, sl_shares, seconds_to_end,
-                        "STOP_LOSS", on_fill=self._handle_fill,
-                        order_type=OrderType.FOK, side="SELL",
-                    )
-                    # Always set cooldown: on success to prevent re-entry,
-                    # on failure (balance error) to stop hammering
-                    self._stop_loss_at[slug] = time.time()
-                    return
-
         exposure = calculate_exposure(
             self._order_mgr.get_open_orders(),
             self._inventory.get_all_inventories(),
         )
 
-        # ── Phase 1: No position — buy cheapest leg if ask < (1 - edge) / 2 ──
+        # ── Phase 1: No position — try stop hunt (early), then mean reversion (late) ──
         if not has_up and not has_down:
             max_first_leg = (ONE - dynamic_edge) / 2
 
-            # Stop-loss cooldown: skip entry for 60s after a stop-loss on this market
-            last_sl = self._stop_loss_at.get(slug, 0.0)
-            if now - last_sl < 60:
-                log.debug("FIRST_LEG_SKIP %s │ stop-loss cooldown (%ds ago)", slug, int(now - last_sl))
+            # Set market window open price for Binance candle tracking
+            window_start = market.end_time - max_lifetime
+            set_market_window(window_start, rpc_url=self._rpc_url)
+            candle = get_candle_state()
+
+            # ── Approach 1: Stop hunt (minutes 2-5) ──
+            sh_signal = evaluate_stop_hunt(
+                candle, up_ask, down_ask, seconds_to_end,
+                max_first_leg=max_first_leg,
+                max_range_pct=self._cfg.mr_max_range_pct,
+                sh_entry_start_sec=self._cfg.sh_entry_start_sec,
+                sh_entry_end_sec=self._cfg.sh_entry_end_sec,
+                no_new_orders_sec=self._cfg.no_new_orders_sec,
+            )
+
+            if sh_signal.direction != MRDirection.SKIP:
+                entry_label, target_ask, target_bid, target_dir, target_token, side_label = (
+                    self._resolve_entry_side(sh_signal.direction, up_ask, down_ask, up_bid, down_bid, market)
+                )
+
+                # Need a valid bid to post maker order
+                if target_bid is None:
+                    log.debug("SH_SKIP %s │ no bid for %s", slug, side_label)
+                    return
+
+                # Best maker price: improve bid by 1 tick, but never reach the ask
+                maker_price = min(target_bid + TICK_SIZE, target_ask - TICK_SIZE)
+
+                # Price cap: maker price must be below max first leg
+                if maker_price > max_first_leg:
+                    log.debug("SH_SKIP %s │ %s maker=%s > max_first=%.3f", slug, side_label, maker_price, max_first_leg)
+                    return
+
+                shares = calculate_balanced_shares(
+                    slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
+                )
+                if shares is None:
+                    log.debug("SH_SKIP %s │ insufficient bankroll", slug)
+                    return
+
+                # Reprice if book moved, or skip if price unchanged
+                existing = self._order_mgr.get_order(target_token)
+                if existing:
+                    if existing.price != maker_price:
+                        self._order_mgr.cancel_order(
+                            self._client, target_token, "REPRICE", self._handle_fill)
+                        remaining = shares - (existing.matched_size or ZERO)
+                        if remaining >= self._cfg.min_merge_shares:
+                            log.info("REPRICE SH_ENTRY │ %s %s→%s │ %s shares │ %ds left",
+                                     slug, existing.price, maker_price, remaining, seconds_to_end)
+                            self._order_mgr.place_order(
+                                self._client, market, target_token, target_dir,
+                                maker_price, remaining, seconds_to_end, "SH_ENTRY",
+                                on_fill=self._handle_fill, order_type=OrderType.GTC)
+                    return
+
+                log.info(
+                    "%sSH_ENTRY %s │ %s maker=%s (bid=%s) │ range=%.5f │ shares=%s │ %ds left%s",
+                    C_GREEN, slug, side_label, maker_price, target_bid, sh_signal.range_pct,
+                    shares, seconds_to_end, C_RESET,
+                )
+
+                self._order_mgr.place_order(
+                    self._client, market, target_token, target_dir,
+                    maker_price, shares, seconds_to_end, "SH_ENTRY",
+                    on_fill=self._handle_fill,
+                    order_type=OrderType.GTC,
+                )
                 return
 
-            # Volatility filter: skip if market is trending or calm
-            if self._cfg.volatility_filter_enabled:
-                signal = analyze_swings(
-                    slug,
-                    min_samples=self._cfg.vol_min_samples,
-                    lookback_seconds=self._cfg.vol_lookback_seconds,
-                    min_swing=self._cfg.vol_min_swing,
-                    max_efficiency=self._cfg.vol_max_efficiency,
-                    min_reversals=self._cfg.vol_min_reversals,
-                )
-                if signal is None:
-                    log.debug("VOL_FILTER %s │ WAIT insufficient samples", slug)
-                    return
-                if not signal.is_oscillating:
-                    log.debug(
-                        "VOL_FILTER %s │ SKIP swing=%.3f eff=%.2f reversals=%d",
-                        slug, signal.up_swing, signal.efficiency, signal.direction_changes,
-                    )
-                    return
-                log.debug(
-                    "VOL_FILTER %s │ PASS swing=%.3f eff=%.2f reversals=%d",
-                    slug, signal.up_swing, signal.efficiency, signal.direction_changes,
-                )
+            # ── Approach 2: Mean reversion (last 4 minutes) ──
+            mr_signal = evaluate_mean_reversion(
+                candle, seconds_to_end, up_ask, down_ask,
+                deviation_threshold=self._cfg.mr_deviation_threshold,
+                max_range_pct=self._cfg.mr_max_range_pct,
+                entry_window_sec=self._cfg.mr_entry_window_sec,
+                no_new_orders_sec=self._cfg.no_new_orders_sec,
+            )
 
-            # Determine which side to buy
-            buy_up = up_ask <= max_first_leg
-            buy_down = down_ask <= max_first_leg
+            _TIME_WINDOW_REASONS = {"before SH window", "past SH window", "outside entry window"}
 
-            if not buy_up and not buy_down:
-                log.debug(
-                    "FIRST_LEG_SKIP %s │ U_ask=%s D_ask=%s > max_first=%.3f",
-                    slug, up_ask, down_ask, max_first_leg,
-                )
-                return
-
-            # Pick the cheaper side (if both qualify)
-            if buy_up and (up_ask <= down_ask or not buy_down):
-                target_ask = up_ask
-                target_dir = Direction.UP
-                target_token = market.up_token_id
-                side_label = "UP"
-            else:
-                target_ask = down_ask
-                target_dir = Direction.DOWN
-                target_token = market.down_token_id
-                side_label = "DOWN"
-
-            # Momentum check: skip if cheap side is still falling
-            if self._cfg.momentum_check_enabled:
-                momentum_ok = check_entry_momentum(
-                    slug, side_label.lower(),
-                    lookback_samples=self._cfg.momentum_lookback_samples,
-                    bounce_threshold=self._cfg.momentum_bounce_threshold,
-                )
-                if momentum_ok is False:
-                    log.debug(
-                        "MOMENTUM_SKIP %s │ %s still falling, no bounce",
-                        slug, side_label,
-                    )
-                    return
-                if momentum_ok is True:
-                    # Calculate bounce for logging
-                    from complete_set.volatility import _prob_history
-                    buf = _prob_history.get(slug)
-                    if buf:
-                        window = list(buf)[-self._cfg.momentum_lookback_samples:]
-                        prices = [s.up_ask if side_label == "UP" else s.down_ask for s in window]
-                        trough = min(prices)
-                        bounce = prices[-1] - trough
+            if mr_signal.direction == MRDirection.SKIP:
+                # Only log interesting rejections; suppress trivial time-window skips
+                if seconds_to_end >= self._cfg.sh_entry_end_sec:
+                    if sh_signal.reason not in _TIME_WINDOW_REASONS:
                         log.debug(
-                            "MOMENTUM_PASS %s │ %s bounced +%s from trough %s",
-                            slug, side_label, bounce, trough,
+                            "SH_SKIP %s │ range=%.5f │ %s │ %ds left",
+                            slug, sh_signal.range_pct, sh_signal.reason, seconds_to_end,
                         )
+                else:
+                    if mr_signal.reason not in _TIME_WINDOW_REASONS:
+                        log.debug(
+                            "MR_SKIP %s │ dev=%+.5f range=%.5f │ %s │ %ds left",
+                            slug, mr_signal.deviation, mr_signal.range_pct,
+                            mr_signal.reason, seconds_to_end,
+                        )
+                return
+
+            # MR says BUY_UP or BUY_DOWN — pick the target side
+            _, target_ask, target_bid, target_dir, target_token, side_label = (
+                self._resolve_entry_side(mr_signal.direction, up_ask, down_ask, up_bid, down_bid, market)
+            )
+
+            # Need a valid bid to post maker order
+            if target_bid is None:
+                log.debug("MR_SKIP %s │ no bid for %s", slug, side_label)
+                return
+
+            # Best maker price: improve bid by 1 tick, but never reach the ask
+            maker_price = min(target_bid + TICK_SIZE, target_ask - TICK_SIZE)
+
+            # Price cap: maker price must be below max first leg
+            if maker_price > max_first_leg:
+                log.debug(
+                    "MR_SKIP %s │ %s maker=%s > max_first=%.3f",
+                    slug, side_label, maker_price, max_first_leg,
+                )
+                return
 
             # Size using balanced calculation (both asks) for bankroll-appropriate size
             shares = calculate_balanced_shares(
                 slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
             )
             if shares is None:
-                log.debug("FIRST_LEG_SKIP %s │ insufficient bankroll", slug)
+                log.debug("MR_SKIP %s │ insufficient bankroll", slug)
                 return
 
-            # Skip if we already have a pending order for this token
-            if self._order_mgr.has_order(target_token):
-                log.debug("FIRST_LEG_SKIP %s │ pending order for %s", slug, side_label)
+            # Reprice if book moved, or skip if price unchanged
+            existing = self._order_mgr.get_order(target_token)
+            if existing:
+                if existing.price != maker_price:
+                    self._order_mgr.cancel_order(
+                        self._client, target_token, "REPRICE", self._handle_fill)
+                    remaining = shares - (existing.matched_size or ZERO)
+                    if remaining >= self._cfg.min_merge_shares:
+                        log.info("REPRICE MR_ENTRY │ %s %s→%s │ %s shares │ %ds left",
+                                 slug, existing.price, maker_price, remaining, seconds_to_end)
+                        self._order_mgr.place_order(
+                            self._client, market, target_token, target_dir,
+                            maker_price, remaining, seconds_to_end, "MR_ENTRY",
+                            on_fill=self._handle_fill, order_type=OrderType.GTC)
                 return
 
             log.info(
-                "%sFIRST_LEG %s │ %s ask=%s │ max_first=%.3f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, side_label, target_ask, max_first_leg,
+                "%sMR_ENTRY %s │ %s maker=%s (bid=%s) │ dev=%+.5f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, side_label, maker_price, target_bid, mr_signal.deviation,
                 shares, seconds_to_end, C_RESET,
             )
 
             self._order_mgr.place_order(
                 self._client, market, target_token, target_dir,
-                target_ask, shares, seconds_to_end, "FIRST_LEG",
+                maker_price, shares, seconds_to_end, "MR_ENTRY",
                 on_fill=self._handle_fill,
-                order_type=OrderType.FOK,
+                order_type=OrderType.GTC,
             )
             return
 
         # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──
+        #    (same for both SH_ENTRY and MR_ENTRY first legs)
         if has_up and not has_down:
-            # Need: up_vwap + down_ask < 1.0 - dynamic_edge
+            # Need a valid bid to post maker order
+            if down_bid is None:
+                log.debug("HEDGE_SKIP %s │ no bid for DOWN", slug)
+                return
+            down_maker = min(down_bid + TICK_SIZE, down_ask - TICK_SIZE)
+
+            # Need: up_vwap + down_maker < 1.0 - dynamic_edge
             if inv.up_vwap is None:
                 return
-            combined = inv.up_vwap + down_ask
+            combined = inv.up_vwap + down_maker
             edge = ONE - combined
             if edge < dynamic_edge:
                 log.debug(
-                    "HEDGE_SKIP %s │ UP_vwap=%s + D_ask=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.up_vwap, down_ask, combined, edge, dynamic_edge,
+                    "HEDGE_SKIP %s │ UP_vwap=%s + D_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
+                    slug, inv.up_vwap, down_maker, combined, edge, dynamic_edge,
                 )
                 return
 
             # Match first leg's filled share count; check bankroll
             hedge_shares = inv.filled_up_shares
-            hedge_notional = hedge_shares * down_ask
+            hedge_notional = hedge_shares * down_maker
             bankroll = self._cfg.bankroll_usd
             if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
                 total_cap = bankroll * self._cfg.max_total_bankroll_fraction
@@ -873,39 +952,57 @@ class Engine:
                               slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
                     return
 
-            if self._order_mgr.has_order(market.down_token_id):
-                log.debug("HEDGE_SKIP %s │ pending order for DOWN", slug)
+            # Reprice if book moved, or skip if price unchanged
+            existing = self._order_mgr.get_order(market.down_token_id)
+            if existing:
+                if existing.price != down_maker:
+                    self._order_mgr.cancel_order(
+                        self._client, market.down_token_id, "REPRICE", self._handle_fill)
+                    remaining_shares = hedge_shares - (existing.matched_size or ZERO)
+                    if remaining_shares >= self._cfg.min_merge_shares:
+                        log.info("REPRICE HEDGE_DOWN │ %s %s→%s │ %s shares │ %ds left",
+                                 slug, existing.price, down_maker, remaining_shares, seconds_to_end)
+                        self._order_mgr.place_order(
+                            self._client, market, market.down_token_id, Direction.DOWN,
+                            down_maker, remaining_shares, seconds_to_end, "HEDGE_LEG",
+                            on_fill=self._handle_fill, order_type=OrderType.GTC)
                 return
 
             log.info(
-                "%sHEDGE_LEG %s │ DOWN ask=%s │ UP_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, down_ask, inv.up_vwap, edge,
+                "%sHEDGE_LEG %s │ DOWN maker=%s (bid=%s) │ UP_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, down_maker, down_bid, inv.up_vwap, edge,
                 hedge_shares, seconds_to_end, C_RESET,
             )
 
             self._order_mgr.place_order(
                 self._client, market, market.down_token_id, Direction.DOWN,
-                down_ask, hedge_shares, seconds_to_end, "HEDGE_LEG",
+                down_maker, hedge_shares, seconds_to_end, "HEDGE_LEG",
                 on_fill=self._handle_fill,
-                order_type=OrderType.FOK,
+                order_type=OrderType.GTC,
             )
             return
 
         if has_down and not has_up:
-            # Need: down_vwap + up_ask < 1.0 - dynamic_edge
+            # Need a valid bid to post maker order
+            if up_bid is None:
+                log.debug("HEDGE_SKIP %s │ no bid for UP", slug)
+                return
+            up_maker = min(up_bid + TICK_SIZE, up_ask - TICK_SIZE)
+
+            # Need: down_vwap + up_maker < 1.0 - dynamic_edge
             if inv.down_vwap is None:
                 return
-            combined = inv.down_vwap + up_ask
+            combined = inv.down_vwap + up_maker
             edge = ONE - combined
             if edge < dynamic_edge:
                 log.debug(
-                    "HEDGE_SKIP %s │ D_vwap=%s + U_ask=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.down_vwap, up_ask, combined, edge, dynamic_edge,
+                    "HEDGE_SKIP %s │ D_vwap=%s + U_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
+                    slug, inv.down_vwap, up_maker, combined, edge, dynamic_edge,
                 )
                 return
 
             hedge_shares = inv.filled_down_shares
-            hedge_notional = hedge_shares * up_ask
+            hedge_notional = hedge_shares * up_maker
             bankroll = self._cfg.bankroll_usd
             if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
                 total_cap = bankroll * self._cfg.max_total_bankroll_fraction
@@ -915,19 +1012,31 @@ class Engine:
                               slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
                     return
 
-            if self._order_mgr.has_order(market.up_token_id):
-                log.debug("HEDGE_SKIP %s │ pending order for UP", slug)
+            # Reprice if book moved, or skip if price unchanged
+            existing = self._order_mgr.get_order(market.up_token_id)
+            if existing:
+                if existing.price != up_maker:
+                    self._order_mgr.cancel_order(
+                        self._client, market.up_token_id, "REPRICE", self._handle_fill)
+                    remaining_shares = hedge_shares - (existing.matched_size or ZERO)
+                    if remaining_shares >= self._cfg.min_merge_shares:
+                        log.info("REPRICE HEDGE_UP │ %s %s→%s │ %s shares │ %ds left",
+                                 slug, existing.price, up_maker, remaining_shares, seconds_to_end)
+                        self._order_mgr.place_order(
+                            self._client, market, market.up_token_id, Direction.UP,
+                            up_maker, remaining_shares, seconds_to_end, "HEDGE_LEG",
+                            on_fill=self._handle_fill, order_type=OrderType.GTC)
                 return
 
             log.info(
-                "%sHEDGE_LEG %s │ UP ask=%s │ DOWN_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, up_ask, inv.down_vwap, edge,
+                "%sHEDGE_LEG %s │ UP maker=%s (bid=%s) │ DOWN_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
+                C_GREEN, slug, up_maker, up_bid, inv.down_vwap, edge,
                 hedge_shares, seconds_to_end, C_RESET,
             )
 
             self._order_mgr.place_order(
                 self._client, market, market.up_token_id, Direction.UP,
-                up_ask, hedge_shares, seconds_to_end, "HEDGE_LEG",
+                up_maker, hedge_shares, seconds_to_end, "HEDGE_LEG",
                 on_fill=self._handle_fill,
-                order_type=OrderType.FOK,
+                order_type=OrderType.GTC,
             )
