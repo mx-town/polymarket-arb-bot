@@ -27,6 +27,7 @@ from complete_set.order_mgr import OrderManager
 from py_clob_client.clob_types import OrderType
 from complete_set.binance_ws import get_candle_state, set_market_window, start_binance_ws
 from complete_set.mean_reversion import MRDirection, StopHuntSignal, evaluate_mean_reversion, evaluate_stop_hunt
+from complete_set.volume_imbalance import configure_windows, get_volume_state, start_volume_ws
 from complete_set.volatility import clear_market_history, record_prices
 from complete_set.quote_calc import (
     calculate_balanced_shares,
@@ -82,6 +83,7 @@ class Engine:
         self._last_summary_log: float = 0.0
         self._last_wallet_refresh: float = 0.0
         self._binance_ws_task: asyncio.Task | None = None
+        self._volume_ws_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         """Main event loop."""
@@ -103,6 +105,10 @@ class Engine:
         log.info("  Stop hunt       : %s (window=%d-%ds left)",
                  "ON" if self._cfg.mean_reversion_enabled else "OFF",
                  self._cfg.sh_entry_start_sec, self._cfg.sh_entry_end_sec)
+        log.info("  Volume imbalance: %s (thresh=%s, min_btc=%s, windows=%d/%ds)",
+                 "ON" if self._cfg.volume_imbalance_enabled else "OFF",
+                 self._cfg.volume_imbalance_threshold, self._cfg.volume_min_btc,
+                 self._cfg.volume_short_window_sec, self._cfg.volume_medium_window_sec)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
@@ -128,6 +134,12 @@ class Engine:
             self._binance_ws_task = asyncio.create_task(start_binance_ws())
             log.info("BINANCE_WS │ background task started")
 
+        # Start volume imbalance WS for direction prediction
+        if self._cfg.volume_imbalance_enabled:
+            configure_windows(self._cfg.volume_short_window_sec, self._cfg.volume_medium_window_sec)
+            self._volume_ws_task = asyncio.create_task(start_volume_ws())
+            log.info("VOLUME_WS │ background task started")
+
         try:
             while True:
                 await self._tick()
@@ -137,6 +149,8 @@ class Engine:
         finally:
             if self._binance_ws_task is not None:
                 self._binance_ws_task.cancel()
+            if self._volume_ws_task is not None:
+                self._volume_ws_task.cancel()
             self._order_mgr.cancel_all(self._client, "SHUTDOWN", self._handle_fill)
 
     async def _tick(self) -> None:
@@ -551,13 +565,21 @@ class Engine:
             self._refresh_wallet_balance()
 
         # ── SUMMARY header ──
+        # Volume imbalance snapshot
+        vol_str = ""
+        if self._cfg.volume_imbalance_enabled:
+            vs = get_volume_state()
+            if not vs.is_stale:
+                vol_str = f" │ vol_imb={vs.short_imbalance:+.3f}/{vs.medium_imbalance:+.3f} ({vs.short_volume_btc:.0f}BTC)"
+
         log.info(
             "── SUMMARY ── markets=%d │ open_orders=%d │ completed=%d │ exposure=$%s │ "
-            "bankroll=$%s (%s%% used) │ wallet=%s │ %srealized=$%s │ unrealized=$%s │ total=$%s%s",
+            "bankroll=$%s (%s%% used) │ wallet=%s │ %srealized=$%s │ unrealized=$%s │ total=$%s%s%s",
             len(self._active_markets), open_count, len(self._completed_markets),
             exposure.quantize(Decimal("0.01")),
             bankroll, pct_used, wallet_str,
             pnl_color, realized, unrealized, total_pnl, C_RESET,
+            vol_str,
         )
         log.info(
             "  EXPOSURE orders=$%s │ unhedged=$%s │ hedged_locked=$%s │ total=$%s │ remaining=$%s",
@@ -767,6 +789,9 @@ class Engine:
             set_market_window(window_start, rpc_url=self._rpc_url)
             candle = get_candle_state()
 
+            # Volume state for direction prediction
+            vol_state = get_volume_state() if self._cfg.volume_imbalance_enabled else None
+
             # ── Approach 1: Stop hunt (minutes 2-5) ──
             sh_signal = evaluate_stop_hunt(
                 candle, up_ask, down_ask, seconds_to_end,
@@ -775,6 +800,9 @@ class Engine:
                 sh_entry_start_sec=self._cfg.sh_entry_start_sec,
                 sh_entry_end_sec=self._cfg.sh_entry_end_sec,
                 no_new_orders_sec=self._cfg.no_new_orders_sec,
+                volume=vol_state,
+                volume_min_btc=self._cfg.volume_min_btc,
+                volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
             )
 
             if sh_signal.direction != MRDirection.SKIP:
@@ -839,6 +867,9 @@ class Engine:
                 max_range_pct=self._cfg.mr_max_range_pct,
                 entry_window_sec=self._cfg.mr_entry_window_sec,
                 no_new_orders_sec=self._cfg.no_new_orders_sec,
+                volume=vol_state,
+                volume_min_btc=self._cfg.volume_min_btc,
+                volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
             )
 
             _TIME_WINDOW_REASONS = {"before SH window", "past SH window", "outside entry window"}

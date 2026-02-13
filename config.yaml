@@ -37,3 +37,9 @@ complete_set:
   # Stop hunt — early entry (minutes 2-5 of candle)
   sh_entry_start_sec: 780
   sh_entry_end_sec: 600
+  # Volume imbalance — Binance aggTrade for direction prediction
+  volume_imbalance_enabled: false
+  volume_imbalance_threshold: 0.15   # +-15% buy/sell imbalance to trigger
+  volume_min_btc: 50                 # min 50 BTC volume in short window
+  volume_short_window_sec: 30
+  volume_medium_window_sec: 120

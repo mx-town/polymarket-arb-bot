@@ -40,6 +40,13 @@ class CompleteSetConfig:
     sh_entry_start_sec: int = 780     # start looking at minute 2 (780s left)
     sh_entry_end_sec: int = 600       # stop at minute 5 (600s left)
 
+    # Volume imbalance (Binance aggTrade feed)
+    volume_imbalance_enabled: bool = False
+    volume_imbalance_threshold: Decimal = Decimal("0.15")  # +-15% imbalance
+    volume_min_btc: Decimal = Decimal("50")                # min 50 BTC in window
+    volume_short_window_sec: int = 30
+    volume_medium_window_sec: int = 120
+
 
 def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
     """Load CompleteSetConfig from config.yaml's complete_set section."""
@@ -70,4 +77,10 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         # Stop hunt
         sh_entry_start_sec=int(cs.get("sh_entry_start_sec", 780)),
         sh_entry_end_sec=int(cs.get("sh_entry_end_sec", 600)),
+        # Volume imbalance
+        volume_imbalance_enabled=cs.get("volume_imbalance_enabled", False),
+        volume_imbalance_threshold=Decimal(str(cs.get("volume_imbalance_threshold", "0.15"))),
+        volume_min_btc=Decimal(str(cs.get("volume_min_btc", "50"))),
+        volume_short_window_sec=int(cs.get("volume_short_window_sec", 30)),
+        volume_medium_window_sec=int(cs.get("volume_medium_window_sec", 120)),
     )
