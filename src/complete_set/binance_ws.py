@@ -8,6 +8,7 @@ Current price comes from Binance WS (faster updates than Chainlink's 27s heartbe
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -15,9 +16,9 @@ from decimal import Decimal
 
 import requests
 
-log = logging.getLogger("cs.binance_ws")
+from complete_set.models import ZERO
 
-ZERO = Decimal("0")
+log = logging.getLogger("cs.binance_ws")
 
 # Last significant BTC move — read by market_data to compute real reprice lag
 _last_btc_move_ts: float = 0.0   # epoch when BTC moved significantly
@@ -62,7 +63,6 @@ class CandleState:
 
 # Module-level singleton — engine reads, WS writes
 _candle_state = CandleState()
-_lock = asyncio.Lock()
 
 
 def get_candle_state() -> CandleState:
@@ -119,32 +119,6 @@ def _fetch_btc_price() -> Decimal:
         return ZERO
 
 
-def _fetch_btc_open_at(epoch: float) -> Decimal:
-    """Fetch the BTC price at a specific epoch via Binance klines REST.
-
-    Used for mid-candle bot starts to get the open price at the Polymarket window start.
-    """
-    try:
-        start_ms = int(epoch * 1000)
-        resp = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={
-                "symbol": "BTCUSDT",
-                "interval": "1m",
-                "startTime": start_ms,
-                "limit": 1,
-            },
-            timeout=5,
-        )
-        resp.raise_for_status()
-        klines = resp.json()
-        if klines:
-            return Decimal(klines[0][1])  # open price of the 1m candle
-    except Exception as e:
-        log.warning("BINANCE_REST_KLINE_FAIL │ %s", e)
-    return _fetch_btc_price()  # fallback to current price
-
-
 async def start_binance_ws() -> None:
     """Spawn the Binance WebSocket loop with auto-reconnect. Runs forever."""
     while True:
@@ -168,7 +142,6 @@ async def _ws_loop() -> None:
     async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
         log.info("BINANCE_WS │ connected")
         async for msg_raw in ws:
-            import json
             msg = json.loads(msg_raw)
             if msg.get("e") != "kline":
                 continue

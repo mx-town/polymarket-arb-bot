@@ -64,11 +64,9 @@ def _setup_logging(level_str: str) -> None:
     for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11", "web3", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-log = logging.getLogger("cs.bot")
+from complete_set.models import C_RESET, C_YELLOW
 
-# ANSI colors for log highlights
-C_YELLOW = "\033[33m"
-C_RESET = "\033[0m"
+log = logging.getLogger("cs.bot")
 
 CLOB_HOST = "https://clob.polymarket.com"
 CHAIN_ID = 137

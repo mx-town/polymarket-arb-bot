@@ -1,6 +1,6 @@
 """Order lifecycle management: placement, replacement, cancellation, fill detection.
 
-Translates OrderManager.java. Tracks at most 1 order per token_id.
+Tracks at most 1 order per token_id.
 """
 
 from __future__ import annotations
@@ -8,13 +8,20 @@ from __future__ import annotations
 import logging
 import math
 import time
+from dataclasses import replace
 from decimal import ROUND_DOWN, Decimal
 from typing import Callable, Optional
 
 from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
 
+from complete_set.market_data import get_top_of_book
 from complete_set.models import (
+    C_GREEN,
+    C_RED,
+    C_RESET,
+    C_YELLOW,
+    ZERO,
     Direction,
     GabagoolMarket,
     OrderState,
@@ -22,16 +29,9 @@ from complete_set.models import (
 
 log = logging.getLogger("cs.orders")
 
-# ANSI colors for log highlights
-C_GREEN = "\033[32m"
-C_RED = "\033[31m"
-C_YELLOW = "\033[33m"
-C_RESET = "\033[0m"
-
 ORDER_STALE_TIMEOUT_S = 300.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
-DRY_FILL_DELAY_S = 1.0  # simulate fill delay in dry-run mode
-ZERO = Decimal("0")
+DRY_MIN_PLACEMENT_DELAY_S = 0.5  # prevent same-tick fills in dry-run
 
 
 class OrderManager:
@@ -92,7 +92,7 @@ class OrderManager:
             )
             self._orders[token_id] = state
             # Don't fire on_fill here; check_pending_orders will simulate
-            # the fill after DRY_FILL_DELAY_S so exposure is realistic.
+            # the fill using book-depth-aware logic.
             return True
 
         try:
@@ -335,36 +335,49 @@ class OrderManager:
                 continue
 
             if self._dry_run:
-                # Simulate fill after DRY_FILL_DELAY_S
+                # Book-depth-aware fill simulation:
+                # - Minimum placement delay prevents same-tick fills
+                # - BUY fills when best_ask <= order price (market came to us)
+                # - SELL fills when best_bid >= order price (market came to us)
+                # - Fill size capped by available book depth
                 if state.matched_size < state.size:
-                    if now - state.placed_at >= DRY_FILL_DELAY_S:
-                        delta = state.size - state.matched_size
-                        self._orders[token_id] = OrderState(
-                            order_id=state.order_id,
-                            market=state.market,
-                            token_id=state.token_id,
-                            direction=state.direction,
-                            price=state.price,
-                            size=state.size,
-                            placed_at=state.placed_at,
-                            side=state.side,
-                            matched_size=state.size,
-                            last_status_check_at=now,
-                            seconds_to_end_at_entry=state.seconds_to_end_at_entry,
-                            reserved_hedge_notional=state.reserved_hedge_notional,
-                            entry_dynamic_edge=state.entry_dynamic_edge,
-                        )
-                        if on_fill:
-                            on_fill(state, delta)
-                        log.info(
-                            "%sDRY_FILL %s %s +%s shares @ %s (after %.1fs)%s",
-                            C_GREEN,
-                            state.market.slug if state.market else "?",
-                            state.direction.value if state.direction else "?",
-                            delta, state.price,
-                            now - state.placed_at,
-                            C_RESET,
-                        )
+                    if now - state.placed_at < DRY_MIN_PLACEMENT_DELAY_S:
+                        pass  # too soon, skip
+                    else:
+                        tob = get_top_of_book(client, state.token_id)
+                        if tob is not None:
+                            would_fill = False
+                            depth = ZERO
+                            if state.side == "SELL":
+                                if tob.best_bid is not None and tob.best_bid >= state.price:
+                                    would_fill = True
+                                    depth = tob.best_bid_size or ZERO
+                            else:
+                                if tob.best_ask is not None and tob.best_ask <= state.price:
+                                    would_fill = True
+                                    depth = tob.best_ask_size or ZERO
+
+                            if would_fill and depth > ZERO:
+                                remaining = state.size - state.matched_size
+                                delta = min(remaining, depth)
+                                new_matched = state.matched_size + delta
+                                self._orders[token_id] = replace(
+                                    state,
+                                    matched_size=new_matched,
+                                    last_status_check_at=now,
+                                )
+                                if on_fill:
+                                    on_fill(state, delta)
+                                log.info(
+                                    "%sDRY_FILL %s %s %s +%s shares @ %s (depth=%s, after %.1fs)%s",
+                                    C_GREEN,
+                                    state.market.slug if state.market else "?",
+                                    state.side,
+                                    state.direction.value if state.direction else "?",
+                                    delta, state.price, depth,
+                                    now - state.placed_at,
+                                    C_RESET,
+                                )
 
                 # Remove stale orders
                 if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
@@ -419,21 +432,7 @@ class OrderManager:
             order = client.get_order(state.order_id)
         except Exception:
             # Update last check time, keep order
-            self._orders[token_id] = OrderState(
-                order_id=state.order_id,
-                market=state.market,
-                token_id=state.token_id,
-                direction=state.direction,
-                price=state.price,
-                size=state.size,
-                placed_at=state.placed_at,
-                side=state.side,
-                matched_size=state.matched_size,
-                last_status_check_at=now,
-                seconds_to_end_at_entry=state.seconds_to_end_at_entry,
-                reserved_hedge_notional=state.reserved_hedge_notional,
-                entry_dynamic_edge=state.entry_dynamic_edge,
-            )
+            self._orders[token_id] = replace(state, last_status_check_at=now)
             return
 
         if not isinstance(order, dict):
@@ -459,20 +458,10 @@ class OrderManager:
             return
 
         # Update state
-        self._orders[token_id] = OrderState(
-            order_id=state.order_id,
-            market=state.market,
-            token_id=state.token_id,
-            direction=state.direction,
-            price=state.price,
-            size=state.size,
-            placed_at=state.placed_at,
-            side=state.side,
+        self._orders[token_id] = replace(
+            state,
             matched_size=matched if matched > prev_matched else prev_matched,
             last_status_check_at=now,
-            seconds_to_end_at_entry=state.seconds_to_end_at_entry,
-            reserved_hedge_notional=state.reserved_hedge_notional,
-            entry_dynamic_edge=state.entry_dynamic_edge,
         )
 
     # -----------------------------------------------------------------
@@ -525,20 +514,10 @@ class OrderManager:
                 "%sRECONCILE_UPGRADE %s │ sentinel → order=%s%s",
                 C_GREEN, token_id[:16], real_id, C_RESET,
             )
-            self._orders[token_id] = OrderState(
+            self._orders[token_id] = replace(
+                state,
                 order_id=real_id,
-                market=state.market,
-                token_id=state.token_id,
-                direction=state.direction,
-                price=state.price,
-                size=state.size,
-                placed_at=state.placed_at,
-                side=state.side,
-                matched_size=state.matched_size,
                 last_status_check_at=None,
-                seconds_to_end_at_entry=state.seconds_to_end_at_entry,
-                reserved_hedge_notional=state.reserved_hedge_notional,
-                entry_dynamic_edge=state.entry_dynamic_edge,
             )
 
         # Log orphans — CLOB orders we don't track

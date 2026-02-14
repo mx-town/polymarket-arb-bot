@@ -1,22 +1,26 @@
-"""Data structures for the complete-set arbitrage strategy."""
+"""Data structures and shared constants for the complete-set arbitrage strategy."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
+
+# Shared Decimal constants
+ZERO = Decimal("0")
+ONE = Decimal("1")
+
+# ANSI colors for log highlights
+C_GREEN = "\033[32m"
+C_RED = "\033[31m"
+C_YELLOW = "\033[33m"
+C_RESET = "\033[0m"
 
 
 class Direction(Enum):
     UP = "UP"
     DOWN = "DOWN"
-
-
-class ReplaceDecision(Enum):
-    SKIP = "SKIP"
-    PLACE = "PLACE"
-    REPLACE = "REPLACE"
 
 
 @dataclass(frozen=True)
@@ -74,103 +78,49 @@ class MarketInventory:
         return self.down_cost / self.down_shares
 
     def add_up(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
-        return MarketInventory(
+        return replace(
+            self,
             up_shares=self.up_shares + shares,
-            down_shares=self.down_shares,
             up_cost=self.up_cost + (shares * fill_price),
-            down_cost=self.down_cost,
             last_up_fill_at=fill_at,
-            last_down_fill_at=self.last_down_fill_at,
             last_up_fill_price=fill_price,
-            last_down_fill_price=self.last_down_fill_price,
-            last_top_up_at=self.last_top_up_at,
-            last_merge_at=self.last_merge_at,
             filled_up_shares=self.filled_up_shares + shares,
-            filled_down_shares=self.filled_down_shares,
-            entry_dynamic_edge=self.entry_dynamic_edge,
             bootstrapped_up=False,
-            bootstrapped_down=self.bootstrapped_down,
         )
 
     def add_down(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
-        return MarketInventory(
-            up_shares=self.up_shares,
+        return replace(
+            self,
             down_shares=self.down_shares + shares,
-            up_cost=self.up_cost,
             down_cost=self.down_cost + (shares * fill_price),
-            last_up_fill_at=self.last_up_fill_at,
             last_down_fill_at=fill_at,
-            last_up_fill_price=self.last_up_fill_price,
             last_down_fill_price=fill_price,
-            last_top_up_at=self.last_top_up_at,
-            last_merge_at=self.last_merge_at,
-            filled_up_shares=self.filled_up_shares,
             filled_down_shares=self.filled_down_shares + shares,
-            entry_dynamic_edge=self.entry_dynamic_edge,
-            bootstrapped_up=self.bootstrapped_up,
             bootstrapped_down=False,
         )
 
     def reduce_up(self, shares: Decimal, price: Decimal) -> MarketInventory:
-        new_up = max(Decimal("0"), self.up_shares - shares)
-        ratio = new_up / self.up_shares if self.up_shares > 0 else Decimal("0")
-        return MarketInventory(
+        new_up = max(ZERO, self.up_shares - shares)
+        ratio = new_up / self.up_shares if self.up_shares > 0 else ZERO
+        return replace(
+            self,
             up_shares=new_up,
-            down_shares=self.down_shares,
             up_cost=self.up_cost * ratio,
-            down_cost=self.down_cost,
-            last_up_fill_at=self.last_up_fill_at,
-            last_down_fill_at=self.last_down_fill_at,
-            last_up_fill_price=self.last_up_fill_price,
-            last_down_fill_price=self.last_down_fill_price,
-            last_top_up_at=self.last_top_up_at,
-            last_merge_at=self.last_merge_at,
-            filled_up_shares=max(Decimal("0"), self.filled_up_shares - shares),
-            filled_down_shares=self.filled_down_shares,
-            entry_dynamic_edge=self.entry_dynamic_edge,
-            bootstrapped_up=self.bootstrapped_up,
-            bootstrapped_down=self.bootstrapped_down,
+            filled_up_shares=max(ZERO, self.filled_up_shares - shares),
         )
 
     def reduce_down(self, shares: Decimal, price: Decimal) -> MarketInventory:
-        new_down = max(Decimal("0"), self.down_shares - shares)
-        ratio = new_down / self.down_shares if self.down_shares > 0 else Decimal("0")
-        return MarketInventory(
-            up_shares=self.up_shares,
+        new_down = max(ZERO, self.down_shares - shares)
+        ratio = new_down / self.down_shares if self.down_shares > 0 else ZERO
+        return replace(
+            self,
             down_shares=new_down,
-            up_cost=self.up_cost,
             down_cost=self.down_cost * ratio,
-            last_up_fill_at=self.last_up_fill_at,
-            last_down_fill_at=self.last_down_fill_at,
-            last_up_fill_price=self.last_up_fill_price,
-            last_down_fill_price=self.last_down_fill_price,
-            last_top_up_at=self.last_top_up_at,
-            last_merge_at=self.last_merge_at,
-            filled_up_shares=self.filled_up_shares,
-            filled_down_shares=max(Decimal("0"), self.filled_down_shares - shares),
-            entry_dynamic_edge=self.entry_dynamic_edge,
-            bootstrapped_up=self.bootstrapped_up,
-            bootstrapped_down=self.bootstrapped_down,
+            filled_down_shares=max(ZERO, self.filled_down_shares - shares),
         )
 
     def mark_top_up(self, at: float) -> MarketInventory:
-        return MarketInventory(
-            up_shares=self.up_shares,
-            down_shares=self.down_shares,
-            up_cost=self.up_cost,
-            down_cost=self.down_cost,
-            last_up_fill_at=self.last_up_fill_at,
-            last_down_fill_at=self.last_down_fill_at,
-            last_up_fill_price=self.last_up_fill_price,
-            last_down_fill_price=self.last_down_fill_price,
-            last_top_up_at=at,
-            last_merge_at=self.last_merge_at,
-            filled_up_shares=self.filled_up_shares,
-            filled_down_shares=self.filled_down_shares,
-            entry_dynamic_edge=self.entry_dynamic_edge,
-            bootstrapped_up=self.bootstrapped_up,
-            bootstrapped_down=self.bootstrapped_down,
-        )
+        return replace(self, last_top_up_at=at)
 
 
 @dataclass

@@ -30,9 +30,11 @@ class CompleteSetConfig:
     # Merge
     min_merge_shares: Decimal = Decimal("10")
     min_merge_profit_usd: Decimal = Decimal("0.02")
+    merge_cooldown_sec: int = 15
 
     # Gas
     max_gas_price_gwei: int = 200
+    dry_merge_gas_cost_usd: Decimal = Decimal("0.003")
 
     # Mean reversion (Binance BTC feed)
     mean_reversion_enabled: bool = False
@@ -127,7 +129,9 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         max_total_bankroll_fraction=Decimal(str(cs.get("max_total_bankroll_fraction", "0.50"))),
         min_merge_shares=Decimal(str(cs.get("min_merge_shares", "10"))),
         min_merge_profit_usd=Decimal(str(cs.get("min_merge_profit_usd", "0.02"))),
+        merge_cooldown_sec=int(cs.get("merge_cooldown_sec", 15)),
         max_gas_price_gwei=int(cs.get("max_gas_price_gwei", 200)),
+        dry_merge_gas_cost_usd=Decimal(str(cs.get("dry_merge_gas_cost_usd", "0.003"))),
         # Mean reversion
         mean_reversion_enabled=cs.get("mean_reversion_enabled", False),
         mr_deviation_threshold=Decimal(str(cs.get("mr_deviation_threshold", "0.0004"))),

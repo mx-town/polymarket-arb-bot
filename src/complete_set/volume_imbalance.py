@@ -19,9 +19,9 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
-log = logging.getLogger("cs.volume_imbalance")
+from complete_set.models import ZERO
 
-ZERO = Decimal("0")
+log = logging.getLogger("cs.volume_imbalance")
 
 
 @dataclass

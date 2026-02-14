@@ -4,7 +4,7 @@ Per-window lifecycle:
 1. No position: buy cheapest leg at bid+0.01 (GTC maker, 0% fee)
 2. One leg filled: hedge the other at bid+0.01 if first_vwap + maker_price < 1 - min_edge (GTC maker)
 3. Both legs filled (hedged >= min_merge_shares): mark complete, merge
-4. Buffer: stop new orders + sell unhedged legs at bid (FOK taker) when seconds_to_end < no_new_orders_sec
+4. Buffer: stop new orders when seconds_to_end < no_new_orders_sec, hold unhedged through settlement
 5. Repricing: every tick, if best_bid changed → cancel + repost at new bid+0.01
 """
 
@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from py_clob_client.clob_types import OrderType
 
-from complete_set.binance_ws import get_candle_state, set_market_window, start_binance_ws
+from complete_set.binance_ws import get_candle_state, get_last_btc_move, set_market_window, start_binance_ws
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book, prefetch_order_books
@@ -27,6 +27,12 @@ from complete_set.mean_reversion import (
     evaluate_stop_hunt,
 )
 from complete_set.models import (
+    C_GREEN,
+    C_RED,
+    C_RESET,
+    C_YELLOW,
+    ONE,
+    ZERO,
     Direction,
     GabagoolMarket,
     PendingRedemption,
@@ -50,18 +56,10 @@ from complete_set.volume_imbalance import configure_windows, get_volume_state, s
 
 log = logging.getLogger("cs.engine")
 
-ZERO = Decimal("0")
-ONE = Decimal("1")
 TICK_SIZE = Decimal("0.01")  # Default Polymarket tick size
-
-# ANSI colors for log highlights
-C_GREEN = "\033[32m"
-C_RED = "\033[31m"
-C_YELLOW = "\033[33m"
 
 # Lag tracking: previous asks per market for real reprice lag measurement
 _prev_asks: dict[str, tuple[Decimal, Decimal]] = {}  # slug -> (prev_up_ask, prev_down_ask)
-C_RESET = "\033[0m"
 
 
 class Engine:
@@ -322,6 +320,38 @@ class Engine:
                 C_GREEN, state.market.slug, hedged, edge, C_RESET,
             )
 
+    def _find_merge_candidate(self, now: float) -> tuple[GabagoolMarket, Decimal] | None:
+        """Find the first market eligible for merge. Returns (market, hedged_shares) or None."""
+        for market in self._active_markets:
+            slug = market.slug
+            if slug in self._pending_merge_task:
+                continue
+            inv = self._inventory.get_inventory(slug)
+            hedged = min(inv.up_shares, inv.down_shares)
+            if hedged < self._cfg.min_merge_shares:
+                continue
+            if not market.condition_id:
+                continue
+            if self._merge_failures.get(slug, 0) >= 5:
+                continue
+            last_attempt = self._merge_last_attempt.get(slug, 0.0)
+            if now - last_attempt < self._cfg.merge_cooldown_sec:
+                continue
+            seconds_to_end = int(market.end_time - now)
+            if seconds_to_end < self._cfg.no_new_orders_sec:
+                continue
+
+            gross = hedged * (ONE - (inv.up_vwap or ZERO) - (inv.down_vwap or ZERO))
+            if gross < self._cfg.min_merge_profit_usd:
+                log.info(
+                    "MERGE_SKIP_PROFIT %s │ gross=$%s < min=$%s",
+                    slug, gross.quantize(Decimal("0.0001")), self._cfg.min_merge_profit_usd,
+                )
+                continue
+
+            return market, hedged
+        return None
+
     def _check_settlements(self, now: float) -> None:
         """Merge hedged pairs on active markets, then redeem resolved positions."""
         # ── Merge hedged pairs back to USDC on active markets ──
@@ -335,7 +365,6 @@ class Engine:
                 try:
                     result = task.result()
                     if result is None:
-                        # Balance too low, skip
                         continue
                     tx_hash, merged_display = result
                     self._inventory.reduce_merged(slug, merged_display)
@@ -353,81 +382,31 @@ class Engine:
                         C_YELLOW, slug, failures, e, C_RESET,
                     )
 
-            # Phase B — Launch new merges (one per tick, non-blocking)
-            for market in self._active_markets:
-                slug = market.slug
-                if slug in self._pending_merge_task:
-                    continue
-                inv = self._inventory.get_inventory(slug)
-                hedged = min(inv.up_shares, inv.down_shares)
-                if hedged < self._cfg.min_merge_shares:
-                    continue
-                if not market.condition_id:
-                    continue
-                if self._merge_failures.get(slug, 0) >= 5:
-                    continue
-                last_attempt = self._merge_last_attempt.get(slug, 0.0)
-                if now - last_attempt < 15:
-                    continue
-                seconds_to_end = int(market.end_time - now)
-                if seconds_to_end < self._cfg.no_new_orders_sec:
-                    continue
-
-                # Profitability check: skip merge if gross profit is too thin
-                gross = hedged * (ONE - (inv.up_vwap or ZERO) - (inv.down_vwap or ZERO))
-                if gross < self._cfg.min_merge_profit_usd:
-                    log.info(
-                        "MERGE_SKIP_PROFIT %s │ gross=$%s < min=$%s",
-                        slug, gross.quantize(Decimal("0.0001")), self._cfg.min_merge_profit_usd,
-                    )
-                    continue
-
-                self._merge_last_attempt[slug] = now
-
+            # Phase B — Launch new merge (one per tick, non-blocking)
+            candidate = self._find_merge_candidate(now)
+            if candidate is not None:
+                market, hedged = candidate
+                self._merge_last_attempt[market.slug] = now
                 min_base = int(self._cfg.min_merge_shares * (10 ** CTF_DECIMALS))
                 task = asyncio.ensure_future(asyncio.to_thread(
-                    self._do_merge_io, slug, market, min_base,
+                    self._do_merge_io, market.slug, market, min_base,
                 ))
-                self._pending_merge_task[slug] = task
-                log.info("MERGE_LAUNCHED %s", slug)
-                break
+                self._pending_merge_task[market.slug] = task
+                log.info("MERGE_LAUNCHED %s", market.slug)
+
         elif self._cfg.dry_run:
-            for market in self._active_markets:
-                slug = market.slug
-                inv = self._inventory.get_inventory(slug)
-                hedged = min(inv.up_shares, inv.down_shares)
-                if hedged < self._cfg.min_merge_shares:
-                    continue
-                if not market.condition_id:
-                    continue
-                # Cooldown: 15s between merge attempts per market
-                last_attempt = self._merge_last_attempt.get(slug, 0.0)
-                if now - last_attempt < 15:
-                    continue
-                # Don't merge too close to resolution
-                seconds_to_end = int(market.end_time - now)
-                if seconds_to_end < self._cfg.no_new_orders_sec:
-                    continue
-
-                # Profitability check
-                gross = hedged * (ONE - (inv.up_vwap or ZERO) - (inv.down_vwap or ZERO))
-                if gross < self._cfg.min_merge_profit_usd:
-                    log.info(
-                        "MERGE_SKIP_PROFIT %s │ gross=$%s < min=$%s",
-                        slug, gross.quantize(Decimal("0.0001")), self._cfg.min_merge_profit_usd,
-                    )
-                    continue
-
-                self._merge_last_attempt[slug] = now
-                self._inventory.reduce_merged(slug, hedged)
-                # Allow re-entry on this market for another cycle
-                self._completed_markets.discard(slug)
+            candidate = self._find_merge_candidate(now)
+            if candidate is not None:
+                market, hedged = candidate
+                self._merge_last_attempt[market.slug] = now
+                self._inventory.reduce_merged(market.slug, hedged)
+                gas_cost = self._cfg.dry_merge_gas_cost_usd
+                self._inventory.session_realized_pnl -= gas_cost
+                self._completed_markets.discard(market.slug)
                 log.info(
-                    "DRY_MERGE %s │ merged=%s shares → freed $%s",
-                    slug, hedged, hedged,
+                    "DRY_MERGE %s │ merged=%s shares → freed $%s │ gas=-$%s",
+                    market.slug, hedged, hedged, gas_cost,
                 )
-                # Only one merge per tick (mirror live behavior)
-                break
 
         # ── Redeem resolved positions ──
         # Phase A — Harvest completed redeem tasks
@@ -711,6 +690,165 @@ class Engine:
                 up_bid, up_ask, dn_bid, dn_ask, edge_str,
             )
 
+    def _place_first_leg(
+        self,
+        direction: MRDirection,
+        market: GabagoolMarket,
+        slug: str,
+        up_ask: Decimal, down_ask: Decimal,
+        up_bid: Decimal | None, down_bid: Decimal | None,
+        max_first_leg: Decimal,
+        dynamic_edge: Decimal,
+        seconds_to_end: int,
+        exposure: Decimal,
+        reason: str,
+        extra_log: str = "",
+    ) -> None:
+        """Place or reprice a first-leg maker order (shared by SH_ENTRY and MR_ENTRY)."""
+        _, target_ask, target_bid, target_dir, target_token, side_label = (
+            self._resolve_entry_side(direction, up_ask, down_ask, up_bid, down_bid, market)
+        )
+
+        if target_bid is None:
+            log.debug("%s_SKIP %s │ no bid for %s", reason.split("_")[0], slug, side_label)
+            return
+
+        maker_price = min(target_bid + TICK_SIZE, target_ask - TICK_SIZE)
+
+        if maker_price > max_first_leg:
+            log.debug("%s_SKIP %s │ %s maker=%s > max_first=%.3f",
+                      reason.split("_")[0], slug, side_label, maker_price, max_first_leg)
+            return
+
+        shares = calculate_balanced_shares(
+            slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
+        )
+        if shares is None:
+            log.debug("%s_SKIP %s │ insufficient bankroll", reason.split("_")[0], slug)
+            return
+
+        # Reprice if book moved, or skip if price unchanged
+        existing = self._order_mgr.get_order(target_token)
+        if existing:
+            if existing.price != maker_price:
+                self._order_mgr.cancel_order(
+                    self._client, target_token, "REPRICE", self._handle_fill)
+                remaining = shares - (existing.matched_size or ZERO)
+                if remaining >= self._cfg.min_merge_shares:
+                    log.info("REPRICE %s │ %s %s→%s │ %s shares │ %ds left",
+                             reason, slug, existing.price, maker_price, remaining, seconds_to_end)
+                    rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
+                    self._order_mgr.place_order(
+                        self._client, market, target_token, target_dir,
+                        maker_price, remaining, seconds_to_end, reason,
+                        on_fill=self._handle_fill, order_type=OrderType.GTC,
+                        reserved_hedge_notional=rhr,
+                        entry_dynamic_edge=dynamic_edge)
+            return
+
+        hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
+        log.info(
+            "%s%s %s │ %s maker=%s (bid=%s) │ %s │ shares=%s │ %ds left%s",
+            C_GREEN, reason, slug, side_label, maker_price, target_bid, extra_log,
+            shares, seconds_to_end, C_RESET,
+        )
+
+        self._order_mgr.place_order(
+            self._client, market, target_token, target_dir,
+            maker_price, shares, seconds_to_end, reason,
+            on_fill=self._handle_fill,
+            order_type=OrderType.GTC,
+            reserved_hedge_notional=hedge_reserve,
+            entry_dynamic_edge=dynamic_edge,
+        )
+
+    def _place_hedge_leg(
+        self,
+        market: GabagoolMarket,
+        slug: str,
+        inv,
+        dynamic_edge: Decimal,
+        seconds_to_end: int,
+        exposure: Decimal,
+        *,
+        first_side: str,
+        hedge_direction: Direction,
+        first_vwap: Decimal | None,
+        first_filled: Decimal,
+        bootstrapped: bool,
+        hedge_token: str,
+        hedge_bid: Decimal | None,
+        hedge_ask: Decimal,
+    ) -> None:
+        """Place or reprice a hedge-leg maker order (shared by UP-first and DOWN-first)."""
+        hedge_side = hedge_direction.value  # "UP" or "DOWN"
+
+        if bootstrapped:
+            log.warning(
+                "HEDGE_SKIP_BOOTSTRAP %s │ %s leg is bootstrapped (estimated VWAP), waiting for real fill or settlement",
+                slug, first_side,
+            )
+            return
+
+        if hedge_bid is None:
+            log.debug("HEDGE_SKIP %s │ no bid for %s", slug, hedge_side)
+            return
+
+        maker_price = min(hedge_bid + TICK_SIZE, hedge_ask - TICK_SIZE)
+
+        # Need: first_vwap + maker_price < 1.0 - hedge_edge
+        hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
+        if first_vwap is None:
+            return
+        combined = first_vwap + maker_price
+        edge = ONE - combined
+        if edge < hedge_edge:
+            log.debug(
+                "HEDGE_SKIP %s │ %s_vwap=%s + %s_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
+                slug, first_side, first_vwap, hedge_side, maker_price, combined, edge, hedge_edge,
+            )
+            return
+
+        hedge_shares = first_filled
+        hedge_notional = hedge_shares * maker_price
+        bankroll = self._cfg.bankroll_usd
+        if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
+            total_cap = bankroll * self._cfg.max_total_bankroll_fraction
+            remaining = total_cap - exposure
+            if hedge_notional > remaining:
+                log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
+                          slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
+                return
+
+        # Reprice if book moved, or skip if price unchanged
+        existing = self._order_mgr.get_order(hedge_token)
+        if existing:
+            if existing.price != maker_price:
+                self._order_mgr.cancel_order(
+                    self._client, hedge_token, "REPRICE", self._handle_fill)
+                remaining_shares = hedge_shares - (existing.matched_size or ZERO)
+                if remaining_shares >= self._cfg.min_merge_shares:
+                    log.info("REPRICE HEDGE_%s │ %s %s→%s │ %s shares │ %ds left",
+                             hedge_side, slug, existing.price, maker_price, remaining_shares, seconds_to_end)
+                    self._order_mgr.place_order(
+                        self._client, market, hedge_token, hedge_direction,
+                        maker_price, remaining_shares, seconds_to_end, "HEDGE_LEG",
+                        on_fill=self._handle_fill, order_type=OrderType.GTC)
+            return
+
+        log.info(
+            "%sHEDGE_LEG %s │ %s maker=%s (bid=%s) │ %s_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
+            C_GREEN, slug, hedge_side, maker_price, hedge_bid, first_side, first_vwap, edge,
+            hedge_shares, seconds_to_end, C_RESET,
+        )
+
+        self._order_mgr.place_order(
+            self._client, market, hedge_token, hedge_direction,
+            maker_price, hedge_shares, seconds_to_end, "HEDGE_LEG",
+            on_fill=self._handle_fill,
+            order_type=OrderType.GTC,
+        )
+
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
         """Two-phase hedge: buy cheap leg first, then hedge the other when profitable."""
         slug = market.slug
@@ -722,7 +860,7 @@ class Engine:
         seconds_to_end = int(market.end_time - now)
         max_lifetime = 900 if market.market_type == "updown-15m" else 3600
 
-        # Pre-resolution buffer: cancel pending orders and sell unhedged legs
+        # Pre-resolution buffer: cancel pending orders, hold unhedged through settlement
         if 0 <= seconds_to_end < self._cfg.no_new_orders_sec:
             self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
             inv = self._inventory.get_inventory(slug)
@@ -764,7 +902,6 @@ class Engine:
         _LAG_MAX = Decimal("0.80")
         if (candle_snap.current_price > ZERO
                 and _LAG_MIN <= up_ask <= _LAG_MAX and _LAG_MIN <= down_ask <= _LAG_MAX):
-            from complete_set.binance_ws import get_last_btc_move
             tick_ts = time.time()
             move_ts, move_dir = get_last_btc_move()
             ask_sum = up_ask + down_ask
@@ -840,63 +977,10 @@ class Engine:
             )
 
             if sh_signal.direction != MRDirection.SKIP:
-                entry_label, target_ask, target_bid, target_dir, target_token, side_label = (
-                    self._resolve_entry_side(sh_signal.direction, up_ask, down_ask, up_bid, down_bid, market)
-                )
-
-                # Need a valid bid to post maker order
-                if target_bid is None:
-                    log.debug("SH_SKIP %s │ no bid for %s", slug, side_label)
-                    return
-
-                # Best maker price: improve bid by 1 tick, but never reach the ask
-                maker_price = min(target_bid + TICK_SIZE, target_ask - TICK_SIZE)
-
-                # Price cap: maker price must be below max first leg
-                if maker_price > max_first_leg:
-                    log.debug("SH_SKIP %s │ %s maker=%s > max_first=%.3f", slug, side_label, maker_price, max_first_leg)
-                    return
-
-                shares = calculate_balanced_shares(
-                    slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
-                )
-                if shares is None:
-                    log.debug("SH_SKIP %s │ insufficient bankroll", slug)
-                    return
-
-                # Reprice if book moved, or skip if price unchanged
-                existing = self._order_mgr.get_order(target_token)
-                if existing:
-                    if existing.price != maker_price:
-                        self._order_mgr.cancel_order(
-                            self._client, target_token, "REPRICE", self._handle_fill)
-                        remaining = shares - (existing.matched_size or ZERO)
-                        if remaining >= self._cfg.min_merge_shares:
-                            log.info("REPRICE SH_ENTRY │ %s %s→%s │ %s shares │ %ds left",
-                                     slug, existing.price, maker_price, remaining, seconds_to_end)
-                            rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
-                            self._order_mgr.place_order(
-                                self._client, market, target_token, target_dir,
-                                maker_price, remaining, seconds_to_end, "SH_ENTRY",
-                                on_fill=self._handle_fill, order_type=OrderType.GTC,
-                                reserved_hedge_notional=rhr,
-                                entry_dynamic_edge=dynamic_edge)
-                    return
-
-                hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
-                log.info(
-                    "%sSH_ENTRY %s │ %s maker=%s (bid=%s) │ range=%.5f │ shares=%s │ %ds left%s",
-                    C_GREEN, slug, side_label, maker_price, target_bid, sh_signal.range_pct,
-                    shares, seconds_to_end, C_RESET,
-                )
-
-                self._order_mgr.place_order(
-                    self._client, market, target_token, target_dir,
-                    maker_price, shares, seconds_to_end, "SH_ENTRY",
-                    on_fill=self._handle_fill,
-                    order_type=OrderType.GTC,
-                    reserved_hedge_notional=hedge_reserve,
-                    entry_dynamic_edge=dynamic_edge,
+                self._place_first_leg(
+                    sh_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
+                    max_first_leg, dynamic_edge, seconds_to_end, exposure, "SH_ENTRY",
+                    extra_log=f"range={sh_signal.range_pct:.5f}",
                 )
                 return
 
@@ -931,206 +1015,32 @@ class Engine:
                         )
                 return
 
-            # MR says BUY_UP or BUY_DOWN — pick the target side
-            _, target_ask, target_bid, target_dir, target_token, side_label = (
-                self._resolve_entry_side(mr_signal.direction, up_ask, down_ask, up_bid, down_bid, market)
-            )
-
-            # Need a valid bid to post maker order
-            if target_bid is None:
-                log.debug("MR_SKIP %s │ no bid for %s", slug, side_label)
-                return
-
-            # Best maker price: improve bid by 1 tick, but never reach the ask
-            maker_price = min(target_bid + TICK_SIZE, target_ask - TICK_SIZE)
-
-            # Price cap: maker price must be below max first leg
-            if maker_price > max_first_leg:
-                log.debug(
-                    "MR_SKIP %s │ %s maker=%s > max_first=%.3f",
-                    slug, side_label, maker_price, max_first_leg,
-                )
-                return
-
-            # Size using balanced calculation (both asks) for bankroll-appropriate size
-            shares = calculate_balanced_shares(
-                slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
-            )
-            if shares is None:
-                log.debug("MR_SKIP %s │ insufficient bankroll", slug)
-                return
-
-            # Reprice if book moved, or skip if price unchanged
-            existing = self._order_mgr.get_order(target_token)
-            if existing:
-                if existing.price != maker_price:
-                    self._order_mgr.cancel_order(
-                        self._client, target_token, "REPRICE", self._handle_fill)
-                    remaining = shares - (existing.matched_size or ZERO)
-                    if remaining >= self._cfg.min_merge_shares:
-                        log.info("REPRICE MR_ENTRY │ %s %s→%s │ %s shares │ %ds left",
-                                 slug, existing.price, maker_price, remaining, seconds_to_end)
-                        rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
-                        self._order_mgr.place_order(
-                            self._client, market, target_token, target_dir,
-                            maker_price, remaining, seconds_to_end, "MR_ENTRY",
-                            on_fill=self._handle_fill, order_type=OrderType.GTC,
-                            reserved_hedge_notional=rhr,
-                            entry_dynamic_edge=dynamic_edge)
-                return
-
-            hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
-            log.info(
-                "%sMR_ENTRY %s │ %s maker=%s (bid=%s) │ dev=%+.5f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, side_label, maker_price, target_bid, mr_signal.deviation,
-                shares, seconds_to_end, C_RESET,
-            )
-
-            self._order_mgr.place_order(
-                self._client, market, target_token, target_dir,
-                maker_price, shares, seconds_to_end, "MR_ENTRY",
-                on_fill=self._handle_fill,
-                order_type=OrderType.GTC,
-                reserved_hedge_notional=hedge_reserve,
-                entry_dynamic_edge=dynamic_edge,
+            self._place_first_leg(
+                mr_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
+                max_first_leg, dynamic_edge, seconds_to_end, exposure, "MR_ENTRY",
+                extra_log=f"dev={mr_signal.deviation:+.5f}",
             )
             return
 
         # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──
         #    (same for both SH_ENTRY and MR_ENTRY first legs)
         if has_up and not has_down:
-            # Guard: skip hedge if first leg was bootstrapped (estimated VWAP, not real fill)
-            if inv.bootstrapped_up:
-                log.warning(
-                    "HEDGE_SKIP_BOOTSTRAP %s │ UP leg is bootstrapped (estimated VWAP), waiting for real fill or settlement",
-                    slug,
-                )
-                return
-            # Need a valid bid to post maker order
-            if down_bid is None:
-                log.debug("HEDGE_SKIP %s │ no bid for DOWN", slug)
-                return
-            down_maker = min(down_bid + TICK_SIZE, down_ask - TICK_SIZE)
-
-            # Need: up_vwap + down_maker < 1.0 - hedge_edge
-            # Use the stricter of current spread edge and entry-time edge
-            hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
-            if inv.up_vwap is None:
-                return
-            combined = inv.up_vwap + down_maker
-            edge = ONE - combined
-            if edge < hedge_edge:
-                log.debug(
-                    "HEDGE_SKIP %s │ UP_vwap=%s + D_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.up_vwap, down_maker, combined, edge, hedge_edge,
-                )
-                return
-
-            # Match first leg's filled share count; check bankroll
-            hedge_shares = inv.filled_up_shares
-            hedge_notional = hedge_shares * down_maker
-            bankroll = self._cfg.bankroll_usd
-            if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
-                total_cap = bankroll * self._cfg.max_total_bankroll_fraction
-                remaining = total_cap - exposure
-                if hedge_notional > remaining:
-                    log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
-                              slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
-                    return
-
-            # Reprice if book moved, or skip if price unchanged
-            existing = self._order_mgr.get_order(market.down_token_id)
-            if existing:
-                if existing.price != down_maker:
-                    self._order_mgr.cancel_order(
-                        self._client, market.down_token_id, "REPRICE", self._handle_fill)
-                    remaining_shares = hedge_shares - (existing.matched_size or ZERO)
-                    if remaining_shares >= self._cfg.min_merge_shares:
-                        log.info("REPRICE HEDGE_DOWN │ %s %s→%s │ %s shares │ %ds left",
-                                 slug, existing.price, down_maker, remaining_shares, seconds_to_end)
-                        self._order_mgr.place_order(
-                            self._client, market, market.down_token_id, Direction.DOWN,
-                            down_maker, remaining_shares, seconds_to_end, "HEDGE_LEG",
-                            on_fill=self._handle_fill, order_type=OrderType.GTC)
-                return
-
-            log.info(
-                "%sHEDGE_LEG %s │ DOWN maker=%s (bid=%s) │ UP_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, down_maker, down_bid, inv.up_vwap, edge,
-                hedge_shares, seconds_to_end, C_RESET,
-            )
-
-            self._order_mgr.place_order(
-                self._client, market, market.down_token_id, Direction.DOWN,
-                down_maker, hedge_shares, seconds_to_end, "HEDGE_LEG",
-                on_fill=self._handle_fill,
-                order_type=OrderType.GTC,
+            self._place_hedge_leg(
+                market, slug, inv, dynamic_edge, seconds_to_end, exposure,
+                first_side="UP", hedge_direction=Direction.DOWN,
+                first_vwap=inv.up_vwap, first_filled=inv.filled_up_shares,
+                bootstrapped=inv.bootstrapped_up,
+                hedge_token=market.down_token_id,
+                hedge_bid=down_bid, hedge_ask=down_ask,
             )
             return
 
         if has_down and not has_up:
-            # Guard: skip hedge if first leg was bootstrapped (estimated VWAP, not real fill)
-            if inv.bootstrapped_down:
-                log.warning(
-                    "HEDGE_SKIP_BOOTSTRAP %s │ DOWN leg is bootstrapped (estimated VWAP), waiting for real fill or settlement",
-                    slug,
-                )
-                return
-            # Need a valid bid to post maker order
-            if up_bid is None:
-                log.debug("HEDGE_SKIP %s │ no bid for UP", slug)
-                return
-            up_maker = min(up_bid + TICK_SIZE, up_ask - TICK_SIZE)
-
-            # Need: down_vwap + up_maker < 1.0 - hedge_edge
-            hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
-            if inv.down_vwap is None:
-                return
-            combined = inv.down_vwap + up_maker
-            edge = ONE - combined
-            if edge < hedge_edge:
-                log.debug(
-                    "HEDGE_SKIP %s │ D_vwap=%s + U_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.down_vwap, up_maker, combined, edge, hedge_edge,
-                )
-                return
-
-            hedge_shares = inv.filled_down_shares
-            hedge_notional = hedge_shares * up_maker
-            bankroll = self._cfg.bankroll_usd
-            if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
-                total_cap = bankroll * self._cfg.max_total_bankroll_fraction
-                remaining = total_cap - exposure
-                if hedge_notional > remaining:
-                    log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
-                              slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
-                    return
-
-            # Reprice if book moved, or skip if price unchanged
-            existing = self._order_mgr.get_order(market.up_token_id)
-            if existing:
-                if existing.price != up_maker:
-                    self._order_mgr.cancel_order(
-                        self._client, market.up_token_id, "REPRICE", self._handle_fill)
-                    remaining_shares = hedge_shares - (existing.matched_size or ZERO)
-                    if remaining_shares >= self._cfg.min_merge_shares:
-                        log.info("REPRICE HEDGE_UP │ %s %s→%s │ %s shares │ %ds left",
-                                 slug, existing.price, up_maker, remaining_shares, seconds_to_end)
-                        self._order_mgr.place_order(
-                            self._client, market, market.up_token_id, Direction.UP,
-                            up_maker, remaining_shares, seconds_to_end, "HEDGE_LEG",
-                            on_fill=self._handle_fill, order_type=OrderType.GTC)
-                return
-
-            log.info(
-                "%sHEDGE_LEG %s │ UP maker=%s (bid=%s) │ DOWN_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
-                C_GREEN, slug, up_maker, up_bid, inv.down_vwap, edge,
-                hedge_shares, seconds_to_end, C_RESET,
-            )
-
-            self._order_mgr.place_order(
-                self._client, market, market.up_token_id, Direction.UP,
-                up_maker, hedge_shares, seconds_to_end, "HEDGE_LEG",
-                on_fill=self._handle_fill,
-                order_type=OrderType.GTC,
+            self._place_hedge_leg(
+                market, slug, inv, dynamic_edge, seconds_to_end, exposure,
+                first_side="DOWN", hedge_direction=Direction.UP,
+                first_vwap=inv.down_vwap, first_filled=inv.filled_down_shares,
+                bootstrapped=inv.bootstrapped_down,
+                hedge_token=market.up_token_id,
+                hedge_bid=up_bid, hedge_ask=up_ask,
             )

@@ -333,20 +333,6 @@ def _send_safe_tx(
     raise RuntimeError(f"Receipt not found after 60s (tx={tx_hash_hex})")
 
 
-def _compute_position_id(condition_id_hex: str, index_set: int) -> int:
-    """Compute ERC1155 token ID for a CTF position."""
-    condition_bytes = bytes.fromhex(condition_id_hex.removeprefix("0x"))
-    collection_id = Web3.solidity_keccak(
-        ["bytes32", "bytes32", "uint256"],
-        [PARENT_COLLECTION_ID, condition_bytes, index_set],
-    )
-    position_id = Web3.solidity_keccak(
-        ["address", "bytes32"],
-        [Web3.to_checksum_address(USDC_ADDRESS), collection_id],
-    )
-    return int.from_bytes(position_id, "big")
-
-
 # ── Approval cache ──
 _approved_pairs: set[tuple[str, str]] = set()  # (safe_address, operator)
 

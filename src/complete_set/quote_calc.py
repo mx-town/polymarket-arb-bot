@@ -1,71 +1,16 @@
-"""Pure pricing functions for the complete-set strategy.
-
-Translates QuoteCalculator.java. All functions are pure — no side effects.
-"""
+"""Pure pricing functions for the complete-set strategy."""
 
 from __future__ import annotations
 
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import Optional
 
 from complete_set.config import CompleteSetConfig
-from complete_set.models import MarketInventory, TopOfBook
+from complete_set.models import ONE, ZERO, MarketInventory
 
-ZERO = Decimal("0")
-ONE = Decimal("1")
 TICK_001 = Decimal("0.01")
-PRICE_MAX = Decimal("0.99")
 WIDE_SPREAD = Decimal("0.06")
 MIN_ORDER_SIZE = Decimal("5")  # Polymarket minimum
-
-
-def round_to_tick(value: Decimal, tick_size: Decimal) -> Decimal:
-    """Round value down to nearest tick."""
-    if tick_size <= ZERO:
-        return value
-    ticks = (value / tick_size).to_integral_value(rounding=ROUND_DOWN)
-    return ticks * tick_size
-
-
-def calculate_entry_price(
-    tob: TopOfBook,
-    tick_size: Decimal,
-    improve_ticks: int,
-    skew_ticks: int,
-) -> Optional[Decimal]:
-    """Calculate maker entry price with inventory skew adjustment.
-
-    Wide spread (>=0.06): mid - tick_size * max(0, improve - skew)
-    Tight spread: min(best_bid + tick_size * (improve + skew), mid)
-    """
-    if tob.best_bid is None or tob.best_ask is None:
-        return None
-
-    mid = (tob.best_bid + tob.best_ask) / 2
-    mid = mid.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-    spread = tob.best_ask - tob.best_bid
-
-    if spread >= WIDE_SPREAD:
-        effective = max(0, improve_ticks - skew_ticks)
-        entry_price = mid - tick_size * Decimal(effective)
-    else:
-        effective = improve_ticks + skew_ticks
-        improved_bid = tob.best_bid + tick_size * Decimal(effective)
-        entry_price = min(improved_bid, mid)
-
-    entry_price = round_to_tick(entry_price, tick_size)
-
-    # Sanity checks
-    if entry_price < TICK_001:
-        return None
-    if entry_price > PRICE_MAX:
-        return None
-    if entry_price >= tob.best_ask:
-        entry_price = tob.best_ask - tick_size
-        if entry_price < TICK_001:
-            return None
-
-    return entry_price
 
 
 # ---------------------------------------------------------------------------
@@ -136,43 +81,6 @@ def replica_shares_by_time(slug: str, seconds_to_end: int) -> Optional[Decimal]:
     return None
 
 
-def calculate_shares(
-    slug: str,
-    entry_price: Decimal,
-    cfg: CompleteSetConfig,
-    seconds_to_end: int,
-    current_exposure: Decimal,
-) -> Optional[Decimal]:
-    """Calculate order size based on replica schedule and bankroll caps."""
-    shares = replica_shares_by_time(slug, seconds_to_end)
-    if shares is None:
-        return None
-
-    if entry_price is None or entry_price <= ZERO:
-        return None
-
-    # Apply per-order bankroll cap
-    bankroll = cfg.bankroll_usd
-    if bankroll > ZERO and cfg.max_order_bankroll_fraction > ZERO:
-        per_order_cap = bankroll * cfg.max_order_bankroll_fraction
-        cap_shares = (per_order_cap / entry_price).quantize(TICK_001, rounding=ROUND_DOWN)
-        shares = min(shares, cap_shares)
-
-    # Apply total bankroll cap
-    if bankroll > ZERO and cfg.max_total_bankroll_fraction > ZERO:
-        total_cap = bankroll * cfg.max_total_bankroll_fraction
-        remaining = total_cap - current_exposure
-        if remaining <= ZERO:
-            return None
-        cap_shares = (remaining / entry_price).quantize(TICK_001, rounding=ROUND_DOWN)
-        shares = min(shares, cap_shares)
-
-    shares = shares.quantize(TICK_001, rounding=ROUND_DOWN)
-    if shares < MIN_ORDER_SIZE:
-        return None
-    return shares
-
-
 def calculate_balanced_shares(
     slug: str,
     up_price: Decimal,
@@ -215,34 +123,6 @@ def calculate_balanced_shares(
     if shares < MIN_ORDER_SIZE:
         return None
     return shares
-
-
-def calculate_skew_ticks(
-    inventory: MarketInventory,
-    max_skew: int,
-    imbalance_threshold: Decimal,
-) -> tuple[int, int]:
-    """Calculate inventory-based skew ticks.
-
-    Returns (skew_up, skew_down) where positive means improve that leg,
-    negative means penalize (widen) that leg.
-    """
-    if imbalance_threshold <= ZERO or max_skew <= 0:
-        return (0, 0)
-
-    imbalance = inventory.imbalance
-    skew_ratio = min(1.0, abs(float(imbalance)) / float(imbalance_threshold))
-    # Use math.floor(x + 0.5) to match Java's Math.round() (rounds 0.5 up)
-    import math
-    skew_ticks = math.floor(skew_ratio * max_skew + 0.5)
-
-    if imbalance > ZERO:
-        # More UP shares → improve DOWN quote, penalize UP quote
-        return (-skew_ticks, skew_ticks)
-    elif imbalance < ZERO:
-        # More DOWN shares → improve UP quote, penalize DOWN quote
-        return (skew_ticks, -skew_ticks)
-    return (0, 0)
 
 
 def calculate_dynamic_edge(spread: Decimal, base_min_edge: Decimal) -> Decimal:

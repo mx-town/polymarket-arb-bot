@@ -13,11 +13,10 @@ from decimal import Decimal
 from enum import Enum
 
 from complete_set.binance_ws import CandleState
+from complete_set.models import ZERO
 from complete_set.volume_imbalance import VolumeState
 
 log = logging.getLogger("cs.mean_reversion")
-
-ZERO = Decimal("0")
 
 
 class MRDirection(Enum):

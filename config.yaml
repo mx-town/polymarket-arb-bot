@@ -21,19 +21,21 @@ complete_set:
   dry_run: true
   refresh_millis: 500
   assets: [bitcoin]
-  min_seconds_to_end: 0
+  min_seconds_to_end: 90
   max_seconds_to_end: 900
   min_edge: 0.01
-  bankroll_usd: 30
+  bankroll_usd: 50
   max_order_bankroll_fraction: 0.25
   max_total_bankroll_fraction: 0.80
   min_merge_shares: 10
   max_gas_price_gwei: 200
   min_merge_profit_usd: 0.02
+  merge_cooldown_sec: 15
+  dry_merge_gas_cost_usd: 0.003
   no_new_orders_sec: 90
   # Mean reversion — Binance BTC feed for directional entry
   mean_reversion_enabled: true
-  mr_deviation_threshold: 0.0004   # 0.04%
+  mr_deviation_threshold: 0.0010   # 0.10%
   mr_max_range_pct: 0.0010         # 0.10% — skip trending candles
   mr_entry_window_sec: 600         # last 10 minutes (covers gap after SH window)
   # Stop hunt — early entry (minutes 2-5 of candle)

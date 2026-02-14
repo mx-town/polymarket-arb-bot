@@ -12,7 +12,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 import requests
 from py_clob_client.clob_types import BookParams
@@ -31,7 +30,6 @@ _tob_cache: dict[str, tuple[Optional[TopOfBook], float]] = {}  # token_id -> (to
 _TOB_TTL = 0.4  # seconds — slightly under 500ms tick interval
 
 GAMMA_HOST = "https://gamma-api.polymarket.com"
-ET = ZoneInfo("America/New_York")
 
 
 # ---------------------------------------------------------------------------
@@ -52,39 +50,9 @@ def _candidate_15m_slugs(asset_prefix: str, now_epoch: float) -> list[str]:
     ]
 
 
-def _candidate_1h_slugs(asset_prefix: str, now_epoch: float) -> list[str]:
-    """Generate candidate slugs for 1h up-or-down markets.
-
-    Format: {asset}-up-or-down-{month}-{day}-{hour}{ampm}-et
-    """
-    dt_et = datetime.fromtimestamp(now_epoch, tz=ET)
-    hour_start = dt_et.replace(minute=0, second=0, microsecond=0)
-
-    slugs = []
-    for delta_h in (-2, -1, 0, 1):
-        from datetime import timedelta
-        candidate = hour_start + timedelta(hours=delta_h)
-        month = candidate.strftime("%B").lower()
-        day = candidate.day
-        hour24 = candidate.hour
-        hour12 = hour24 % 12
-        if hour12 == 0:
-            hour12 = 12
-        ampm = "am" if hour24 < 12 else "pm"
-        slugs.append(f"{asset_prefix}-up-or-down-{month}-{day}-{hour12}{ampm}-et")
-
-    return slugs
-
-
-# Mapping from config asset name to slug prefix
 _ASSET_PREFIXES_15M = {
     "bitcoin": "btc",
     "ethereum": "eth",
-}
-
-_ASSET_PREFIXES_1H = {
-    "bitcoin": "bitcoin",
-    "ethereum": "ethereum",
 }
 
 
@@ -229,17 +197,6 @@ def discover_markets(assets: tuple[str, ...]) -> list[GabagoolMarket]:
                 market = _fetch_market_by_slug(slug)
                 if market and market.end_time > now:
                     markets.append(market)
-
-        # 1h markets — disabled; only 15m markets are traded
-        # prefix_1h = _ASSET_PREFIXES_1H.get(asset)
-        # if prefix_1h:
-        #     for slug in _candidate_1h_slugs(prefix_1h, now):
-        #         if slug in seen_slugs:
-        #             continue
-        #         seen_slugs.add(slug)
-        #         market = _fetch_market_by_slug(slug)
-        #         if market and market.end_time > now:
-        #             markets.append(market)
 
     if markets:
         log.info("Discovered %d active markets", len(markets))

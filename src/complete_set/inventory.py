@@ -1,30 +1,32 @@
 """Per-market UP/DOWN position tracking.
 
-Translates PositionTracker.java. Maintains a cache of on-chain positions
-and maps them to per-market inventory for complete-set coordination.
+Maintains a cache of on-chain positions and maps them to per-market
+inventory for complete-set coordination.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from decimal import Decimal
 
 from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
 
-from complete_set.models import GabagoolMarket, MarketInventory
+from complete_set.models import (
+    C_GREEN,
+    C_RED,
+    C_RESET,
+    C_YELLOW,
+    ONE,
+    ZERO,
+    GabagoolMarket,
+    MarketInventory,
+)
 
 log = logging.getLogger("cs.inventory")
 
 CACHE_TTL_SECONDS = 5.0
-ZERO = Decimal("0")
-ONE = Decimal("1")
-
-# ANSI colors for log highlights
-C_GREEN = "\033[32m"
-C_RED = "\033[31m"
-C_YELLOW = "\033[33m"
-C_RESET = "\033[0m"
 
 
 class InventoryTracker:
@@ -208,20 +210,14 @@ class InventoryTracker:
             filled_up = existing.filled_up_shares if merged_up > ZERO else ZERO
             filled_down = existing.filled_down_shares if merged_down > ZERO else ZERO
 
-            self._inventory_by_market[market.slug] = MarketInventory(
+            self._inventory_by_market[market.slug] = replace(
+                existing,
                 up_shares=merged_up,
                 down_shares=merged_down,
                 up_cost=up_cost,
                 down_cost=down_cost,
-                last_up_fill_at=existing.last_up_fill_at,
-                last_down_fill_at=existing.last_down_fill_at,
-                last_up_fill_price=existing.last_up_fill_price,
-                last_down_fill_price=existing.last_down_fill_price,
-                last_top_up_at=existing.last_top_up_at,
-                last_merge_at=existing.last_merge_at,
                 filled_up_shares=filled_up,
                 filled_down_shares=filled_down,
-                entry_dynamic_edge=existing.entry_dynamic_edge,
                 bootstrapped_up=bootstrapped_up,
                 bootstrapped_down=bootstrapped_down,
             )
@@ -260,23 +256,7 @@ class InventoryTracker:
         if inv is None:
             return
         if inv.entry_dynamic_edge == ZERO:
-            self._inventory_by_market[slug] = MarketInventory(
-                up_shares=inv.up_shares,
-                down_shares=inv.down_shares,
-                up_cost=inv.up_cost,
-                down_cost=inv.down_cost,
-                last_up_fill_at=inv.last_up_fill_at,
-                last_down_fill_at=inv.last_down_fill_at,
-                last_up_fill_price=inv.last_up_fill_price,
-                last_down_fill_price=inv.last_down_fill_price,
-                last_top_up_at=inv.last_top_up_at,
-                last_merge_at=inv.last_merge_at,
-                filled_up_shares=inv.filled_up_shares,
-                filled_down_shares=inv.filled_down_shares,
-                entry_dynamic_edge=edge,
-                bootstrapped_up=inv.bootstrapped_up,
-                bootstrapped_down=inv.bootstrapped_down,
-            )
+            self._inventory_by_market[slug] = replace(inv, entry_dynamic_edge=edge)
 
     def get_inventory(self, slug: str) -> MarketInventory:
         """Get inventory for a market, returns empty if not tracked."""
@@ -356,22 +336,15 @@ class InventoryTracker:
         new_filled_up = inv.filled_up_shares * up_ratio if inv.up_shares > ZERO else ZERO
         new_filled_down = inv.filled_down_shares * down_ratio if inv.down_shares > ZERO else ZERO
 
-        self._inventory_by_market[slug] = MarketInventory(
+        self._inventory_by_market[slug] = replace(
+            inv,
             up_shares=new_up,
             down_shares=new_down,
             up_cost=up_cost,
             down_cost=down_cost,
-            last_up_fill_at=inv.last_up_fill_at,
-            last_down_fill_at=inv.last_down_fill_at,
-            last_up_fill_price=inv.last_up_fill_price,
-            last_down_fill_price=inv.last_down_fill_price,
-            last_top_up_at=inv.last_top_up_at,
             last_merge_at=time.time(),
             filled_up_shares=new_filled_up,
             filled_down_shares=new_filled_down,
-            entry_dynamic_edge=inv.entry_dynamic_edge,
-            bootstrapped_up=inv.bootstrapped_up,
-            bootstrapped_down=inv.bootstrapped_down,
         )
 
     def get_all_inventories(self) -> dict[str, MarketInventory]:
