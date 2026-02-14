@@ -43,6 +43,7 @@ from complete_set.quote_calc import (
     calculate_dynamic_edge,
     calculate_exposure,
     calculate_exposure_breakdown,
+    total_bankroll_cap,
 )
 from complete_set.redeem import (
     CTF_DECIMALS,
@@ -241,12 +242,18 @@ class Engine:
         self._inventory.sync_inventory(
             self._active_markets, get_mid_price=self._get_mid_price,
         )
+
+        # Fill detection BEFORE evaluate: when the book moves (e.g. ask
+        # drops to our BUY price), we must detect the fill before repricing
+        # cancels the order.  In real trading, fills arrive independently
+        # and before you can react to reprice.
+        self._order_mgr.check_pending_orders(self._client, self._handle_fill)
+
         for market in self._active_markets:
             try:
                 self._evaluate_market(market, now)
             except Exception as e:
                 log.error("%sError evaluating %s: %s%s", C_RED, market.slug, e, C_RESET)
-        self._order_mgr.check_pending_orders(self._client, self._handle_fill)
 
         # Periodic order reconciliation — upgrade sentinels, detect orphans
         if not self._cfg.dry_run and now - self._last_reconcile >= 30.0:
@@ -569,7 +576,7 @@ class Engine:
         open_count = len(open_orders)
 
         bankroll = self._cfg.bankroll_usd
-        total_cap = bankroll * self._cfg.max_total_bankroll_fraction if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO else bankroll
+        total_cap = total_bankroll_cap(bankroll) if bankroll > ZERO else bankroll
         remaining = max(ZERO, total_cap - exposure) if total_cap > ZERO else ZERO
         pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
 
@@ -834,9 +841,9 @@ class Engine:
         hedge_shares = first_filled
         hedge_notional = hedge_shares * maker_price
         bankroll = self._cfg.bankroll_usd
-        if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO:
-            total_cap = bankroll * self._cfg.max_total_bankroll_fraction
-            remaining = total_cap - exposure
+        if bankroll > ZERO:
+            cap = total_bankroll_cap(bankroll)
+            remaining = cap - exposure
             if hedge_notional > remaining:
                 log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
                           slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))

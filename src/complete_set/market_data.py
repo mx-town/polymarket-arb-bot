@@ -29,6 +29,10 @@ _book_prev: dict[str, tuple] = {}   # token_id -> (prev_bid, prev_ask) for lag t
 _tob_cache: dict[str, tuple[Optional[TopOfBook], float]] = {}  # token_id -> (tob, mono_ts)
 _TOB_TTL = 0.4  # seconds — slightly under 500ms tick interval
 
+# Full book cache — parsed (price, size) levels for depth simulation
+_full_book_cache: dict[str, tuple[list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]], float]] = {}
+# token_id -> (parsed_bids, parsed_asks, mono_ts)
+
 GAMMA_HOST = "https://gamma-api.polymarket.com"
 
 
@@ -246,6 +250,17 @@ def _parse_book_to_tob(book, token_id: str) -> Optional[TopOfBook]:
     bids = sorted(bids, key=lambda e: _extract_price(e) or Decimal(0), reverse=True)
     asks = sorted(asks, key=lambda e: _extract_price(e) or Decimal("999"), reverse=False)
 
+    # Store full parsed levels for depth simulation
+    parsed_bids = [
+        (p, s) for e in bids
+        if (p := _extract_price(e)) is not None and (s := _extract_size(e)) is not None
+    ]
+    parsed_asks = [
+        (p, s) for e in asks
+        if (p := _extract_price(e)) is not None and (s := _extract_size(e)) is not None
+    ]
+    _full_book_cache[token_id] = (parsed_bids, parsed_asks, time.monotonic())
+
     best_bid = _extract_price(bids[0]) if bids else None
     best_bid_size = _extract_size(bids[0]) if bids else None
     best_ask = _extract_price(asks[0]) if asks else None
@@ -342,3 +357,43 @@ def prefetch_order_books(client, markets: list[GabagoolMarket]) -> None:
         log.warning("Batch order book network error: %s", e)
     except Exception as e:
         log.debug("Batch order book fetch failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Depth-based fill simulation for dry-run orders
+# ---------------------------------------------------------------------------
+
+def get_simulated_fill_size(
+    token_id: str, price: Decimal, side: str, remaining: Decimal,
+) -> Decimal:
+    """Estimate fillable shares from cached book depth.
+
+    For BUY at P:  crossing = asks with price <= P, queue = bids at P.
+    For SELL at P: crossing = bids with price >= P, queue = asks at P.
+    Fillable = max(0, crossing - queue).
+    Returns min(fillable, remaining), or ZERO if no fresh cache.
+    """
+    cached = _full_book_cache.get(token_id)
+    if cached is None:
+        return Decimal(0)
+    parsed_bids, parsed_asks, ts = cached
+    if time.monotonic() - ts > _TOB_TTL:
+        return Decimal(0)
+
+    if side == "BUY":
+        crossing = sum(sz for px, sz in parsed_asks if px <= price)
+        queue = sum(sz for px, sz in parsed_bids if px == price)
+    else:
+        crossing = sum(sz for px, sz in parsed_bids if px >= price)
+        queue = sum(sz for px, sz in parsed_asks if px == price)
+
+    fillable = max(Decimal(0), crossing - queue)
+    result = min(fillable, remaining)
+
+    if crossing > 0:
+        log.debug(
+            "SIM_FILL %s %s @ %s │ crossing=%s queue=%s fillable=%s remaining=%s → %s",
+            token_id[:16], side, price, crossing, queue, fillable, remaining, result,
+        )
+
+    return result

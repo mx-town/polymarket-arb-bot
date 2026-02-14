@@ -12,73 +12,26 @@ TICK_001 = Decimal("0.01")
 WIDE_SPREAD = Decimal("0.06")
 MIN_ORDER_SIZE = Decimal("5")  # Polymarket minimum
 
-
 # ---------------------------------------------------------------------------
-# Replica sizing schedule (from strategy spec / wallet analysis)
+# Auto-scaling bankroll sizing
 # ---------------------------------------------------------------------------
 
-_SCHEDULE: dict[str, list[tuple[int, int]]] = {
-    "btc-updown-15m": [
-        (60, 11),
-        (180, 13),
-        (300, 17),
-        (600, 19),
-        (999999, 20),
-    ],
-    "eth-updown-15m": [
-        (60, 8),
-        (180, 10),
-        (300, 12),
-        (600, 13),
-        (999999, 14),
-    ],
-    "bitcoin-up-or-down": [
-        (60, 9),
-        (180, 10),
-        (300, 11),
-        (600, 12),
-        (900, 14),
-        (1200, 15),
-        (1800, 17),
-        (999999, 18),
-    ],
-    "ethereum-up-or-down": [
-        (60, 7),
-        (300, 8),
-        (600, 9),
-        (900, 11),
-        (1200, 12),
-        (1800, 13),
-        (999999, 14),
-    ],
-}
+_ORDER_FRACTION = Decimal("0.20")   # 20% of bankroll per order
+_TOTAL_FRACTION = Decimal("0.80")   # 80% max total exposure
+
+# Time factors derived from BTC 15m schedule ratios (11/20, 13/20, 17/20, 19/20, 20/20)
+_TIME_FACTORS: list[tuple[int, Decimal]] = [
+    (60,     Decimal("0.55")),
+    (180,    Decimal("0.65")),
+    (300,    Decimal("0.85")),
+    (600,    Decimal("0.95")),
+    (999999, ONE),
+]
 
 
-def _series_key(slug: str) -> Optional[str]:
-    """Map a market slug to its sizing schedule key."""
-    if slug.startswith("btc-updown-15m-"):
-        return "btc-updown-15m"
-    if slug.startswith("eth-updown-15m-"):
-        return "eth-updown-15m"
-    if slug.startswith("bitcoin-up-or-down-"):
-        return "bitcoin-up-or-down"
-    if slug.startswith("ethereum-up-or-down-"):
-        return "ethereum-up-or-down"
-    return None
-
-
-def replica_shares_by_time(slug: str, seconds_to_end: int) -> Optional[Decimal]:
-    """Look up base share size from the replica schedule."""
-    key = _series_key(slug)
-    if key is None:
-        return None
-    schedule = _SCHEDULE.get(key)
-    if schedule is None:
-        return None
-    for threshold, shares in schedule:
-        if seconds_to_end < threshold:
-            return Decimal(shares)
-    return None
+def total_bankroll_cap(bankroll: Decimal) -> Decimal:
+    """Return the maximum total exposure allowed for the given bankroll."""
+    return bankroll * _TOTAL_FRACTION
 
 
 def calculate_balanced_shares(
@@ -89,37 +42,39 @@ def calculate_balanced_shares(
     seconds_to_end: int,
     current_exposure: Decimal,
 ) -> Optional[Decimal]:
-    """Calculate order size so both legs get the same number of shares.
+    """Calculate order size from bankroll, scaling with time-to-end.
 
-    Uses the MORE EXPENSIVE price for bankroll caps so both legs fit
+    Uses the MORE EXPENSIVE price for all caps so both legs fit
     within the budget, preventing share imbalances from asymmetric capping.
     """
-    shares = replica_shares_by_time(slug, seconds_to_end)
-    if shares is None:
-        return None
     if up_price is None or up_price <= ZERO or down_price is None or down_price <= ZERO:
         return None
 
     bankroll = cfg.bankroll_usd
+    if bankroll <= ZERO:
+        return None
 
-    # Per-order cap: use the more expensive price so both legs fit
-    if bankroll > ZERO and cfg.max_order_bankroll_fraction > ZERO:
-        per_order_cap = bankroll * cfg.max_order_bankroll_fraction
-        expensive = max(up_price, down_price)
-        cap_shares = (per_order_cap / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
-        shares = min(shares, cap_shares)
+    expensive = max(up_price, down_price)
 
-    # Total bankroll cap: use the more expensive price
-    if bankroll > ZERO and cfg.max_total_bankroll_fraction > ZERO:
-        total_cap = bankroll * cfg.max_total_bankroll_fraction
-        remaining = total_cap - current_exposure
-        if remaining <= ZERO:
-            return None
-        expensive = max(up_price, down_price)
-        cap_shares = (remaining / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
-        shares = min(shares, cap_shares)
+    # Base shares from bankroll fraction
+    base = (bankroll * _ORDER_FRACTION / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
 
-    shares = shares.quantize(TICK_001, rounding=ROUND_DOWN)
+    # Apply time factor
+    time_factor = ONE
+    for threshold, factor in _TIME_FACTORS:
+        if seconds_to_end < threshold:
+            time_factor = factor
+            break
+    shares = (base * time_factor).quantize(TICK_001, rounding=ROUND_DOWN)
+
+    # Cap by total exposure
+    total_cap = total_bankroll_cap(bankroll)
+    remaining = total_cap - current_exposure
+    if remaining <= ZERO:
+        return None
+    cap_shares = (remaining / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
+    shares = min(shares, cap_shares)
+
     if shares < MIN_ORDER_SIZE:
         return None
     return shares

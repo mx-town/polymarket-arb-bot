@@ -15,7 +15,7 @@ from typing import Callable, Optional
 from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
 
-from complete_set.market_data import get_top_of_book
+from complete_set.market_data import get_simulated_fill_size
 from complete_set.models import (
     C_GREEN,
     C_RED,
@@ -31,7 +31,6 @@ log = logging.getLogger("cs.orders")
 
 ORDER_STALE_TIMEOUT_S = 300.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
-DRY_MIN_PLACEMENT_DELAY_S = 2.0  # prevent same-tick fills in dry-run
 
 
 class OrderManager:
@@ -335,54 +334,36 @@ class OrderManager:
                 continue
 
             if self._dry_run:
-                # Counterfactual fill simulation:
-                # Our order doesn't exist on the real book. We observe the
-                # uncontaminated market and ask "would our order have filled?"
-                # - BUY at P fills when best_ask <= P: a real seller appeared
-                #   at our price. If our bid existed, that sell would have
-                #   matched against us instead of posting as a resting ask.
-                # - SELL at P fills when best_bid >= P: a real buyer appeared
-                #   at our price (same logic, opposite side).
-                # - Fill size capped by book depth at the crossing level.
-                # - Minimum placement delay prevents unrealistic instant fills.
+                # Depth-validated fill simulation:
+                # Uses full order book depth to determine whether our price
+                # would be crossed. No delay gate needed — zero crossing
+                # volume is the natural guard against instant fills (order
+                # placed at bid+1c, ask above that → crossing=0 → no fill
+                # until ask drops).
                 if state.matched_size < state.size:
-                    if now - state.placed_at < DRY_MIN_PLACEMENT_DELAY_S:
-                        pass  # too soon, skip
-                    else:
-                        tob = get_top_of_book(client, state.token_id)
-                        if tob is not None:
-                            would_fill = False
-                            depth = ZERO
-                            if state.side == "SELL":
-                                if tob.best_bid is not None and tob.best_bid >= state.price:
-                                    would_fill = True
-                                    depth = tob.best_bid_size or ZERO
-                            else:
-                                if tob.best_ask is not None and tob.best_ask <= state.price:
-                                    would_fill = True
-                                    depth = tob.best_ask_size or ZERO
-
-                            if would_fill and depth > ZERO:
-                                remaining = state.size - state.matched_size
-                                delta = min(remaining, depth)
-                                new_matched = state.matched_size + delta
-                                self._orders[token_id] = replace(
-                                    state,
-                                    matched_size=new_matched,
-                                    last_status_check_at=now,
-                                )
-                                if on_fill:
-                                    on_fill(state, delta)
-                                log.info(
-                                    "%sDRY_FILL %s %s %s +%s shares @ %s (depth=%s, after %.1fs)%s",
-                                    C_GREEN,
-                                    state.market.slug if state.market else "?",
-                                    state.side,
-                                    state.direction.value if state.direction else "?",
-                                    delta, state.price, depth,
-                                    now - state.placed_at,
-                                    C_RESET,
-                                )
+                    remaining = state.size - state.matched_size
+                    delta = get_simulated_fill_size(
+                        state.token_id, state.price, state.side, remaining,
+                    )
+                    if delta > ZERO:
+                        new_matched = state.matched_size + delta
+                        self._orders[token_id] = replace(
+                            state,
+                            matched_size=new_matched,
+                            last_status_check_at=now,
+                        )
+                        if on_fill:
+                            on_fill(state, delta)
+                        log.info(
+                            "%sDRY_FILL %s %s %s +%s shares @ %s (after %.1fs)%s",
+                            C_GREEN,
+                            state.market.slug if state.market else "?",
+                            state.side,
+                            state.direction.value if state.direction else "?",
+                            delta, state.price,
+                            now - state.placed_at,
+                            C_RESET,
+                        )
 
                 # Remove stale orders
                 if now - state.placed_at > ORDER_STALE_TIMEOUT_S:

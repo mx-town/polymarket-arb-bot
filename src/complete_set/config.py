@@ -25,8 +25,6 @@ class CompleteSetConfig:
 
     # Bankroll
     bankroll_usd: Decimal = Decimal("100")
-    max_order_bankroll_fraction: Decimal = Decimal("0.05")
-    max_total_bankroll_fraction: Decimal = Decimal("0.50")
 
     # Merge
     min_merge_shares: Decimal = Decimal("10")
@@ -80,14 +78,6 @@ def validate_config(cfg: CompleteSetConfig) -> None:
         )
     if cfg.no_new_orders_sec <= 0:
         errors.append(f"no_new_orders_sec must be > 0, got {cfg.no_new_orders_sec}")
-    if not (0 < cfg.max_order_bankroll_fraction <= 1):
-        errors.append(
-            f"max_order_bankroll_fraction must be in (0, 1], got {cfg.max_order_bankroll_fraction}"
-        )
-    if not (0 < cfg.max_total_bankroll_fraction <= 1):
-        errors.append(
-            f"max_total_bankroll_fraction must be in (0, 1], got {cfg.max_total_bankroll_fraction}"
-        )
     if cfg.min_merge_shares <= 0:
         errors.append(f"min_merge_shares must be > 0, got {cfg.min_merge_shares}")
     if cfg.min_merge_profit_usd < 0:
@@ -142,8 +132,6 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         min_edge=Decimal(str(cs.get("min_edge", "0.01"))),
         hedge_edge_buffer=Decimal(str(cs.get("hedge_edge_buffer", "0.005"))),
         bankroll_usd=Decimal(str(cs.get("bankroll_usd", "100"))),
-        max_order_bankroll_fraction=Decimal(str(cs.get("max_order_bankroll_fraction", "0.05"))),
-        max_total_bankroll_fraction=Decimal(str(cs.get("max_total_bankroll_fraction", "0.50"))),
         min_merge_shares=Decimal(str(cs.get("min_merge_shares", "10"))),
         min_merge_profit_usd=Decimal(str(cs.get("min_merge_profit_usd", "0.02"))),
         merge_cooldown_sec=int(cs.get("merge_cooldown_sec", 15)),

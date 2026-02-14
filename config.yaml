@@ -14,9 +14,7 @@ complete_set:
   hedge_edge_buffer: 0.005        # extra edge required above min_edge before hedging
 
   # Bankroll
-  bankroll_usd: 50
-  max_order_bankroll_fraction: 0.25
-  max_total_bankroll_fraction: 0.80
+  bankroll_usd: 500
 
   # Merge
   min_merge_shares: 10

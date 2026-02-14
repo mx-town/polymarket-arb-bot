@@ -25,8 +25,6 @@ def default_cfg() -> CompleteSetConfig:
         no_new_orders_sec=90,
         min_edge=Decimal("0.01"),
         bankroll_usd=Decimal("30"),
-        max_order_bankroll_fraction=Decimal("0.25"),
-        max_total_bankroll_fraction=Decimal("0.80"),
         min_merge_shares=Decimal("10"),
         min_merge_profit_usd=Decimal("0.02"),
         max_gas_price_gwei=200,
