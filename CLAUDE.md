@@ -14,6 +14,7 @@ src/late_entry/
 ├── strategy.py   → Entry/exit logic (late-entry + take-profit)
 └── executor.py   → ClobClient init + order placement
 config.yaml       → All tunable parameters
+logs/             → Log files, ever run has its own file
 ```
 
 Uses **src layout** with `hatchling` build backend. Package is `late_entry`.

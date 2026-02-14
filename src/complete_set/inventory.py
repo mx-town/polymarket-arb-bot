@@ -270,34 +270,43 @@ class InventoryTracker:
 
         hedged = min(removed.up_shares, removed.down_shares)
 
+        # Compute unhedged loss: cost of unhedged shares is written off
+        unhedged_up = removed.up_shares - hedged
+        unhedged_down = removed.down_shares - hedged
+        unhedged_cost = ZERO
+        if unhedged_up > ZERO and removed.up_vwap is not None:
+            unhedged_cost += unhedged_up * removed.up_vwap
+        if unhedged_down > ZERO and removed.down_vwap is not None:
+            unhedged_cost += unhedged_down * removed.down_vwap
+
         if hedged > ZERO and removed.up_vwap is not None and removed.down_vwap is not None:
             hedged_cost = hedged * (removed.up_vwap + removed.down_vwap)
             hedged_pnl = hedged * ONE - hedged_cost
-            self.session_realized_pnl += hedged_pnl
-
-            # Determine unhedged remainder
-            if removed.up_shares > removed.down_shares:
-                unhedged_str = f"U{removed.up_shares - removed.down_shares}"
-            elif removed.down_shares > removed.up_shares:
-                unhedged_str = f"D{removed.down_shares - removed.up_shares}"
-            else:
-                unhedged_str = "none"
-
-            color = C_GREEN if hedged_pnl >= ZERO else C_RED
-            log.info(
-                "%sCLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ cost=$%s │ "
-                "hedged_pnl=$%s │ unhedged=%s%s",
-                color, slug, removed.up_shares, removed.down_shares,
-                hedged,
-                hedged_cost.quantize(Decimal("0.01")),
-                hedged_pnl.quantize(Decimal("0.01")),
-                unhedged_str, C_RESET,
-            )
         else:
-            log.info(
-                "CLEAR_INVENTORY %s (was U%s/D%s)",
-                slug, removed.up_shares, removed.down_shares,
-            )
+            hedged_cost = ZERO
+            hedged_pnl = ZERO
+
+        # Book both hedged PnL and unhedged loss
+        total_pnl = hedged_pnl - unhedged_cost
+        self.session_realized_pnl += total_pnl
+
+        if removed.up_shares > removed.down_shares:
+            unhedged_str = f"U{unhedged_up}"
+        elif removed.down_shares > removed.up_shares:
+            unhedged_str = f"D{unhedged_down}"
+        else:
+            unhedged_str = "none"
+
+        color = C_GREEN if total_pnl >= ZERO else C_RED
+        log.info(
+            "%sCLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ hedged_pnl=$%s │ "
+            "unhedged=%s (loss=$%s) │ net=$%s%s",
+            color, slug, removed.up_shares, removed.down_shares,
+            hedged,
+            hedged_pnl.quantize(Decimal("0.01")),
+            unhedged_str, unhedged_cost.quantize(Decimal("0.01")),
+            total_pnl.quantize(Decimal("0.01")), C_RESET,
+        )
 
     def reduce_merged(self, slug: str, merged_shares: Decimal) -> None:
         """Reduce inventory after a successful merge.

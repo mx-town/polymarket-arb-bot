@@ -124,8 +124,8 @@ class TestClearMarket:
             up_shares=Decimal("10"), up_cost=Decimal("4.00"),
         )
         tracker.clear_market("test")
-        # hedged=0, no PnL recorded
-        assert tracker.session_realized_pnl == ZERO
+        # hedged=0, unhedged cost booked as loss: 10 shares * 0.40 vwap = -$4.00
+        assert tracker.session_realized_pnl == Decimal("-4.00")
 
 
 class TestSetEntryDynamicEdge:

@@ -73,6 +73,7 @@ def evaluate_mean_reversion(
     max_range_pct: Decimal,
     entry_window_sec: int,
     no_new_orders_sec: int,
+    range_filter_enabled: bool = True,
     volume: VolumeState | None = None,
     volume_min_btc: Decimal = ZERO,
     volume_imbalance_threshold: Decimal = ZERO,
@@ -108,8 +109,8 @@ def evaluate_mean_reversion(
         return MeanReversionSignal(dev, abs_dev, rng, MRDirection.SKIP,
                                    f"deviation {abs_dev:.5f} < {deviation_threshold}")
 
-    # Volatility regime: skip trending candles
-    if rng > max_range_pct:
+    # Volatility regime: skip trending candles (when enabled)
+    if range_filter_enabled and rng > max_range_pct:
         return MeanReversionSignal(dev, abs_dev, rng, MRDirection.SKIP,
                                    f"range {rng:.5f} > {max_range_pct} (trending)")
 
@@ -155,6 +156,7 @@ def evaluate_stop_hunt(
     sh_entry_start_sec: int,
     sh_entry_end_sec: int,
     no_new_orders_sec: int,
+    range_filter_enabled: bool = True,
     volume: VolumeState | None = None,
     volume_min_btc: Decimal = ZERO,
     volume_imbalance_threshold: Decimal = ZERO,
@@ -187,8 +189,8 @@ def evaluate_stop_hunt(
     if seconds_to_end < no_new_orders_sec:
         return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP, "pre-resolution buffer")
 
-    # Range cap — skip trending candles
-    if rng > max_range_pct:
+    # Range cap — skip trending candles (when enabled)
+    if range_filter_enabled and rng > max_range_pct:
         return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP,
                               f"range {rng:.5f} > {max_range_pct} (trending)")
 

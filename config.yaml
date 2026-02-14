@@ -1,48 +1,46 @@
-trading:
-  dry_run: true
-  max_position_size: 5
-
-late_entry:
-  entry_window_sec: 30
-  exit_buffer_sec: 5
-  min_favorite_spread: 0.20
-  max_favorite_price: 0.95
-  take_profit_pct: 0.15
-
-polling:
-  interval_sec: 1
-
-assets:
-  - bitcoin
-  - ethereum
-
 complete_set:
   enabled: true
   dry_run: true
   refresh_millis: 500
   assets: [bitcoin]
+
+  # Time window
   min_seconds_to_end: 90
   max_seconds_to_end: 900
+  no_new_orders_sec: 90
+
+  # Edge
   min_edge: 0.01
+  hedge_edge_buffer: 0.005        # extra edge required above min_edge before hedging
+
+  # Bankroll
   bankroll_usd: 50
   max_order_bankroll_fraction: 0.25
   max_total_bankroll_fraction: 0.80
+
+  # Merge
   min_merge_shares: 10
-  max_gas_price_gwei: 200
   min_merge_profit_usd: 0.02
   merge_cooldown_sec: 15
+
+  # Gas
+  max_gas_price_gwei: 200
   dry_merge_gas_cost_usd: 0.003
-  no_new_orders_sec: 90
+
+  # Stop hunt — early entry (minutes 2-5 of candle)
+  stop_hunt_enabled: true
+  sh_entry_start_sec: 780
+  sh_entry_end_sec: 600
+
   # Mean reversion — Binance BTC feed for directional entry
   mean_reversion_enabled: true
   mr_deviation_threshold: 0.0010   # 0.10%
-  mr_max_range_pct: 0.0010         # 0.10% — skip trending candles
-  mr_entry_window_sec: 600         # last 10 minutes (covers gap after SH window)
-  # Stop hunt — early entry (minutes 2-5 of candle)
-  sh_entry_start_sec: 780
-  sh_entry_end_sec: 600
+  mr_range_filter_enabled: false   # disabled for testing
+  mr_max_range_pct: 0.0050         # 0.50% — skip trending candles (when enabled)
+  mr_entry_window_sec: 600         # last 10 minutes
+
   # Volume imbalance — Binance aggTrade for direction prediction
-  volume_imbalance_enabled: false
+  volume_imbalance_enabled: true
   volume_imbalance_threshold: 0.15   # +-15% buy/sell imbalance to trigger
   volume_min_btc: 50                 # min 50 BTC volume in short window
   volume_short_window_sec: 30

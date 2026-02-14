@@ -116,8 +116,11 @@ class Engine:
                  self._cfg.mr_deviation_threshold, self._cfg.mr_max_range_pct,
                  self._cfg.mr_entry_window_sec)
         log.info("  Stop hunt       : %s (window=%d-%ds left)",
-                 "ON" if self._cfg.mean_reversion_enabled else "OFF",
+                 "ON" if self._cfg.stop_hunt_enabled else "OFF",
                  self._cfg.sh_entry_start_sec, self._cfg.sh_entry_end_sec)
+        log.info("  Range filter    : %s (max=%s)",
+                 "ON" if self._cfg.mr_range_filter_enabled else "OFF",
+                 self._cfg.mr_max_range_pct)
         log.info("  Volume imbalance: %s (thresh=%s, min_btc=%s, windows=%d/%ds)",
                  "ON" if self._cfg.volume_imbalance_enabled else "OFF",
                  self._cfg.volume_imbalance_threshold, self._cfg.volume_min_btc,
@@ -796,8 +799,8 @@ class Engine:
 
         maker_price = min(hedge_bid + TICK_SIZE, hedge_ask - TICK_SIZE)
 
-        # Need: first_vwap + maker_price < 1.0 - hedge_edge
-        hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
+        # Need: first_vwap + maker_price < 1.0 - hedge_edge - hedge_edge_buffer
+        hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge) + self._cfg.hedge_edge_buffer
         if first_vwap is None:
             return
         combined = first_vwap + maker_price
@@ -964,33 +967,37 @@ class Engine:
             vol_state = get_volume_state() if self._cfg.volume_imbalance_enabled else None
 
             # ── Approach 1: Stop hunt (minutes 2-5) ──
-            sh_signal = evaluate_stop_hunt(
-                candle, up_ask, down_ask, seconds_to_end,
-                max_first_leg=max_first_leg,
-                max_range_pct=self._cfg.mr_max_range_pct,
-                sh_entry_start_sec=self._cfg.sh_entry_start_sec,
-                sh_entry_end_sec=self._cfg.sh_entry_end_sec,
-                no_new_orders_sec=self._cfg.no_new_orders_sec,
-                volume=vol_state,
-                volume_min_btc=self._cfg.volume_min_btc,
-                volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
-            )
-
-            if sh_signal.direction != MRDirection.SKIP:
-                self._place_first_leg(
-                    sh_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
-                    max_first_leg, dynamic_edge, seconds_to_end, exposure, "SH_ENTRY",
-                    extra_log=f"range={sh_signal.range_pct:.5f}",
+            sh_signal = None
+            if self._cfg.stop_hunt_enabled:
+                sh_signal = evaluate_stop_hunt(
+                    candle, up_ask, down_ask, seconds_to_end,
+                    max_first_leg=max_first_leg,
+                    max_range_pct=self._cfg.mr_max_range_pct,
+                    sh_entry_start_sec=self._cfg.sh_entry_start_sec,
+                    sh_entry_end_sec=self._cfg.sh_entry_end_sec,
+                    no_new_orders_sec=self._cfg.no_new_orders_sec,
+                    range_filter_enabled=self._cfg.mr_range_filter_enabled,
+                    volume=vol_state,
+                    volume_min_btc=self._cfg.volume_min_btc,
+                    volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
                 )
-                return
 
-            # ── Approach 2: Mean reversion (last 4 minutes) ──
+                if sh_signal.direction != MRDirection.SKIP:
+                    self._place_first_leg(
+                        sh_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
+                        max_first_leg, dynamic_edge, seconds_to_end, exposure, "SH_ENTRY",
+                        extra_log=f"range={sh_signal.range_pct:.5f}",
+                    )
+                    return
+
+            # ── Approach 2: Mean reversion (last N minutes) ──
             mr_signal = evaluate_mean_reversion(
                 candle, seconds_to_end, up_ask, down_ask,
                 deviation_threshold=self._cfg.mr_deviation_threshold,
                 max_range_pct=self._cfg.mr_max_range_pct,
                 entry_window_sec=self._cfg.mr_entry_window_sec,
                 no_new_orders_sec=self._cfg.no_new_orders_sec,
+                range_filter_enabled=self._cfg.mr_range_filter_enabled,
                 volume=vol_state,
                 volume_min_btc=self._cfg.volume_min_btc,
                 volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
@@ -1000,19 +1007,18 @@ class Engine:
 
             if mr_signal.direction == MRDirection.SKIP:
                 # Only log interesting rejections; suppress trivial time-window skips
-                if seconds_to_end >= self._cfg.sh_entry_end_sec:
+                if sh_signal is not None and seconds_to_end >= self._cfg.sh_entry_end_sec:
                     if sh_signal.reason not in _TIME_WINDOW_REASONS:
                         log.debug(
                             "SH_SKIP %s │ range=%.5f │ %s │ %ds left",
                             slug, sh_signal.range_pct, sh_signal.reason, seconds_to_end,
                         )
-                else:
-                    if mr_signal.reason not in _TIME_WINDOW_REASONS:
-                        log.debug(
-                            "MR_SKIP %s │ dev=%+.5f range=%.5f │ %s │ %ds left",
-                            slug, mr_signal.deviation, mr_signal.range_pct,
-                            mr_signal.reason, seconds_to_end,
-                        )
+                elif mr_signal.reason not in _TIME_WINDOW_REASONS:
+                    log.debug(
+                        "MR_SKIP %s │ dev=%+.5f range=%.5f │ %s │ %ds left",
+                        slug, mr_signal.deviation, mr_signal.range_pct,
+                        mr_signal.reason, seconds_to_end,
+                    )
                 return
 
             self._place_first_leg(
