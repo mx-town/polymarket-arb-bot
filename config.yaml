@@ -22,26 +22,32 @@ complete_set:
   min_merge_shares: 10
   min_merge_profit_usd: 0.02
   merge_cooldown_sec: 15
+  post_merge_lockout: true        # block new entries on a market after merge
 
   # Gas
   max_gas_price_gwei: 200
   dry_merge_gas_cost_usd: 0.003
 
-  # Stop hunt — early entry (minutes 2-5 of candle)
+  # Stop hunt — unified entry signal (minutes 2-12 of candle)
   stop_hunt_enabled: true
   sh_entry_start_sec: 780
-  sh_entry_end_sec: 600
+  sh_entry_end_sec: 90            # was 600, now covers full window (matches no_new_orders_sec)
 
-  # Mean reversion — Binance BTC feed for directional entry
-  mean_reversion_enabled: true
-  mr_deviation_threshold: 0.0010   # 0.10%
-  mr_range_filter_enabled: false   # disabled for testing
-  mr_max_range_pct: 0.0050         # 0.50% — skip trending candles (when enabled)
-  mr_entry_window_sec: 600         # last 10 minutes
+  # Mean reversion — disabled (MR falls through to cheapest-ask, same as SH)
+  mean_reversion_enabled: false
+  mr_deviation_threshold: 0.0010
+  mr_range_filter_enabled: false
+  mr_max_range_pct: 0.0050
+  mr_entry_window_sec: 600
 
-  # Volume imbalance — Binance aggTrade for direction prediction
-  volume_imbalance_enabled: true
-  volume_imbalance_threshold: 0.15   # +-15% buy/sell imbalance to trigger
-  volume_min_btc: 50                 # min 50 BTC volume in short window
+  # Volume imbalance — disabled (never influenced direction, threshold too high)
+  volume_imbalance_enabled: false
+  volume_imbalance_threshold: 0.15
+  volume_min_btc: 50
   volume_short_window_sec: 30
   volume_medium_window_sec: 120
+
+  # Swing filter — require opposite side was recently cheap before first leg
+  swing_filter_enabled: true
+  swing_lookback_sec: 180         # 3 minutes of price history
+  swing_max_ask: 0.48             # opposite side must have been below this

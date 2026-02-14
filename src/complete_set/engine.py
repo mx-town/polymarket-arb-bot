@@ -51,7 +51,7 @@ from complete_set.redeem import (
     merge_positions,
     redeem_positions,
 )
-from complete_set.volatility import clear_market_history, record_prices
+from complete_set.volatility import clear_market_history, opposite_was_cheap, record_prices
 from complete_set.volume_imbalance import configure_windows, get_volume_state, start_volume_ws
 
 log = logging.getLogger("cs.engine")
@@ -125,6 +125,10 @@ class Engine:
                  "ON" if self._cfg.volume_imbalance_enabled else "OFF",
                  self._cfg.volume_imbalance_threshold, self._cfg.volume_min_btc,
                  self._cfg.volume_short_window_sec, self._cfg.volume_medium_window_sec)
+        log.info("  Post-merge lock : %s", "ON" if self._cfg.post_merge_lockout else "OFF")
+        log.info("  Swing filter    : %s (lookback=%ds, max_ask=%s)",
+                 "ON" if self._cfg.swing_filter_enabled else "OFF",
+                 self._cfg.swing_lookback_sec, self._cfg.swing_max_ask)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
@@ -145,8 +149,8 @@ class Engine:
 
         tick_interval = max(0.1, self._cfg.refresh_millis / 1000.0)
 
-        # Start Binance WS for mean-reversion signal
-        if self._cfg.mean_reversion_enabled:
+        # Start Binance WS for candle state (needed by SH range filter and MR)
+        if self._cfg.stop_hunt_enabled or self._cfg.mean_reversion_enabled:
             self._binance_ws_task = asyncio.create_task(start_binance_ws())
             log.info("BINANCE_WS │ background task started")
 
@@ -372,7 +376,8 @@ class Engine:
                     tx_hash, merged_display = result
                     self._inventory.reduce_merged(slug, merged_display)
                     self._merge_failures.pop(slug, None)
-                    self._completed_markets.discard(slug)
+                    if not self._cfg.post_merge_lockout:
+                        self._completed_markets.discard(slug)
                     log.info(
                         "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
                         C_GREEN, slug, merged_display, tx_hash, C_RESET,
@@ -405,7 +410,8 @@ class Engine:
                 self._inventory.reduce_merged(market.slug, hedged)
                 gas_cost = self._cfg.dry_merge_gas_cost_usd
                 self._inventory.session_realized_pnl -= gas_cost
-                self._completed_markets.discard(market.slug)
+                if not self._cfg.post_merge_lockout:
+                    self._completed_markets.discard(market.slug)
                 log.info(
                     "DRY_MERGE %s │ merged=%s shares → freed $%s │ gas=-$%s",
                     market.slug, hedged, hedged, gas_cost,
@@ -557,7 +563,7 @@ class Engine:
         open_orders = self._order_mgr.get_open_orders()
         all_inv = self._inventory.get_all_inventories()
         exposure = calculate_exposure(open_orders, all_inv)
-        ord_notional, unhedged_exp, hedged_locked, total_exp = calculate_exposure_breakdown(
+        ord_notional, unhedged_exp, hedged_locked, _ = calculate_exposure_breakdown(
             open_orders, all_inv,
         )
         open_count = len(open_orders)
@@ -565,8 +571,7 @@ class Engine:
         bankroll = self._cfg.bankroll_usd
         total_cap = bankroll * self._cfg.max_total_bankroll_fraction if bankroll > ZERO and self._cfg.max_total_bankroll_fraction > ZERO else bankroll
         remaining = max(ZERO, total_cap - exposure) if total_cap > ZERO else ZERO
-        deployed = self._inventory.session_total_deployed
-        pct_used = (deployed / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
+        pct_used = (exposure / bankroll * 100).quantize(Decimal("0.1")) if bankroll > ZERO else ZERO
 
         # Compute total unrealized PnL across all inventories
         total_unrealized = ZERO
@@ -748,6 +753,20 @@ class Engine:
                         reserved_hedge_notional=rhr,
                         entry_dynamic_edge=dynamic_edge)
             return
+
+        # Swing filter: only enter if opposite side was recently cheap
+        if self._cfg.swing_filter_enabled:
+            buying_up = (direction == MRDirection.BUY_UP)
+            if not opposite_was_cheap(
+                slug, buying_up,
+                self._cfg.swing_lookback_sec, self._cfg.swing_max_ask,
+            ):
+                opp = "DOWN" if buying_up else "UP"
+                log.info(
+                    "SWING_SKIP %s │ %s not cheap in last %ds (threshold=%s)",
+                    slug, opp, self._cfg.swing_lookback_sec, self._cfg.swing_max_ask,
+                )
+                return
 
         hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
         log.info(
@@ -991,41 +1010,34 @@ class Engine:
                     return
 
             # ── Approach 2: Mean reversion (last N minutes) ──
-            mr_signal = evaluate_mean_reversion(
-                candle, seconds_to_end, up_ask, down_ask,
-                deviation_threshold=self._cfg.mr_deviation_threshold,
-                max_range_pct=self._cfg.mr_max_range_pct,
-                entry_window_sec=self._cfg.mr_entry_window_sec,
-                no_new_orders_sec=self._cfg.no_new_orders_sec,
-                range_filter_enabled=self._cfg.mr_range_filter_enabled,
-                volume=vol_state,
-                volume_min_btc=self._cfg.volume_min_btc,
-                volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
-            )
+            if self._cfg.mean_reversion_enabled:
+                mr_signal = evaluate_mean_reversion(
+                    candle, seconds_to_end, up_ask, down_ask,
+                    deviation_threshold=self._cfg.mr_deviation_threshold,
+                    max_range_pct=self._cfg.mr_max_range_pct,
+                    entry_window_sec=self._cfg.mr_entry_window_sec,
+                    no_new_orders_sec=self._cfg.no_new_orders_sec,
+                    range_filter_enabled=self._cfg.mr_range_filter_enabled,
+                    volume=vol_state,
+                    volume_min_btc=self._cfg.volume_min_btc,
+                    volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
+                )
 
-            _TIME_WINDOW_REASONS = {"before SH window", "past SH window", "outside entry window"}
-
-            if mr_signal.direction == MRDirection.SKIP:
-                # Only log interesting rejections; suppress trivial time-window skips
-                if sh_signal is not None and seconds_to_end >= self._cfg.sh_entry_end_sec:
-                    if sh_signal.reason not in _TIME_WINDOW_REASONS:
-                        log.debug(
-                            "SH_SKIP %s │ range=%.5f │ %s │ %ds left",
-                            slug, sh_signal.range_pct, sh_signal.reason, seconds_to_end,
-                        )
-                elif mr_signal.reason not in _TIME_WINDOW_REASONS:
-                    log.debug(
-                        "MR_SKIP %s │ dev=%+.5f range=%.5f │ %s │ %ds left",
-                        slug, mr_signal.deviation, mr_signal.range_pct,
-                        mr_signal.reason, seconds_to_end,
+                if mr_signal.direction != MRDirection.SKIP:
+                    self._place_first_leg(
+                        mr_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
+                        max_first_leg, dynamic_edge, seconds_to_end, exposure, "MR_ENTRY",
+                        extra_log=f"dev={mr_signal.deviation:+.5f}",
                     )
-                return
+                    return
 
-            self._place_first_leg(
-                mr_signal.direction, market, slug, up_ask, down_ask, up_bid, down_bid,
-                max_first_leg, dynamic_edge, seconds_to_end, exposure, "MR_ENTRY",
-                extra_log=f"dev={mr_signal.deviation:+.5f}",
-            )
+            # Log skip reasons for whichever signal was active
+            _TIME_WINDOW_REASONS = {"before SH window", "past SH window", "outside entry window", "pre-resolution buffer"}
+            if sh_signal is not None and sh_signal.reason not in _TIME_WINDOW_REASONS:
+                log.debug(
+                    "SH_SKIP %s │ range=%.5f │ %s │ %ds left",
+                    slug, sh_signal.range_pct, sh_signal.reason, seconds_to_end,
+                )
             return
 
         # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──

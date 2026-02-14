@@ -38,7 +38,6 @@ class VolumeState:
     short_imbalance: Decimal = ZERO     # 30s window, range [-1, +1]
     medium_imbalance: Decimal = ZERO    # 120s window, range [-1, +1]
     short_volume_btc: Decimal = ZERO    # total taker volume in short window
-    medium_volume_btc: Decimal = ZERO   # total taker volume in medium window
     last_update: float = 0.0           # epoch of last aggTrade
 
     @property
@@ -102,7 +101,6 @@ def _flush_bucket() -> None:
         short_imbalance=short_imb,
         medium_imbalance=med_imb,
         short_volume_btc=Decimal(str(short_total)),
-        medium_volume_btc=Decimal(str(med_total)),
         last_update=now,
     )
 

@@ -31,7 +31,7 @@ log = logging.getLogger("cs.orders")
 
 ORDER_STALE_TIMEOUT_S = 300.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
-DRY_MIN_PLACEMENT_DELAY_S = 0.5  # prevent same-tick fills in dry-run
+DRY_MIN_PLACEMENT_DELAY_S = 2.0  # prevent same-tick fills in dry-run
 
 
 class OrderManager:
@@ -335,11 +335,16 @@ class OrderManager:
                 continue
 
             if self._dry_run:
-                # Book-depth-aware fill simulation:
-                # - Minimum placement delay prevents same-tick fills
-                # - BUY fills when best_ask <= order price (market came to us)
-                # - SELL fills when best_bid >= order price (market came to us)
-                # - Fill size capped by available book depth
+                # Counterfactual fill simulation:
+                # Our order doesn't exist on the real book. We observe the
+                # uncontaminated market and ask "would our order have filled?"
+                # - BUY at P fills when best_ask <= P: a real seller appeared
+                #   at our price. If our bid existed, that sell would have
+                #   matched against us instead of posting as a resting ask.
+                # - SELL at P fills when best_bid >= P: a real buyer appeared
+                #   at our price (same logic, opposite side).
+                # - Fill size capped by book depth at the crossing level.
+                # - Minimum placement delay prevents unrealistic instant fills.
                 if state.matched_size < state.size:
                     if now - state.placed_at < DRY_MIN_PLACEMENT_DELAY_S:
                         pass  # too soon, skip

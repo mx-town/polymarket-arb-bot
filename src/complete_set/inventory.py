@@ -36,7 +36,6 @@ class InventoryTracker:
         self._last_refresh: float = 0.0
         self._inventory_by_market: dict[str, MarketInventory] = {}
         self.session_realized_pnl: Decimal = ZERO
-        self.session_total_deployed: Decimal = ZERO
 
     def refresh_if_stale(self, client, markets: list[GabagoolMarket] | None = None) -> None:
         """Refresh positions from CLOB if cache is stale (>5s).
@@ -227,7 +226,6 @@ class InventoryTracker:
     ) -> None:
         """Update inventory after a fill."""
         now = time.time()
-        self.session_total_deployed += shares * price
         current = self._inventory_by_market.get(slug, MarketInventory())
         if is_up:
             self._inventory_by_market[slug] = current.add_up(shares, now, price)
@@ -322,7 +320,6 @@ class InventoryTracker:
             merged_cost = merged_shares * (inv.up_vwap + inv.down_vwap)
             merged_pnl = merged_shares * ONE - merged_cost
             self.session_realized_pnl += merged_pnl
-            self.session_total_deployed = max(ZERO, self.session_total_deployed - merged_cost)
 
         new_up = max(ZERO, inv.up_shares - merged_shares)
         new_down = max(ZERO, inv.down_shares - merged_shares)

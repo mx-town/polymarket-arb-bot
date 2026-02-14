@@ -32,6 +32,7 @@ class CompleteSetConfig:
     min_merge_shares: Decimal = Decimal("10")
     min_merge_profit_usd: Decimal = Decimal("0.02")
     merge_cooldown_sec: int = 15
+    post_merge_lockout: bool = True
 
     # Gas
     max_gas_price_gwei: int = 200
@@ -55,6 +56,11 @@ class CompleteSetConfig:
     volume_min_btc: Decimal = Decimal("50")                # min 50 BTC in window
     volume_short_window_sec: int = 30
     volume_medium_window_sec: int = 120
+
+    # Swing filter (require opposite side was recently cheap)
+    swing_filter_enabled: bool = True
+    swing_lookback_sec: int = 180
+    swing_max_ask: Decimal = Decimal("0.48")
 
 
 def validate_config(cfg: CompleteSetConfig) -> None:
@@ -107,6 +113,12 @@ def validate_config(cfg: CompleteSetConfig) -> None:
                 f"mr_max_range_pct must be > 0 when range filter enabled, got {cfg.mr_max_range_pct}"
             )
 
+    if cfg.swing_filter_enabled:
+        if cfg.swing_lookback_sec <= 0:
+            errors.append(f"swing_lookback_sec must be > 0, got {cfg.swing_lookback_sec}")
+        if not (Decimal("0") < cfg.swing_max_ask < Decimal("0.50")):
+            errors.append(f"swing_max_ask must be in (0, 0.50), got {cfg.swing_max_ask}")
+
     if errors:
         raise ValueError("Config validation failed:\n  " + "\n  ".join(errors))
 
@@ -135,6 +147,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         min_merge_shares=Decimal(str(cs.get("min_merge_shares", "10"))),
         min_merge_profit_usd=Decimal(str(cs.get("min_merge_profit_usd", "0.02"))),
         merge_cooldown_sec=int(cs.get("merge_cooldown_sec", 15)),
+        post_merge_lockout=cs.get("post_merge_lockout", True),
         max_gas_price_gwei=int(cs.get("max_gas_price_gwei", 200)),
         dry_merge_gas_cost_usd=Decimal(str(cs.get("dry_merge_gas_cost_usd", "0.003"))),
         # Stop hunt
@@ -153,6 +166,10 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         volume_min_btc=Decimal(str(cs.get("volume_min_btc", "50"))),
         volume_short_window_sec=int(cs.get("volume_short_window_sec", 30)),
         volume_medium_window_sec=int(cs.get("volume_medium_window_sec", 120)),
+        # Swing filter
+        swing_filter_enabled=cs.get("swing_filter_enabled", True),
+        swing_lookback_sec=int(cs.get("swing_lookback_sec", 180)),
+        swing_max_ask=Decimal(str(cs.get("swing_max_ask", "0.48"))),
     )
     validate_config(cfg)
     return cfg
