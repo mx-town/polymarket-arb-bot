@@ -21,7 +21,7 @@ late-entry = "late_entry.bot:main"
 complete-set = "complete_set.bot:main"
 
 [dependency-groups]
-dev = ["ruff"]
+dev = ["ruff", "pytest"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/late_entry", "src/complete_set"]

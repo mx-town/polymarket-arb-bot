@@ -9,13 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-
-import requests
 from zoneinfo import ZoneInfo
 
+import requests
 from py_clob_client.clob_types import BookParams
 
 from complete_set.models import GabagoolMarket, TopOfBook
@@ -177,6 +176,9 @@ def _fetch_market_by_slug(slug: str) -> Optional[GabagoolMarket]:
             neg_risk=neg_risk,
         )
 
+    except (requests.ConnectionError, requests.Timeout) as e:
+        log.warning("Network error fetching market %s: %s", slug, e)
+        return None
     except Exception as e:
         log.debug("Error fetching market %s: %s", slug, e)
         return None
@@ -343,6 +345,9 @@ def get_top_of_book(client, token_id: str) -> Optional[TopOfBook]:
         tob = _parse_book_to_tob(book, token_id)
         _tob_cache[token_id] = (tob, time.monotonic())
         return tob
+    except (ConnectionError, TimeoutError, OSError) as e:
+        log.warning("Network error fetching order book for %s: %s", token_id, e)
+        return None
     except Exception as e:
         log.debug("Error fetching order book for %s: %s", token_id, e)
         return None
@@ -376,5 +381,7 @@ def prefetch_order_books(client, markets: list[GabagoolMarket]) -> None:
                 continue
             tob = _parse_book_to_tob(book, tid)
             _tob_cache[tid] = (tob, now_mono)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        log.warning("Batch order book network error: %s", e)
     except Exception as e:
         log.debug("Batch order book fetch failed: %s", e)

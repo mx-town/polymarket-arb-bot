@@ -278,12 +278,15 @@ def calculate_exposure(
     3. Hedged-but-unmerged cost (capital locked until merge settles)
     """
     orders_notional = ZERO
+    reserved_hedge = ZERO
     for state in open_orders.values():
         if state is None or state.price is None or state.size is None:
             continue
         matched = state.matched_size if state.matched_size else ZERO
         remaining = max(ZERO, state.size - matched)
         orders_notional += state.price * remaining
+        if state.reserved_hedge_notional and state.reserved_hedge_notional > ZERO:
+            reserved_hedge += state.reserved_hedge_notional
 
     unhedged_exposure = ZERO
     hedged_locked = ZERO
@@ -292,12 +295,16 @@ def calculate_exposure(
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
-            unhedged_exposure += abs_imbalance * Decimal("0.50")
+            if inv.imbalance > ZERO:
+                vwap = inv.up_vwap or Decimal("0.50")
+            else:
+                vwap = inv.down_vwap or Decimal("0.50")
+            unhedged_exposure += abs_imbalance * vwap
         hedged = min(inv.up_shares, inv.down_shares)
         if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
             hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)
 
-    return orders_notional + unhedged_exposure + hedged_locked
+    return orders_notional + reserved_hedge + unhedged_exposure + hedged_locked
 
 
 def calculate_exposure_breakdown(
@@ -312,12 +319,15 @@ def calculate_exposure_breakdown(
     - total_exposure: sum of all three (what counts against bankroll)
     """
     orders_notional = ZERO
+    reserved_hedge = ZERO
     for state in open_orders.values():
         if state is None or state.price is None or state.size is None:
             continue
         matched = state.matched_size if state.matched_size else ZERO
         remaining = max(ZERO, state.size - matched)
         orders_notional += state.price * remaining
+        if state.reserved_hedge_notional and state.reserved_hedge_notional > ZERO:
+            reserved_hedge += state.reserved_hedge_notional
 
     unhedged_exposure = ZERO
     hedged_locked = ZERO
@@ -326,10 +336,14 @@ def calculate_exposure_breakdown(
             continue
         abs_imbalance = abs(inv.imbalance)
         if abs_imbalance > ZERO:
-            unhedged_exposure += abs_imbalance * Decimal("0.50")
+            if inv.imbalance > ZERO:
+                vwap = inv.up_vwap or Decimal("0.50")
+            else:
+                vwap = inv.down_vwap or Decimal("0.50")
+            unhedged_exposure += abs_imbalance * vwap
         hedged = min(inv.up_shares, inv.down_shares)
         if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
             hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)
 
-    total = orders_notional + unhedged_exposure + hedged_locked
+    total = orders_notional + reserved_hedge + unhedged_exposure + hedged_locked
     return orders_notional, unhedged_exposure, hedged_locked, total

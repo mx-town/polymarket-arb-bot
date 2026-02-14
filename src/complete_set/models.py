@@ -53,6 +53,9 @@ class MarketInventory:
     last_merge_at: Optional[float] = None
     filled_up_shares: Decimal = field(default_factory=lambda: Decimal("0"))
     filled_down_shares: Decimal = field(default_factory=lambda: Decimal("0"))
+    entry_dynamic_edge: Decimal = field(default_factory=lambda: Decimal("0"))
+    bootstrapped_up: bool = False
+    bootstrapped_down: bool = False
 
     @property
     def imbalance(self) -> Decimal:
@@ -62,13 +65,13 @@ class MarketInventory:
     def up_vwap(self) -> Optional[Decimal]:
         if self.up_shares <= 0:
             return None
-        return (self.up_cost / self.up_shares).quantize(Decimal("0.0001"))
+        return self.up_cost / self.up_shares
 
     @property
     def down_vwap(self) -> Optional[Decimal]:
         if self.down_shares <= 0:
             return None
-        return (self.down_cost / self.down_shares).quantize(Decimal("0.0001"))
+        return self.down_cost / self.down_shares
 
     def add_up(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
         return MarketInventory(
@@ -84,6 +87,9 @@ class MarketInventory:
             last_merge_at=self.last_merge_at,
             filled_up_shares=self.filled_up_shares + shares,
             filled_down_shares=self.filled_down_shares,
+            entry_dynamic_edge=self.entry_dynamic_edge,
+            bootstrapped_up=False,
+            bootstrapped_down=self.bootstrapped_down,
         )
 
     def add_down(self, shares: Decimal, fill_at: float, fill_price: Decimal) -> MarketInventory:
@@ -100,6 +106,9 @@ class MarketInventory:
             last_merge_at=self.last_merge_at,
             filled_up_shares=self.filled_up_shares,
             filled_down_shares=self.filled_down_shares + shares,
+            entry_dynamic_edge=self.entry_dynamic_edge,
+            bootstrapped_up=self.bootstrapped_up,
+            bootstrapped_down=False,
         )
 
     def reduce_up(self, shares: Decimal, price: Decimal) -> MarketInventory:
@@ -118,6 +127,9 @@ class MarketInventory:
             last_merge_at=self.last_merge_at,
             filled_up_shares=max(Decimal("0"), self.filled_up_shares - shares),
             filled_down_shares=self.filled_down_shares,
+            entry_dynamic_edge=self.entry_dynamic_edge,
+            bootstrapped_up=self.bootstrapped_up,
+            bootstrapped_down=self.bootstrapped_down,
         )
 
     def reduce_down(self, shares: Decimal, price: Decimal) -> MarketInventory:
@@ -136,6 +148,9 @@ class MarketInventory:
             last_merge_at=self.last_merge_at,
             filled_up_shares=self.filled_up_shares,
             filled_down_shares=max(Decimal("0"), self.filled_down_shares - shares),
+            entry_dynamic_edge=self.entry_dynamic_edge,
+            bootstrapped_up=self.bootstrapped_up,
+            bootstrapped_down=self.bootstrapped_down,
         )
 
     def mark_top_up(self, at: float) -> MarketInventory:
@@ -152,6 +167,9 @@ class MarketInventory:
             last_merge_at=self.last_merge_at,
             filled_up_shares=self.filled_up_shares,
             filled_down_shares=self.filled_down_shares,
+            entry_dynamic_edge=self.entry_dynamic_edge,
+            bootstrapped_up=self.bootstrapped_up,
+            bootstrapped_down=self.bootstrapped_down,
         )
 
 
@@ -177,3 +195,5 @@ class OrderState:
     matched_size: Decimal = field(default_factory=lambda: Decimal("0"))
     last_status_check_at: Optional[float] = None
     seconds_to_end_at_entry: Optional[int] = None
+    reserved_hedge_notional: Decimal = field(default_factory=lambda: Decimal("0"))
+    entry_dynamic_edge: Decimal = field(default_factory=lambda: Decimal("0"))

@@ -137,6 +137,8 @@ class InventoryTracker:
             # and would re-inflate cost that reduce_merged just zeroed.
             up_cost = existing.up_cost
             down_cost = existing.down_cost
+            bootstrapped_up = existing.bootstrapped_up
+            bootstrapped_down = existing.bootstrapped_down
             if not recent_merge:
                 if chain_up > ZERO and up_cost == ZERO and existing.up_shares == ZERO:
                     mid = None
@@ -146,6 +148,7 @@ class InventoryTracker:
                         except Exception:
                             mid = None
                     up_cost = chain_up * (mid if mid is not None else DEFAULT_PRICE)
+                    bootstrapped_up = True
                 if chain_down > ZERO and down_cost == ZERO and existing.down_shares == ZERO:
                     mid = None
                     if get_mid_price is not None:
@@ -154,6 +157,7 @@ class InventoryTracker:
                         except Exception:
                             mid = None
                     down_cost = chain_down * (mid if mid is not None else DEFAULT_PRICE)
+                    bootstrapped_down = True
 
             # Trust chain when it's lower, UNLESS a recent fill (<10s) might
             # not have settled yet.  This fixes phantom inventory after a
@@ -217,6 +221,9 @@ class InventoryTracker:
                 last_merge_at=existing.last_merge_at,
                 filled_up_shares=filled_up,
                 filled_down_shares=filled_down,
+                entry_dynamic_edge=existing.entry_dynamic_edge,
+                bootstrapped_up=bootstrapped_up,
+                bootstrapped_down=bootstrapped_down,
             )
 
     def record_fill(
@@ -246,6 +253,30 @@ class InventoryTracker:
         now = time.time()
         current = self._inventory_by_market.get(slug, MarketInventory())
         self._inventory_by_market[slug] = current.mark_top_up(now)
+
+    def set_entry_dynamic_edge(self, slug: str, edge: Decimal) -> None:
+        """Store the dynamic edge at time of first leg entry."""
+        inv = self._inventory_by_market.get(slug)
+        if inv is None:
+            return
+        if inv.entry_dynamic_edge == ZERO:
+            self._inventory_by_market[slug] = MarketInventory(
+                up_shares=inv.up_shares,
+                down_shares=inv.down_shares,
+                up_cost=inv.up_cost,
+                down_cost=inv.down_cost,
+                last_up_fill_at=inv.last_up_fill_at,
+                last_down_fill_at=inv.last_down_fill_at,
+                last_up_fill_price=inv.last_up_fill_price,
+                last_down_fill_price=inv.last_down_fill_price,
+                last_top_up_at=inv.last_top_up_at,
+                last_merge_at=inv.last_merge_at,
+                filled_up_shares=inv.filled_up_shares,
+                filled_down_shares=inv.filled_down_shares,
+                entry_dynamic_edge=edge,
+                bootstrapped_up=inv.bootstrapped_up,
+                bootstrapped_down=inv.bootstrapped_down,
+            )
 
     def get_inventory(self, slug: str) -> MarketInventory:
         """Get inventory for a market, returns empty if not tracked."""
@@ -338,6 +369,9 @@ class InventoryTracker:
             last_merge_at=time.time(),
             filled_up_shares=new_filled_up,
             filled_down_shares=new_filled_down,
+            entry_dynamic_edge=inv.entry_dynamic_edge,
+            bootstrapped_up=inv.bootstrapped_up,
+            bootstrapped_down=inv.bootstrapped_down,
         )
 
     def get_all_inventories(self) -> dict[str, MarketInventory]:

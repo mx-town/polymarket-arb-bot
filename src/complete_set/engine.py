@@ -15,27 +15,38 @@ import logging
 import time
 from decimal import Decimal
 
+from py_clob_client.clob_types import OrderType
+
+from complete_set.binance_ws import get_candle_state, set_market_window, start_binance_ws
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book, prefetch_order_books
+from complete_set.mean_reversion import (
+    MRDirection,
+    evaluate_mean_reversion,
+    evaluate_stop_hunt,
+)
 from complete_set.models import (
     Direction,
     GabagoolMarket,
     PendingRedemption,
 )
 from complete_set.order_mgr import OrderManager
-from py_clob_client.clob_types import OrderType
-from complete_set.binance_ws import get_candle_state, set_market_window, start_binance_ws
-from complete_set.mean_reversion import MRDirection, StopHuntSignal, evaluate_mean_reversion, evaluate_stop_hunt
-from complete_set.volume_imbalance import configure_windows, get_volume_state, start_volume_ws
-from complete_set.volatility import clear_market_history, record_prices
 from complete_set.quote_calc import (
     calculate_balanced_shares,
     calculate_dynamic_edge,
     calculate_exposure,
     calculate_exposure_breakdown,
 )
-from complete_set.redeem import CTF_DECIMALS, get_ctf_balances, get_usdc_balance, merge_positions, redeem_positions
+from complete_set.redeem import (
+    CTF_DECIMALS,
+    get_ctf_balances,
+    get_usdc_balance,
+    merge_positions,
+    redeem_positions,
+)
+from complete_set.volatility import clear_market_history, record_prices
+from complete_set.volume_imbalance import configure_windows, get_volume_state, start_volume_ws
 
 log = logging.getLogger("cs.engine")
 
@@ -84,6 +95,10 @@ class Engine:
         self._last_wallet_refresh: float = 0.0
         self._binance_ws_task: asyncio.Task | None = None
         self._volume_ws_task: asyncio.Task | None = None
+        self._tick_count: int = 0
+        self._tick_total_ms: float = 0.0
+        self._tick_max_ms: float = 0.0
+        self._last_reconcile: float = 0.0
 
     async def run(self) -> None:
         """Main event loop."""
@@ -155,6 +170,7 @@ class Engine:
 
     async def _tick(self) -> None:
         """Single tick: harvest bg, launch bg, evaluate+settle."""
+        tick_start = time.monotonic()
         now = time.time()
 
         # -- Harvest background results (fast, no I/O) --
@@ -198,6 +214,19 @@ class Engine:
         # -- Settlements (needs asyncio for task management) --
         self._check_settlements(now)
 
+        # -- Tick timing --
+        tick_ms = (time.monotonic() - tick_start) * 1000
+        self._tick_count += 1
+        self._tick_total_ms += tick_ms
+        if tick_ms > self._tick_max_ms:
+            self._tick_max_ms = tick_ms
+        budget_ms = self._cfg.refresh_millis
+        if tick_ms > budget_ms * 0.8:
+            log.warning(
+                "TICK_SLOW %.0fms (budget=%dms, %.0f%%)",
+                tick_ms, budget_ms, tick_ms / budget_ms * 100,
+            )
+
     def _tick_core(self, now: float) -> None:
         """Synchronous evaluate phase - runs in thread pool."""
         # Batch-fetch all order books in one HTTP POST — cache feeds
@@ -213,6 +242,11 @@ class Engine:
             except Exception as e:
                 log.error("%sError evaluating %s: %s%s", C_RED, market.slug, e, C_RESET)
         self._order_mgr.check_pending_orders(self._client, self._handle_fill)
+
+        # Periodic order reconciliation — upgrade sentinels, detect orphans
+        if not self._cfg.dry_run and now - self._last_reconcile >= 30.0:
+            self._last_reconcile = now
+            self._order_mgr.reconcile_orders(self._client)
 
         # Periodic summary — runs in thread pool with cached TOB
         if now - self._last_summary_log >= 30:
@@ -265,6 +299,9 @@ class Engine:
             return
 
         self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
+        # Store dynamic edge from first leg entry
+        if state.entry_dynamic_edge > ZERO:
+            self._inventory.set_entry_dynamic_edge(state.market.slug, state.entry_dynamic_edge)
         log.info(
             "%sFILL %s %s +%s shares @ %s%s",
             C_GREEN,
@@ -336,6 +373,15 @@ class Engine:
                 if seconds_to_end < self._cfg.no_new_orders_sec:
                     continue
 
+                # Profitability check: skip merge if gross profit is too thin
+                gross = hedged * (ONE - (inv.up_vwap or ZERO) - (inv.down_vwap or ZERO))
+                if gross < self._cfg.min_merge_profit_usd:
+                    log.info(
+                        "MERGE_SKIP_PROFIT %s │ gross=$%s < min=$%s",
+                        slug, gross.quantize(Decimal("0.0001")), self._cfg.min_merge_profit_usd,
+                    )
+                    continue
+
                 self._merge_last_attempt[slug] = now
 
                 min_base = int(self._cfg.min_merge_shares * (10 ** CTF_DECIMALS))
@@ -361,6 +407,15 @@ class Engine:
                 # Don't merge too close to resolution
                 seconds_to_end = int(market.end_time - now)
                 if seconds_to_end < self._cfg.no_new_orders_sec:
+                    continue
+
+                # Profitability check
+                gross = hedged * (ONE - (inv.up_vwap or ZERO) - (inv.down_vwap or ZERO))
+                if gross < self._cfg.min_merge_profit_usd:
+                    log.info(
+                        "MERGE_SKIP_PROFIT %s │ gross=$%s < min=$%s",
+                        slug, gross.quantize(Decimal("0.0001")), self._cfg.min_merge_profit_usd,
+                    )
                     continue
 
                 self._merge_last_attempt[slug] = now
@@ -428,6 +483,7 @@ class Engine:
             task = asyncio.ensure_future(asyncio.to_thread(
                 redeem_positions, self._w3, self._account, self._funder_address,
                 pr.market.condition_id, neg_risk=pr.market.neg_risk, amount=redeem_amount,
+                max_gas_price_gwei=self._cfg.max_gas_price_gwei,
             ))
             self._pending_redeem_task[slug] = task
             log.info("REDEEM_LAUNCHED %s", slug)
@@ -462,6 +518,7 @@ class Engine:
         tx_hash = merge_positions(
             self._w3, self._account, self._funder_address,
             market.condition_id, amount_base, neg_risk=market.neg_risk,
+            max_gas_price_gwei=self._cfg.max_gas_price_gwei,
         )
         return (tx_hash, merged_display)
 
@@ -581,6 +638,12 @@ class Engine:
             pnl_color, realized, unrealized, total_pnl, C_RESET,
             vol_str,
         )
+        if self._tick_count > 0:
+            avg_ms = self._tick_total_ms / self._tick_count
+            log.info(
+                "  TICK_STATS count=%d │ avg=%.0fms │ max=%.0fms",
+                self._tick_count, avg_ms, self._tick_max_ms,
+            )
         log.info(
             "  EXPOSURE orders=$%s │ unhedged=$%s │ hedged_locked=$%s │ total=$%s │ remaining=$%s",
             ord_notional.quantize(Decimal("0.01")),
@@ -662,41 +725,12 @@ class Engine:
         # Pre-resolution buffer: cancel pending orders and sell unhedged legs
         if 0 <= seconds_to_end < self._cfg.no_new_orders_sec:
             self._order_mgr.cancel_market_orders(self._client, market, "PRE_RESOLUTION_BUFFER", self._handle_fill)
-
-            # Sell unhedged single legs at bid (FOK) to recover capital
-            # Skip dust positions that would round to zero after truncation
-            min_sell = Decimal("0.01")
             inv = self._inventory.get_inventory(slug)
-            if inv.up_shares >= min_sell and inv.down_shares == ZERO:
-                up_book = get_top_of_book(self._client, market.up_token_id)
-                if up_book and up_book.best_bid and up_book.best_bid > ZERO:
-                    if not self._order_mgr.has_order(market.up_token_id):
-                        log.info(
-                            "%sCLEANUP_SELL %s │ UP %s shares @ bid %s │ %ds left%s",
-                            C_YELLOW, slug, inv.up_shares, up_book.best_bid,
-                            seconds_to_end, C_RESET,
-                        )
-                        self._order_mgr.place_order(
-                            self._client, market, market.up_token_id, Direction.UP,
-                            up_book.best_bid, inv.up_shares, seconds_to_end,
-                            "CLEANUP_SELL", on_fill=self._handle_fill,
-                            order_type=OrderType.FOK, side="SELL",
-                        )
-            elif inv.down_shares >= min_sell and inv.up_shares == ZERO:
-                down_book = get_top_of_book(self._client, market.down_token_id)
-                if down_book and down_book.best_bid and down_book.best_bid > ZERO:
-                    if not self._order_mgr.has_order(market.down_token_id):
-                        log.info(
-                            "%sCLEANUP_SELL %s │ DOWN %s shares @ bid %s │ %ds left%s",
-                            C_YELLOW, slug, inv.down_shares, down_book.best_bid,
-                            seconds_to_end, C_RESET,
-                        )
-                        self._order_mgr.place_order(
-                            self._client, market, market.down_token_id, Direction.DOWN,
-                            down_book.best_bid, inv.down_shares, seconds_to_end,
-                            "CLEANUP_SELL", on_fill=self._handle_fill,
-                            order_type=OrderType.FOK, side="SELL",
-                        )
+            if inv.up_shares > ZERO or inv.down_shares > ZERO:
+                log.info(
+                    "BUFFER_HOLD %s │ U%s/D%s │ letting unhedged position resolve at settlement │ %ds left",
+                    slug, inv.up_shares, inv.down_shares, seconds_to_end,
+                )
             return
 
         # Outside lifetime
@@ -840,12 +874,16 @@ class Engine:
                         if remaining >= self._cfg.min_merge_shares:
                             log.info("REPRICE SH_ENTRY │ %s %s→%s │ %s shares │ %ds left",
                                      slug, existing.price, maker_price, remaining, seconds_to_end)
+                            rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
                             self._order_mgr.place_order(
                                 self._client, market, target_token, target_dir,
                                 maker_price, remaining, seconds_to_end, "SH_ENTRY",
-                                on_fill=self._handle_fill, order_type=OrderType.GTC)
+                                on_fill=self._handle_fill, order_type=OrderType.GTC,
+                                reserved_hedge_notional=rhr,
+                                entry_dynamic_edge=dynamic_edge)
                     return
 
+                hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
                 log.info(
                     "%sSH_ENTRY %s │ %s maker=%s (bid=%s) │ range=%.5f │ shares=%s │ %ds left%s",
                     C_GREEN, slug, side_label, maker_price, target_bid, sh_signal.range_pct,
@@ -857,6 +895,8 @@ class Engine:
                     maker_price, shares, seconds_to_end, "SH_ENTRY",
                     on_fill=self._handle_fill,
                     order_type=OrderType.GTC,
+                    reserved_hedge_notional=hedge_reserve,
+                    entry_dynamic_edge=dynamic_edge,
                 )
                 return
 
@@ -930,12 +970,16 @@ class Engine:
                     if remaining >= self._cfg.min_merge_shares:
                         log.info("REPRICE MR_ENTRY │ %s %s→%s │ %s shares │ %ds left",
                                  slug, existing.price, maker_price, remaining, seconds_to_end)
+                        rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
                         self._order_mgr.place_order(
                             self._client, market, target_token, target_dir,
                             maker_price, remaining, seconds_to_end, "MR_ENTRY",
-                            on_fill=self._handle_fill, order_type=OrderType.GTC)
+                            on_fill=self._handle_fill, order_type=OrderType.GTC,
+                            reserved_hedge_notional=rhr,
+                            entry_dynamic_edge=dynamic_edge)
                 return
 
+            hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
             log.info(
                 "%sMR_ENTRY %s │ %s maker=%s (bid=%s) │ dev=%+.5f │ shares=%s │ %ds left%s",
                 C_GREEN, slug, side_label, maker_price, target_bid, mr_signal.deviation,
@@ -947,27 +991,38 @@ class Engine:
                 maker_price, shares, seconds_to_end, "MR_ENTRY",
                 on_fill=self._handle_fill,
                 order_type=OrderType.GTC,
+                reserved_hedge_notional=hedge_reserve,
+                entry_dynamic_edge=dynamic_edge,
             )
             return
 
         # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──
         #    (same for both SH_ENTRY and MR_ENTRY first legs)
         if has_up and not has_down:
+            # Guard: skip hedge if first leg was bootstrapped (estimated VWAP, not real fill)
+            if inv.bootstrapped_up:
+                log.warning(
+                    "HEDGE_SKIP_BOOTSTRAP %s │ UP leg is bootstrapped (estimated VWAP), waiting for real fill or settlement",
+                    slug,
+                )
+                return
             # Need a valid bid to post maker order
             if down_bid is None:
                 log.debug("HEDGE_SKIP %s │ no bid for DOWN", slug)
                 return
             down_maker = min(down_bid + TICK_SIZE, down_ask - TICK_SIZE)
 
-            # Need: up_vwap + down_maker < 1.0 - dynamic_edge
+            # Need: up_vwap + down_maker < 1.0 - hedge_edge
+            # Use the stricter of current spread edge and entry-time edge
+            hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
             if inv.up_vwap is None:
                 return
             combined = inv.up_vwap + down_maker
             edge = ONE - combined
-            if edge < dynamic_edge:
+            if edge < hedge_edge:
                 log.debug(
                     "HEDGE_SKIP %s │ UP_vwap=%s + D_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.up_vwap, down_maker, combined, edge, dynamic_edge,
+                    slug, inv.up_vwap, down_maker, combined, edge, hedge_edge,
                 )
                 return
 
@@ -1014,21 +1069,29 @@ class Engine:
             return
 
         if has_down and not has_up:
+            # Guard: skip hedge if first leg was bootstrapped (estimated VWAP, not real fill)
+            if inv.bootstrapped_down:
+                log.warning(
+                    "HEDGE_SKIP_BOOTSTRAP %s │ DOWN leg is bootstrapped (estimated VWAP), waiting for real fill or settlement",
+                    slug,
+                )
+                return
             # Need a valid bid to post maker order
             if up_bid is None:
                 log.debug("HEDGE_SKIP %s │ no bid for UP", slug)
                 return
             up_maker = min(up_bid + TICK_SIZE, up_ask - TICK_SIZE)
 
-            # Need: down_vwap + up_maker < 1.0 - dynamic_edge
+            # Need: down_vwap + up_maker < 1.0 - hedge_edge
+            hedge_edge = max(dynamic_edge, inv.entry_dynamic_edge)
             if inv.down_vwap is None:
                 return
             combined = inv.down_vwap + up_maker
             edge = ONE - combined
-            if edge < dynamic_edge:
+            if edge < hedge_edge:
                 log.debug(
                     "HEDGE_SKIP %s │ D_vwap=%s + U_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
-                    slug, inv.down_vwap, up_maker, combined, edge, dynamic_edge,
+                    slug, inv.down_vwap, up_maker, combined, edge, hedge_edge,
                 )
                 return
 

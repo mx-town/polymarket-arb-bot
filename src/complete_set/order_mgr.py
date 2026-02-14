@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 from typing import Callable, Optional
 
 from py_clob_client.clob_types import OrderArgs, OrderType
@@ -65,6 +65,8 @@ class OrderManager:
         on_fill: Optional[Callable] = None,
         order_type: Optional[OrderType] = None,
         side: str = "BUY",
+        reserved_hedge_notional: Decimal = ZERO,
+        entry_dynamic_edge: Decimal = ZERO,
     ) -> bool:
         """Place a BUY or SELL order. Returns True on success."""
         label = (
@@ -85,6 +87,8 @@ class OrderManager:
                 side=side,
                 matched_size=ZERO,  # starts unfilled — exposure accumulates
                 seconds_to_end_at_entry=seconds_to_end,
+                reserved_hedge_notional=reserved_hedge_notional,
+                entry_dynamic_edge=entry_dynamic_edge,
             )
             self._orders[token_id] = state
             # Don't fire on_fill here; check_pending_orders will simulate
@@ -154,19 +158,25 @@ class OrderManager:
 
             if not order_id:
                 log.warning("%sOrder submission returned null orderId for %s%s", C_YELLOW, market.slug, C_RESET)
-                # Insert sentinel to prevent duplicate submissions
-                self._orders[token_id] = OrderState(
-                    order_id="",
-                    market=market,
-                    token_id=token_id,
-                    direction=direction,
-                    price=price,
-                    size=size,
-                    placed_at=time.time(),
-                    side=side,
-                    matched_size=ZERO,
-                    seconds_to_end_at_entry=seconds_to_end,
-                )
+                # Insert sentinel to prevent duplicate submissions.
+                # Skip for FOK orders — they are terminal by nature,
+                # nothing on the book to track.
+                is_fok = (order_type == OrderType.FOK)
+                if not is_fok:
+                    self._orders[token_id] = OrderState(
+                        order_id="",
+                        market=market,
+                        token_id=token_id,
+                        direction=direction,
+                        price=price,
+                        size=size,
+                        placed_at=time.time(),
+                        side=side,
+                        matched_size=ZERO,
+                        seconds_to_end_at_entry=seconds_to_end,
+                        reserved_hedge_notional=reserved_hedge_notional,
+                        entry_dynamic_edge=entry_dynamic_edge,
+                    )
                 return False
 
             self._orders[token_id] = OrderState(
@@ -180,6 +190,8 @@ class OrderManager:
                 side=side,
                 matched_size=ZERO,
                 seconds_to_end_at_entry=seconds_to_end,
+                reserved_hedge_notional=reserved_hedge_notional,
+                entry_dynamic_edge=entry_dynamic_edge,
             )
             log.info("%sPLACED %s (order=%s, type=%s)%s", C_GREEN, label, order_id, ot.value if hasattr(ot, 'value') else ot, C_RESET)
             return True
@@ -205,6 +217,8 @@ class OrderManager:
                     side=side,
                     matched_size=ZERO,
                     seconds_to_end_at_entry=seconds_to_end,
+                    reserved_hedge_notional=reserved_hedge_notional,
+                    entry_dynamic_edge=entry_dynamic_edge,
                 )
             return False
 
@@ -337,6 +351,8 @@ class OrderManager:
                             matched_size=state.size,
                             last_status_check_at=now,
                             seconds_to_end_at_entry=state.seconds_to_end_at_entry,
+                            reserved_hedge_notional=state.reserved_hedge_notional,
+                            entry_dynamic_edge=state.entry_dynamic_edge,
                         )
                         if on_fill:
                             on_fill(state, delta)
@@ -415,6 +431,8 @@ class OrderManager:
                 matched_size=state.matched_size,
                 last_status_check_at=now,
                 seconds_to_end_at_entry=state.seconds_to_end_at_entry,
+                reserved_hedge_notional=state.reserved_hedge_notional,
+                entry_dynamic_edge=state.entry_dynamic_edge,
             )
             return
 
@@ -453,7 +471,85 @@ class OrderManager:
             matched_size=matched if matched > prev_matched else prev_matched,
             last_status_check_at=now,
             seconds_to_end_at_entry=state.seconds_to_end_at_entry,
+            reserved_hedge_notional=state.reserved_hedge_notional,
+            entry_dynamic_edge=state.entry_dynamic_edge,
         )
+
+    # -----------------------------------------------------------------
+    # Reconciliation
+    # -----------------------------------------------------------------
+
+    def reconcile_orders(self, client) -> None:
+        """Reconcile local sentinel orders with actual CLOB state.
+
+        - Sentinels (order_id="") that match a real CLOB order get upgraded.
+        - CLOB orders not tracked locally are logged as orphans.
+        Skipped in dry-run mode.
+        """
+        if self._dry_run:
+            return
+
+        try:
+            open_orders = client.get_orders()
+        except Exception as e:
+            log.warning("RECONCILE_FETCH_FAILED: %s", e)
+            return
+
+        if not open_orders or not isinstance(open_orders, list):
+            return
+
+        # Build token_id -> CLOB order lookup
+        clob_by_token: dict[str, dict] = {}
+        for order in open_orders:
+            if not isinstance(order, dict):
+                continue
+            tid = order.get("asset_id") or order.get("token_id", "")
+            if tid:
+                clob_by_token[tid] = order
+
+        # Upgrade sentinels that have a matching CLOB order
+        for token_id, state in list(self._orders.items()):
+            if state.order_id:
+                continue  # not a sentinel
+            clob_order = clob_by_token.pop(token_id, None)
+            if clob_order is None:
+                continue
+            real_id = (
+                clob_order.get("id")
+                or clob_order.get("orderID")
+                or clob_order.get("orderId", "")
+            )
+            if not real_id:
+                continue
+            log.info(
+                "%sRECONCILE_UPGRADE %s │ sentinel → order=%s%s",
+                C_GREEN, token_id[:16], real_id, C_RESET,
+            )
+            self._orders[token_id] = OrderState(
+                order_id=real_id,
+                market=state.market,
+                token_id=state.token_id,
+                direction=state.direction,
+                price=state.price,
+                size=state.size,
+                placed_at=state.placed_at,
+                side=state.side,
+                matched_size=state.matched_size,
+                last_status_check_at=None,
+                seconds_to_end_at_entry=state.seconds_to_end_at_entry,
+                reserved_hedge_notional=state.reserved_hedge_notional,
+                entry_dynamic_edge=state.entry_dynamic_edge,
+            )
+
+        # Log orphans — CLOB orders we don't track
+        tracked_order_ids = {s.order_id for s in self._orders.values() if s.order_id}
+        for tid, order in clob_by_token.items():
+            oid = order.get("id") or order.get("orderID") or order.get("orderId", "")
+            if oid and oid not in tracked_order_ids:
+                log.warning(
+                    "%sRECONCILE_ORPHAN %s │ order=%s not tracked locally%s",
+                    C_YELLOW, tid[:16], oid, C_RESET,
+                )
 
     @staticmethod
     def _is_terminal(status: str, matched: Decimal, requested: Decimal) -> bool:

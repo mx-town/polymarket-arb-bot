@@ -227,6 +227,7 @@ def _send_safe_tx(
     to: str,
     data: bytes,
     chain_id: int = 137,
+    max_gas_price_gwei: int = 200,
 ) -> str:
     """Execute a call through a Gnosis Safe v1.3.0 (1-of-1 multisig).
 
@@ -272,6 +273,11 @@ def _send_safe_tx(
     # Submit the outer transaction from EOA to Safe
     eoa_nonce = w3.eth.get_transaction_count(from_addr, "latest")
     gas_price_raw = w3.eth.gas_price
+    gas_price_gwei = gas_price_raw / 1e9
+    if gas_price_gwei > max_gas_price_gwei:
+        raise RuntimeError(
+            f"Gas price {gas_price_gwei:.0f} gwei exceeds cap {max_gas_price_gwei} gwei"
+        )
     gas_price = math.ceil(gas_price_raw * 1.50)
 
     try:
@@ -341,6 +347,46 @@ def _compute_position_id(condition_id_hex: str, index_set: int) -> int:
     return int.from_bytes(position_id, "big")
 
 
+# ── Approval cache ──
+_approved_pairs: set[tuple[str, str]] = set()  # (safe_address, operator)
+
+
+def _ensure_approval(
+    w3: Web3,
+    account: LocalAccount,
+    safe_address: str,
+    operator: str,
+    chain_id: int = 137,
+    max_gas_price_gwei: int = 200,
+) -> None:
+    """Check CTF ERC1155 isApprovedForAll and send setApprovalForAll if needed."""
+    safe_cs = Web3.to_checksum_address(safe_address)
+    operator_cs = Web3.to_checksum_address(operator)
+    cache_key = (safe_cs.lower(), operator_cs.lower())
+
+    if cache_key in _approved_pairs:
+        return
+
+    ctf = w3.eth.contract(
+        address=Web3.to_checksum_address(CTF_ADDRESS), abi=ERC1155_ABI,
+    )
+    approved = ctf.functions.isApprovedForAll(safe_cs, operator_cs).call()
+    if approved:
+        _approved_pairs.add(cache_key)
+        return
+
+    log.info("APPROVAL_NEEDED safe=%s operator=%s", safe_cs, operator_cs)
+    approval_data = ctf.encode_abi("setApprovalForAll", [operator_cs, True])
+    inner_data = bytes.fromhex(approval_data.removeprefix("0x"))
+    _send_safe_tx(
+        w3, account, safe_address,
+        CTF_ADDRESS, inner_data, chain_id,
+        max_gas_price_gwei=max_gas_price_gwei,
+    )
+    _approved_pairs.add(cache_key)
+    log.info("APPROVAL_GRANTED safe=%s operator=%s", safe_cs, operator_cs)
+
+
 # ── Public API ──
 
 def get_usdc_balance(rpc_url: str, wallet: str) -> Decimal:
@@ -377,6 +423,7 @@ def merge_positions(
     amount: int,
     neg_risk: bool = False,
     chain_id: int = 137,
+    max_gas_price_gwei: int = 200,
 ) -> str:
     """Merge hedged UP+DOWN positions back to USDC via Gnosis Safe.
 
@@ -391,9 +438,19 @@ def merge_positions(
         target_label, condition_id, amount, neg_risk,
     )
 
+    # Ensure CTF approval for the merge target
+    operator = NEG_RISK_ADAPTER if neg_risk else CTF_ADDRESS
+    _ensure_approval(
+        w3, account, safe_address, operator, chain_id,
+        max_gas_price_gwei=max_gas_price_gwei,
+    )
+
     merge_target, merge_data = _encode_merge(condition_id, amount, neg_risk)
     inner_data = bytes.fromhex(merge_data.removeprefix("0x"))
-    tx_hash = _send_safe_tx(w3, account, safe_address, merge_target, inner_data, chain_id)
+    tx_hash = _send_safe_tx(
+        w3, account, safe_address, merge_target, inner_data, chain_id,
+        max_gas_price_gwei=max_gas_price_gwei,
+    )
     log.info("MERGE_CONFIRMED tx=%s", tx_hash)
     return tx_hash
 
@@ -406,6 +463,7 @@ def redeem_positions(
     neg_risk: bool = False,
     amount: int = 0,
     chain_id: int = 137,
+    max_gas_price_gwei: int = 200,
 ) -> str:
     """Redeem resolved positions on-chain via Gnosis Safe.
 
@@ -420,8 +478,18 @@ def redeem_positions(
         target_label, condition_id, neg_risk, amount,
     )
 
+    # Ensure CTF approval for the redeem target
+    operator = NEG_RISK_ADAPTER if neg_risk else CTF_ADDRESS
+    _ensure_approval(
+        w3, account, safe_address, operator, chain_id,
+        max_gas_price_gwei=max_gas_price_gwei,
+    )
+
     redeem_target, redeem_data = _encode_redeem(condition_id, neg_risk, amount)
     inner_data = bytes.fromhex(redeem_data.removeprefix("0x"))
-    tx_hash = _send_safe_tx(w3, account, safe_address, redeem_target, inner_data, chain_id)
+    tx_hash = _send_safe_tx(
+        w3, account, safe_address, redeem_target, inner_data, chain_id,
+        max_gas_price_gwei=max_gas_price_gwei,
+    )
     log.info("REDEEM_CONFIRMED tx=%s", tx_hash)
     return tx_hash

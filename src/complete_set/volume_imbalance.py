@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 
 log = logging.getLogger("cs.volume_imbalance")
