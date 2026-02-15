@@ -13,7 +13,7 @@ complete_set:
 
 
     # Hedge chase protection — max cents of upward reprice allowed (0 = freeze)
-  max_hedge_chase_cents: 0
+  max_hedge_chase_cents: 2
 
 
   # Time window
@@ -62,9 +62,6 @@ complete_set:
   # BTC tick count — minimum WS ticks before allowing entry (5 ticks ≈ 16s of price history)
   min_btc_ticks: 5
 
-  # Entry guard — floor for hedge-margin check (decoupled from min_edge)
-  min_entry_margin: 0.02
-
   # Min BTC range — block entries when BTC candle range is too flat for swing opportunities
   min_range_pct: 0.002              # 0.2% minimum BTC range before entry
 
@@ -85,3 +82,29 @@ complete_set:
     lag_trace: false
     btc_tick: true
     buffer_hold: true
+
+trend_rider:
+  enabled: true
+  dry_run: true
+  refresh_millis: 500
+  bankroll_usd: 100
+  min_seconds_to_end: 120
+  max_seconds_to_end: 480
+  momentum_lookback_sec: 60
+  momentum_threshold_usd: 80
+  min_favorite_price: 0.55
+  max_favorite_price: 0.80
+  min_underdog_ask: 0.20
+  min_combined_asks: 0.98
+  max_positions: 2
+  max_position_pct: 0.25
+  stop_loss_drop: 0.10
+  use_fok: true
+
+# Dashboard API
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:
+    - "http://localhost:4200"

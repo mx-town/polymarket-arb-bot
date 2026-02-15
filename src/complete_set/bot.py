@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,11 @@ from web3 import Web3
 
 from complete_set.config import load_complete_set_config
 from complete_set.engine import Engine
+from complete_set.events import consume, init_event_bus
+from complete_set.persistence.db import cleanup_old_data, init_db
+from complete_set.persistence.writer import BatchWriter
+from trend_rider.config import load_trend_rider_config
+from trend_rider.engine import TrendRiderEngine
 
 
 def _parse_args() -> argparse.Namespace:
@@ -204,11 +210,94 @@ def main():
 
     engine = Engine(client, cfg, w3=w3, account=account, rpc_url=rpc_url, funder_address=funder)
 
+    # Trend Rider engine — runs alongside complete-set
+    tr_cfg = load_trend_rider_config(raw_cfg)
+    tr_engine = None
+    if tr_cfg.enabled:
+        # DRY_RUN override: if CS is dry, TR must be dry too
+        if cfg.dry_run and not tr_cfg.dry_run:
+            from dataclasses import replace as dc_replace
+            tr_cfg = dc_replace(tr_cfg, dry_run=True)
+            log.warning("TR forced to dry_run=True because CS is dry_run")
+        tr_engine = TrendRiderEngine(client, tr_cfg, cs_engine=engine)
+        log.info(
+            "INIT TrendRider enabled (bankroll=$%s, dry=%s)",
+            tr_cfg.bankroll_usd, tr_cfg.dry_run,
+        )
+    else:
+        log.info("INIT TrendRider disabled")
+
     try:
-        asyncio.run(engine.run())
+        asyncio.run(_run_all(engine, cfg, tr_engine=tr_engine))
     except KeyboardInterrupt:
         log.info("%sSHUTDOWN user interrupt%s", C_YELLOW, C_RESET)
         sys.exit(0)
+
+
+async def _run_all(engine: Engine, cfg, tr_engine=None) -> None:
+    """Run engine + event dispatcher + persistence concurrently."""
+    # Initialize event bus and persistence
+    init_event_bus()
+    db_engine = init_db()
+    session_id = str(uuid.uuid4())[:8]
+    writer = BatchWriter(session_id)
+
+    # Record session start
+    import json
+    import time
+    from complete_set.persistence.schema import sessions
+    with db_engine.begin() as conn:
+        conn.execute(sessions.insert().values(
+            id=session_id,
+            started_at=time.time(),
+            mode="dry" if cfg.dry_run else "live",
+            config_snapshot=json.dumps({"bankroll_usd": float(cfg.bankroll_usd), "min_edge": float(cfg.min_edge)}),
+        ))
+
+    # Startup cleanup of old time-series data
+    cleanup_old_data(retention_days=30)
+
+    log.info("DASHBOARD │ event bus + persistence initialized (session=%s)", session_id)
+
+    # Import API app factory and start server
+    from complete_set.api import create_app
+    import uvicorn
+    api_app = create_app(engine, tr_engine=tr_engine)
+    api_config = uvicorn.Config(api_app, host="0.0.0.0", port=8000, log_level="warning")
+    api_server = uvicorn.Server(api_config)
+
+    from complete_set.api.routes_ws import broadcast_event
+
+    async def _event_dispatcher():
+        """Consume events and fan out to writer + WebSocket broadcast."""
+        while True:
+            try:
+                event = await consume()
+                await writer.enqueue(event)
+                await broadcast_event(event)
+            except Exception as e:
+                log.error("EVENT_DISPATCH │ error: %s", e)
+
+    tasks = [
+        engine.run(),
+        _event_dispatcher(),
+        writer.run_flush_loop(),
+        api_server.serve(),
+    ]
+    if tr_engine is not None:
+        tasks.append(tr_engine.run())
+
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        # Record session end time
+        with db_engine.begin() as conn:
+            conn.execute(
+                sessions.update()
+                .where(sessions.c.id == session_id)
+                .values(ended_at=time.time())
+            )
+        log.info("SESSION │ ended_at recorded for session=%s", session_id)
 
 
 if __name__ == "__main__":

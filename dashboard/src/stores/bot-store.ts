@@ -10,6 +10,7 @@ import type {
   TradeEvent,
   StateSnapshot,
   TickSnapshot,
+  TrendRiderState,
 } from "@/lib/types";
 
 // ─── State shape ───
@@ -24,6 +25,7 @@ interface BotState {
   config: ConfigState | null;
   meta: MetaState | null;
   tradeEvents: TradeEvent[];
+  trendRider: TrendRiderState | null;
 }
 
 // ─── Actions ───
@@ -72,6 +74,7 @@ export const useBotStore = create<BotState & BotActions>((set) => ({
   config: null,
   meta: null,
   tradeEvents: [],
+  trendRider: null,
 
   // Actions
   setConnected: (v) => set({ connected: v }),
@@ -85,15 +88,17 @@ export const useBotStore = create<BotState & BotActions>((set) => ({
       btc: snap.btc,
       config: snap.config,
       meta: snap.meta,
+      trendRider: snap.trend_rider ?? null,
     }),
 
   updateTick: (tick) =>
-    set({
+    set((state) => ({
       markets: tick.data.markets,
       exposure: tick.data.exposure,
       pnl: tick.data.pnl,
       bankroll: tick.data.bankroll,
-    }),
+      trendRider: tick.data.trend_rider ?? state.trendRider,
+    })),
 
   updateBtc: (btc) => set({ btc }),
 

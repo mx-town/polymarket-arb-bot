@@ -16,18 +16,19 @@ dependencies = [
     "websockets>=12.0",
     "fastapi[standard]",
     "uvicorn[standard]",
+    "sqlalchemy>=2.0",
 ]
 
 [project.scripts]
 late-entry = "late_entry.bot:main"
 complete-set = "complete_set.bot:main"
-dashboard = "complete_set.dashboard:main"
+trend-rider = "trend_rider.engine:main"
 
 [dependency-groups]
 dev = ["ruff", "pytest"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/late_entry", "src/complete_set"]
+packages = ["src/late_entry", "src/complete_set", "src/trend_rider"]
 
 [tool.ruff]
 line-length = 100

@@ -12,6 +12,7 @@ interface FunnelStage {
 export function PipelineFunnel() {
   const markets = useBotStore((s) => s.markets);
   const tradeEvents = useBotStore((s) => s.tradeEvents);
+  const trendRider = useBotStore((s) => s.trendRider);
 
   const totalMarkets = markets.length;
   const withPosition = markets.filter((m) => m.position !== null).length;
@@ -24,12 +25,30 @@ export function PipelineFunnel() {
   ).length;
   const merges = tradeEvents.filter((e) => e.type === "merge_complete").length;
 
-  const stages: FunnelStage[] = [
+  const csStages: FunnelStage[] = [
     { label: "Discovered", count: totalMarkets, color: "bg-accent-blue" },
     { label: "Entered", count: withPosition, color: "bg-accent-green" },
     { label: "Hedged", count: hedged, color: "bg-accent-orange" },
     { label: "Merged", count: merges, color: "bg-accent-purple" },
   ];
+
+  const trEntries = tradeEvents.filter(
+    (e) => e.data.strategy === "trend_rider" && e.type === "order_placed",
+  ).length;
+  const trFills = tradeEvents.filter(
+    (e) => e.data.strategy === "trend_rider" && e.type === "order_filled" && e.data.side === "BUY",
+  ).length;
+  const trHolding = trendRider?.meta.position_count ?? 0;
+
+  const trStages: FunnelStage[] = trendRider?.config.enabled
+    ? [
+        { label: "TR Signal", count: trEntries, color: "bg-accent-orange" },
+        { label: "TR Filled", count: trFills, color: "bg-accent-green" },
+        { label: "TR Holding", count: trHolding, color: "bg-accent-blue" },
+      ]
+    : [];
+
+  const stages = [...csStages, ...trStages];
 
   const maxCount = Math.max(1, ...stages.map((s) => s.count));
 

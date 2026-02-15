@@ -8,6 +8,7 @@ export interface TickSnapshot {
     exposure: ExposureBreakdown;
     pnl: PnLState;
     bankroll: BankrollState;
+    trend_rider?: TrendRiderState;
   };
 }
 
@@ -79,6 +80,7 @@ export interface TradeEvent {
     edge?: number;
     tx_hash?: string;
     reason?: string;
+    strategy?: string;
   };
   slug?: string;
 }
@@ -90,6 +92,59 @@ export interface OrderInfo {
   price: number;
   size: number;
   matched: number;
+}
+
+export interface TrendPosition {
+  slug: string;
+  direction: "UP" | "DOWN";
+  shares: number;
+  entry_price: number;
+  cost: number;
+  seconds_held: number;
+}
+
+export interface TrendRiderState {
+  positions: TrendPosition[];
+  exposure: number;
+  pnl: { realized: number };
+  config: { enabled: boolean; dry_run: boolean; bankroll_usd: number };
+  meta: { tick_count: number; avg_tick_ms: number; position_count: number };
+}
+
+export interface SessionSummary {
+  id: string;
+  started_at: number;
+  ended_at: number | null;
+  mode: "dry" | "live";
+  config_snapshot: string;
+  trade_count: number;
+  merge_count: number;
+  final_pnl: number | null;
+}
+
+export interface SessionDetail {
+  session: SessionSummary;
+  trades: {
+    ts: number;
+    market_slug: string;
+    event_type: string;
+    direction: string;
+    side: string;
+    price: number;
+    shares: number;
+    reason: string;
+    strategy: string;
+  }[];
+  pnl_curve: { ts: number; realized: number; unrealized: number; total: number }[];
+  market_windows: {
+    slug: string;
+    market_type: string;
+    end_time: number;
+    entered_at: number;
+    exited_at: number | null;
+    outcome: string | null;
+    total_pnl: number | null;
+  }[];
 }
 
 export interface WsMessage {
@@ -107,6 +162,7 @@ export interface StateSnapshot {
   btc: BtcPriceData;
   config: ConfigState;
   meta: MetaState;
+  trend_rider?: TrendRiderState;
 }
 
 export interface ConfigState {

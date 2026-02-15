@@ -17,6 +17,7 @@ from decimal import Decimal
 
 import requests
 
+from complete_set.events import EventType, emit
 from complete_set.models import ZERO
 
 log = logging.getLogger("cs.binance_ws")
@@ -207,6 +208,15 @@ def _update_candle(price: Decimal) -> None:
         _market_window_start=cs._market_window_start,
         tick_count=cs.tick_count + 1,
     )
+    emit(EventType.BTC_PRICE, {
+        "price": float(_candle_state.current_price),
+        "open": float(_candle_state.open_price),
+        "high": float(_candle_state.high),
+        "low": float(_candle_state.low),
+        "deviation": float(_candle_state.deviation),
+        "range_pct": float(_candle_state.range_pct),
+    })
+
     if price != cs.current_price:
         global _last_btc_move_ts, _last_btc_move_dir
         delta = price - cs.current_price

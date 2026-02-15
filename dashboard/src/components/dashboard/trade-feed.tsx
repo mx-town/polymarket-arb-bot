@@ -9,6 +9,10 @@ const EVENT_COLORS: Record<string, string> = {
   hedge_complete: "text-accent-orange",
   merge_complete: "text-accent-purple",
   order_cancelled: "text-text-muted",
+  trend_entry: "text-accent-orange",
+  trend_fill: "text-accent-orange",
+  trend_stop: "text-accent-red",
+  trend_resolved: "text-accent-purple",
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -17,6 +21,10 @@ const EVENT_LABELS: Record<string, string> = {
   hedge_complete: "HEDGED",
   merge_complete: "MERGED",
   order_cancelled: "CANCEL",
+  trend_entry: "TR_ENTRY",
+  trend_fill: "TR_FILL",
+  trend_stop: "TR_STOP",
+  trend_resolved: "TR_RESOLVED",
 };
 
 function TradeRow({ event }: { event: TradeEvent }) {

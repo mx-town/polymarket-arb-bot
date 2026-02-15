@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
+from complete_set.events import EventType, emit
 from complete_set.models import ZERO
 
 log = logging.getLogger("cs.volume_imbalance")
@@ -103,6 +104,12 @@ def _flush_bucket() -> None:
         short_volume_btc=Decimal(str(short_total)),
         last_update=now,
     )
+
+    emit(EventType.VOLUME_STATE, {
+        "short_imbalance": float(short_imb),
+        "medium_imbalance": float(med_imb),
+        "short_volume_btc": float(short_total),
+    })
 
 
 def _on_agg_trade(qty: float, is_buyer_maker: bool) -> None:

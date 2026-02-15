@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { CountdownTimer } from "@/components/ui/CountdownTimer";
 import type { MarketState } from "@/lib/types";
 
-function MarketCard({ market }: { market: MarketState }) {
+function MarketCard({ market, strategy }: { market: MarketState; strategy?: "CS" | "TR" }) {
   const pos = market.position;
 
   // Determine position status
@@ -36,6 +36,11 @@ function MarketCard({ market }: { market: MarketState }) {
             )}
           </div>
         </div>
+        {strategy && (
+          <Badge variant={strategy === "CS" ? "info" : "warning"}>
+            {strategy}
+          </Badge>
+        )}
         <Badge
           variant={
             posStatus === "hedged"
@@ -189,6 +194,9 @@ export default function MarketsPage() {
 
   const markets = useBotStore((s) => s.markets);
   const connected = useBotStore((s) => s.connected);
+  const trendRider = useBotStore((s) => s.trendRider);
+
+  const trSlugs = new Set(trendRider?.positions.map((p) => p.slug) ?? []);
 
   if (!connected) {
     return (
@@ -229,7 +237,7 @@ export default function MarketsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {markets.map((market) => (
-            <MarketCard key={market.slug} market={market} />
+            <MarketCard key={market.slug} market={market} strategy={trSlugs.has(market.slug) ? "TR" : market.position ? "CS" : undefined} />
           ))}
         </div>
       )}

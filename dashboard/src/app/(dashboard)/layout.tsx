@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useBotStore } from "@/stores/bot-store";
+import { useSessionStore } from "@/stores/session-store";
 import { cn, formatUsd, formatCountdown } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
 
 const navItems = [
+  { href: "/sessions", label: "Sessions" },
   { href: "/overview", label: "Overview" },
   { href: "/markets", label: "Markets" },
   { href: "/history", label: "History" },
@@ -19,7 +21,9 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { connected, pnl, btc, meta } = useBotStore();
+  const { connected, pnl, btc, meta, trendRider } = useBotStore();
+  const sessionMode = useSessionStore((s) => s.mode);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
 
   const uptimeDisplay = meta
     ? formatCountdown(meta.uptime_sec)
@@ -58,19 +62,34 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        {/* Bot status */}
-        <div className="border-t border-border-primary px-5 py-4">
+        {/* Bot status + mode indicator */}
+        <div className="border-t border-border-primary px-5 py-4 space-y-2">
           <div className="flex items-center gap-2">
             <div
               className={cn(
                 "h-2 w-2 rounded-full",
-                connected ? "bg-accent-green" : "bg-accent-red",
+                sessionMode === "live" && connected
+                  ? "bg-accent-green"
+                  : sessionMode === "replay"
+                    ? "bg-accent-blue"
+                    : "bg-accent-red",
               )}
             />
             <span className="text-xs text-text-secondary">
-              {connected ? "Connected" : "Disconnected"}
+              {sessionMode === "live"
+                ? connected
+                  ? "Live"
+                  : "Disconnected"
+                : sessionMode === "replay"
+                  ? "Replay"
+                  : "No session"}
             </span>
           </div>
+          {sessionMode === "replay" && activeSessionId && (
+            <p className="truncate text-xs font-mono text-text-muted">
+              {activeSessionId}
+            </p>
+          )}
         </div>
       </aside>
 
@@ -95,7 +114,7 @@ export default function DashboardLayout({
           {/* PnL summary */}
           <div className="flex items-center gap-6">
             <div className="text-right">
-              <span className="text-xs text-text-muted">PnL</span>
+              <span className="text-xs text-text-muted">CS PnL</span>
               <p
                 className={cn(
                   "font-mono text-sm font-semibold",
@@ -103,6 +122,34 @@ export default function DashboardLayout({
                 )}
               >
                 {formatUsd(pnl.total)}
+              </p>
+            </div>
+
+            {trendRider?.config.enabled && (
+              <div className="text-right">
+                <span className="text-xs text-text-muted">TR PnL</span>
+                <p
+                  className={cn(
+                    "font-mono text-sm font-semibold",
+                    trendRider.pnl.realized >= 0 ? "text-profit" : "text-loss",
+                  )}
+                >
+                  {formatUsd(trendRider.pnl.realized)}
+                </p>
+              </div>
+            )}
+
+            <div className="text-right">
+              <span className="text-xs text-text-muted">Total</span>
+              <p
+                className={cn(
+                  "font-mono text-sm font-semibold",
+                  (pnl.total + (trendRider?.pnl.realized ?? 0)) >= 0
+                    ? "text-profit"
+                    : "text-loss",
+                )}
+              >
+                {formatUsd(pnl.total + (trendRider?.pnl.realized ?? 0))}
               </p>
             </div>
 

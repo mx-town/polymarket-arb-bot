@@ -18,6 +18,7 @@ from decimal import Decimal
 from py_clob_client.clob_types import OrderType
 
 from complete_set.binance_ws import get_candle_state, get_last_btc_move, is_btc_trending, set_market_window, start_binance_ws
+from complete_set.events import EventType, emit
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book, prefetch_order_books
@@ -134,8 +135,6 @@ class Engine:
         log.info("  Swing filter    : %s (lookback=%ds, max_ask=%s)",
                  "ON" if self._cfg.swing_filter_enabled else "OFF",
                  self._cfg.swing_lookback_sec, self._cfg.swing_max_ask)
-        log.info("  Entry margin    : %s (floor for hedge-margin guard)",
-                 self._cfg.min_entry_margin)
         log.info("  Min BTC range   : %s (block entries when flat)",
                  self._cfg.min_range_pct)
         log.info("  Momentum filter : %s (lookback=%ds, threshold=$%s)",
@@ -281,6 +280,9 @@ class Engine:
             self._last_summary_log = now
             self._log_summary(now)
 
+        # Emit tick snapshot for dashboard
+        self._emit_tick_snapshot(now)
+
     def _apply_discovery(self, new_markets: list[GabagoolMarket], now: float) -> None:
         """Apply results from background discovery."""
         old_market_lookup = {m.slug: m for m in self._active_markets}
@@ -338,6 +340,16 @@ class Engine:
             return
 
         self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
+        candle = get_candle_state()
+        emit(EventType.ORDER_FILLED, {
+            "direction": state.direction.value,
+            "side": state.side,
+            "price": float(state.price),
+            "shares": float(filled_shares),
+            "btc_price_at": float(candle.current_price),
+            "order_id": state.order_id,
+            "strategy": "complete_set",
+        }, market_slug=state.market.slug)
         # Clear entry price cap on fill (so hedge evaluation isn't blocked)
         self._entry_price_caps.pop(state.market.slug, None)
         # Store dynamic edge from first leg entry
@@ -367,6 +379,12 @@ class Engine:
                     "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
                     C_GREEN, state.market.slug, hedged, edge, C_RESET,
                 )
+                emit(EventType.HEDGE_COMPLETE, {
+                    "hedged_shares": float(hedged),
+                    "edge": float(edge),
+                    "direction": state.direction.value,
+                    "strategy": "complete_set",
+                }, market_slug=state.market.slug)
                 self._order_mgr.cancel_market_orders(
                     self._client, state.market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
                 )
@@ -434,6 +452,11 @@ class Engine:
                         "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
                         C_GREEN, slug, merged_display, tx_hash, C_RESET,
                     )
+                    emit(EventType.MERGE_COMPLETE, {
+                        "merged_shares": float(merged_display),
+                        "tx_hash": tx_hash,
+                        "strategy": "complete_set",
+                    }, market_slug=slug)
                 except Exception as e:
                     failures = self._merge_failures.get(slug, 0) + 1
                     self._merge_failures[slug] = failures
@@ -468,6 +491,11 @@ class Engine:
                     "DRY_MERGE %s │ merged=%s shares → freed $%s │ gas=-$%s",
                     market.slug, hedged, hedged, gas_cost,
                 )
+                emit(EventType.MERGE_COMPLETE, {
+                    "merged_shares": float(hedged),
+                    "tx_hash": "dry_run",
+                    "strategy": "complete_set",
+                }, market_slug=market.slug)
                 # Belt-and-suspenders: cancel any remaining orders after merge
                 self._order_mgr.cancel_market_orders(
                     self._client, market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
@@ -607,10 +635,21 @@ class Engine:
         entered = quotable_now - self._prev_quotable_slugs
         exited = self._prev_quotable_slugs - quotable_now
 
+        market_by_slug = {m.slug: m for m in self._active_markets}
         for slug in sorted(entered):
             log.info("%sENTER window │ %s%s", C_GREEN, slug, C_RESET)
+            m = market_by_slug.get(slug)
+            if m:
+                emit(EventType.MARKET_ENTERED, {
+                    "market_type": m.market_type,
+                    "end_time": m.end_time,
+                    "up_token_id": m.up_token_id,
+                    "down_token_id": m.down_token_id,
+                    "strategy": "complete_set",
+                }, market_slug=slug)
         for slug in sorted(exited):
             log.info("%sEXIT  window │ %s%s", C_YELLOW, slug, C_RESET)
+            emit(EventType.MARKET_EXITED, {"strategy": "complete_set"}, market_slug=slug)
 
         self._prev_quotable_slugs = quotable_now
 
@@ -667,6 +706,14 @@ class Engine:
             vs = get_volume_state()
             if not vs.is_stale:
                 vol_str = f"  vol={vs.short_imbalance:+.3f}/{vs.medium_imbalance:+.3f} ({vs.short_volume_btc:.0f}BTC)"
+
+        emit(EventType.PNL_SNAPSHOT, {
+            "realized": float(realized),
+            "unrealized": float(unrealized),
+            "total": float(total_pnl),
+            "exposure": float(exposure),
+            "exposure_pct": float(pct_used),
+        })
 
         # ── Box top ──
         log.info("%s┌─ SUMMARY ─────────────────────────────────────────%s%s", C_BOLD, session_str, C_RESET)
@@ -806,21 +853,6 @@ class Engine:
                       reason.split("_")[0], slug, side_label, maker_price, self._cfg.min_entry_price)
             return
 
-        # Hedge margin guard: reject if no profitable hedge path exists at current book
-        # Uses min_entry_margin as floor, decoupled from dynamic_edge (which controls hedge trigger)
-        opp_bid = down_bid if direction == MRDirection.BUY_UP else up_bid
-        opp_ask = down_ask if direction == MRDirection.BUY_UP else up_ask
-        if opp_bid is not None:
-            opp_maker = min(opp_bid + TICK_SIZE, opp_ask - TICK_SIZE)
-            entry_margin = max(dynamic_edge, self._cfg.min_entry_margin)
-            if maker_price + opp_maker >= ONE - entry_margin:
-                log.debug(
-                    "%s_SKIP %s │ no hedge path (entry=%s + hedge=%s = %.3f >= %.3f)",
-                    reason.split("_")[0], slug, maker_price, opp_maker,
-                    maker_price + opp_maker, ONE - entry_margin,
-                )
-                return
-
         shares = calculate_balanced_shares(
             slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
         )
@@ -897,6 +929,16 @@ class Engine:
             reserved_hedge_notional=hedge_reserve,
             entry_dynamic_edge=dynamic_edge,
         )
+        candle = get_candle_state()
+        emit(EventType.ORDER_PLACED, {
+            "direction": target_dir.value,
+            "side": "BUY",
+            "price": float(maker_price),
+            "shares": float(shares),
+            "reason": reason,
+            "btc_price_at": float(candle.current_price),
+            "strategy": "complete_set",
+        }, market_slug=slug)
 
     def _place_hedge_leg(
         self,
@@ -1045,6 +1087,195 @@ class Engine:
             on_fill=self._handle_fill,
             order_type=OrderType.GTC,
         )
+        candle = get_candle_state()
+        emit(EventType.ORDER_PLACED, {
+            "direction": hedge_direction.value,
+            "side": "BUY",
+            "price": float(maker_price),
+            "shares": float(hedge_shares),
+            "reason": "HEDGE_LEG",
+            "btc_price_at": float(candle.current_price),
+            "strategy": "complete_set",
+        }, market_slug=slug)
+
+    def _emit_tick_snapshot(self, now: float) -> None:
+        """Emit a TICK_SNAPSHOT event with current market state for the dashboard."""
+        markets_data = []
+        for market in self._active_markets:
+            slug = market.slug
+            seconds_to_end = int(market.end_time - now)
+            up_book = get_top_of_book(self._client, market.up_token_id)
+            down_book = get_top_of_book(self._client, market.down_token_id)
+            inv = self._inventory.get_inventory(slug)
+
+            m = {
+                "slug": slug,
+                "seconds_to_end": seconds_to_end,
+                "up_bid": float(up_book.best_bid) if up_book and up_book.best_bid else None,
+                "up_ask": float(up_book.best_ask) if up_book and up_book.best_ask else None,
+                "down_bid": float(down_book.best_bid) if down_book and down_book.best_bid else None,
+                "down_ask": float(down_book.best_ask) if down_book and down_book.best_ask else None,
+                "up_bid_size": float(up_book.best_bid_size) if up_book and up_book.best_bid_size else None,
+                "up_ask_size": float(up_book.best_ask_size) if up_book and up_book.best_ask_size else None,
+                "down_bid_size": float(down_book.best_bid_size) if down_book and down_book.best_bid_size else None,
+                "down_ask_size": float(down_book.best_ask_size) if down_book and down_book.best_ask_size else None,
+            }
+            ua = up_book.best_ask if up_book and up_book.best_ask else None
+            da = down_book.best_ask if down_book and down_book.best_ask else None
+            m["edge"] = float(ONE - (ua + da)) if ua and da else None
+
+            if inv.up_shares > ZERO or inv.down_shares > ZERO:
+                hedged = min(inv.up_shares, inv.down_shares)
+                unrealized = float(hedged * ONE - hedged * ((inv.up_vwap or ZERO) + (inv.down_vwap or ZERO)))
+                m["position"] = {
+                    "up_shares": float(inv.up_shares),
+                    "down_shares": float(inv.down_shares),
+                    "up_vwap": float(inv.up_vwap) if inv.up_vwap else None,
+                    "down_vwap": float(inv.down_vwap) if inv.down_vwap else None,
+                    "hedged": float(hedged),
+                    "imbalance": float(inv.imbalance),
+                    "unrealized_pnl": unrealized,
+                }
+            markets_data.append(m)
+
+        # Exposure + PnL
+        all_inv = self._inventory.get_all_inventories()
+        open_orders = self._order_mgr.get_open_orders()
+        exposure = calculate_exposure(open_orders, all_inv)
+        ord_notional, unhedged_exp, hedged_locked, _ = calculate_exposure_breakdown(open_orders, all_inv)
+        bankroll = self._cfg.bankroll_usd
+        pct_used = float((exposure / bankroll * 100)) if bankroll > ZERO else 0
+
+        total_unrealized = ZERO
+        for _slug, inv in all_inv.items():
+            hedged = min(inv.up_shares, inv.down_shares)
+            if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+                total_unrealized += hedged * ONE - hedged * (inv.up_vwap + inv.down_vwap)
+
+        emit(EventType.TICK_SNAPSHOT, {
+            "markets": markets_data,
+            "exposure": {
+                "total": float(exposure),
+                "orders": float(ord_notional),
+                "unhedged": float(unhedged_exp),
+                "hedged": float(hedged_locked),
+            },
+            "pnl": {
+                "realized": float(self._inventory.session_realized_pnl),
+                "unrealized": float(total_unrealized),
+                "total": float(self._inventory.session_realized_pnl + total_unrealized),
+            },
+            "bankroll": {
+                "usd": float(bankroll),
+                "pct_used": pct_used,
+                "wallet": self._cached_wallet_bal,
+            },
+        })
+
+    def get_state_snapshot(self) -> dict:
+        """Return full live state snapshot for REST API. Safe to call from async context."""
+        now = time.time()
+        markets = []
+        for market in self._active_markets:
+            slug = market.slug
+            inv = self._inventory.get_inventory(slug)
+            up_book = get_top_of_book(self._client, market.up_token_id)
+            down_book = get_top_of_book(self._client, market.down_token_id)
+            orders = []
+            for token_id in (market.up_token_id, market.down_token_id):
+                order = self._order_mgr.get_order(token_id)
+                if order:
+                    orders.append({
+                        "token_id": token_id,
+                        "side": order.side,
+                        "direction": order.direction.value if order.direction else None,
+                        "price": float(order.price),
+                        "size": float(order.size),
+                        "matched": float(order.matched_size),
+                    })
+            markets.append({
+                "slug": slug,
+                "end_time": market.end_time,
+                "seconds_to_end": int(market.end_time - now),
+                "market_type": market.market_type,
+                "completed": slug in self._completed_markets,
+                "up_bid": float(up_book.best_bid) if up_book and up_book.best_bid else None,
+                "up_ask": float(up_book.best_ask) if up_book and up_book.best_ask else None,
+                "down_bid": float(down_book.best_bid) if down_book and down_book.best_bid else None,
+                "down_ask": float(down_book.best_ask) if down_book and down_book.best_ask else None,
+                "position": {
+                    "up_shares": float(inv.up_shares),
+                    "down_shares": float(inv.down_shares),
+                    "up_vwap": float(inv.up_vwap) if inv.up_vwap else None,
+                    "down_vwap": float(inv.down_vwap) if inv.down_vwap else None,
+                    "imbalance": float(inv.imbalance),
+                } if inv.up_shares > ZERO or inv.down_shares > ZERO else None,
+                "orders": orders,
+            })
+
+        all_inv = self._inventory.get_all_inventories()
+        open_orders = self._order_mgr.get_open_orders()
+        exposure = calculate_exposure(open_orders, all_inv)
+        ord_notional, unhedged_exp, hedged_locked, _ = calculate_exposure_breakdown(open_orders, all_inv)
+        bankroll = self._cfg.bankroll_usd
+
+        total_unrealized = ZERO
+        for _slug, inv in all_inv.items():
+            hedged = min(inv.up_shares, inv.down_shares)
+            if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
+                total_unrealized += hedged * ONE - hedged * (inv.up_vwap + inv.down_vwap)
+
+        candle = get_candle_state()
+
+        return {
+            "markets": markets,
+            "exposure": {
+                "total": float(exposure),
+                "orders": float(ord_notional),
+                "unhedged": float(unhedged_exp),
+                "hedged": float(hedged_locked),
+            },
+            "pnl": {
+                "realized": float(self._inventory.session_realized_pnl),
+                "unrealized": float(total_unrealized),
+                "total": float(self._inventory.session_realized_pnl + total_unrealized),
+            },
+            "bankroll": {
+                "usd": float(bankroll),
+                "pct_used": float((exposure / bankroll * 100)) if bankroll > ZERO else 0,
+                "wallet": self._cached_wallet_bal,
+            },
+            "btc": {
+                "price": float(candle.current_price),
+                "open": float(candle.open_price),
+                "high": float(candle.high),
+                "low": float(candle.low),
+                "deviation": float(candle.deviation),
+                "range_pct": float(candle.range_pct),
+            },
+            "config": {
+                "dry_run": self._cfg.dry_run,
+                "min_edge": float(self._cfg.min_edge),
+                "bankroll_usd": float(bankroll),
+                "assets": self._cfg.assets,
+            },
+            "meta": {
+                "tick_count": self._tick_count,
+                "avg_tick_ms": self._tick_total_ms / self._tick_count if self._tick_count > 0 else 0,
+                "uptime_sec": int(now - self._start_time),
+            },
+        }
+
+    def get_active_slugs(self) -> set[str]:
+        """Slugs with open orders or non-zero inventory (for TR exclusion)."""
+        slugs = set()
+        for token_id, order in self._order_mgr.get_open_orders().items():
+            slugs.add(order.market.slug)
+        for slug, inv in self._inventory.get_all_inventories().items():
+            if inv.up_shares > ZERO or inv.down_shares > ZERO:
+                slugs.add(slug)
+        slugs |= self._completed_markets
+        return slugs
 
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
         """Two-phase hedge: buy cheap leg first, then hedge the other when profitable."""
@@ -1239,6 +1470,10 @@ class Engine:
         # ── Phase 2: One leg filled — hedge the other if edge is sufficient ──
         #    (same for both SH_ENTRY and MR_ENTRY first legs)
         if has_up and not has_down:
+            # Cancel remaining first-leg UP order to prevent further accumulation
+            if self._order_mgr.has_order(market.up_token_id):
+                self._order_mgr.cancel_order(
+                    self._client, market.up_token_id, "FIRST_LEG_FILLED", self._handle_fill)
             self._place_hedge_leg(
                 market, slug, inv, dynamic_edge, seconds_to_end, exposure,
                 first_side="UP", hedge_direction=Direction.DOWN,
@@ -1250,6 +1485,10 @@ class Engine:
             return
 
         if has_down and not has_up:
+            # Cancel remaining first-leg DOWN order to prevent further accumulation
+            if self._order_mgr.has_order(market.down_token_id):
+                self._order_mgr.cancel_order(
+                    self._client, market.down_token_id, "FIRST_LEG_FILLED", self._handle_fill)
             self._place_hedge_leg(
                 market, slug, inv, dynamic_edge, seconds_to_end, exposure,
                 first_side="DOWN", hedge_direction=Direction.UP,

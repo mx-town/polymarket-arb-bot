@@ -1,4 +1,4 @@
-import type { StateSnapshot } from "@/lib/types";
+import type { StateSnapshot, SessionSummary, SessionDetail } from "@/lib/types";
 
 const BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -48,4 +48,18 @@ export function fetchPnlHistory(
   params?: Record<string, string>,
 ): Promise<{ ts: number; realized: number; unrealized: number; total: number }[]> {
   return apiFetch("/api/v1/pnl/history", params);
+}
+
+/** Fetch sessions with stats */
+export function fetchSessions(
+  limit = 50,
+): Promise<SessionSummary[]> {
+  return apiFetch("/api/v1/sessions", { limit: String(limit) });
+}
+
+/** Fetch full session detail */
+export function fetchSessionDetail(
+  sessionId: string,
+): Promise<SessionDetail> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`);
 }

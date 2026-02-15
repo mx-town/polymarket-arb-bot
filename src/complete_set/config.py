@@ -88,9 +88,6 @@ class CompleteSetConfig:
     abandon_sell_enabled: bool = True
     abandon_min_bid: Decimal = Decimal("0.03")
 
-    # Entry guard — floor for hedge-margin check (decoupled from min_edge)
-    min_entry_margin: Decimal = Decimal("0.02")
-
     # Min BTC range — block entries when BTC is too flat for swing opportunities
     min_range_pct: Decimal = Decimal("0.002")  # 0.2%
 
@@ -144,9 +141,6 @@ def validate_config(cfg: CompleteSetConfig) -> None:
             errors.append(
                 f"mr_max_range_pct must be > 0 when range filter enabled, got {cfg.mr_max_range_pct}"
             )
-
-    if not (ZERO < cfg.min_entry_margin <= Decimal("0.10")):
-        errors.append(f"min_entry_margin must be in (0, 0.10], got {cfg.min_entry_margin}")
 
     if not (0 < cfg.min_entry_price < cfg.max_entry_price < Decimal("0.50")):
         errors.append(
@@ -245,8 +239,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         # Abandon sell
         abandon_sell_enabled=cs.get("abandon_sell_enabled", True),
         abandon_min_bid=Decimal(str(cs.get("abandon_min_bid", "0.03"))),
-        # Entry guard + range filter
-        min_entry_margin=Decimal(str(cs.get("min_entry_margin", "0.02"))),
+        # Range filter
         min_range_pct=Decimal(str(cs.get("min_range_pct", "0.002"))),
         # Swing filter
         swing_filter_enabled=cs.get("swing_filter_enabled", True),

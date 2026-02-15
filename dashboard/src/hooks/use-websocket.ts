@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { useBotStore } from "@/stores/bot-store";
+import { useSessionStore } from "@/stores/session-store";
 import type { WsMessage, StateSnapshot, TickSnapshot, BtcPriceData, TradeEvent } from "@/lib/types";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/live";
@@ -13,6 +14,8 @@ export function useWebSocket() {
   const backoffRef = useRef(1_000);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const sessionMode = useSessionStore((s) => s.mode);
 
   const {
     setConnected,
@@ -98,6 +101,19 @@ export function useWebSocket() {
   }, [setConnected, updateFromSnapshot, updateTick, updateBtc, addTradeEvent, clearTimers]);
 
   useEffect(() => {
+    // Only connect WebSocket in live mode
+    if (sessionMode !== "live") {
+      // Disconnect if switching away from live
+      clearTimers();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnected(false);
+      return;
+    }
+
     connect();
 
     return () => {
@@ -109,5 +125,5 @@ export function useWebSocket() {
       }
       setConnected(false);
     };
-  }, [connect, clearTimers, setConnected]);
+  }, [connect, clearTimers, setConnected, sessionMode]);
 }
