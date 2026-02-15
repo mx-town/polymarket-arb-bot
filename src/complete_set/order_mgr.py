@@ -344,12 +344,14 @@ class OrderManager:
                     remaining = state.size - state.matched_size
                     delta = get_simulated_fill_size(
                         state.token_id, state.price, state.side, remaining,
+                        consumed=state.consumed_crossing,
                     )
                     if delta > ZERO:
                         new_matched = state.matched_size + delta
                         self._orders[token_id] = replace(
                             state,
                             matched_size=new_matched,
+                            consumed_crossing=state.consumed_crossing + delta,
                             last_status_check_at=now,
                         )
                         if on_fill:

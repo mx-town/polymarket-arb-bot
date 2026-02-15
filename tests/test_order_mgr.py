@@ -1,10 +1,10 @@
-"""Tests for OrderManager — FOK sentinel guard + order reconciliation."""
+"""Tests for OrderManager — FOK sentinel guard + order reconciliation + dry-run fill sim."""
 
 from __future__ import annotations
 
 import time
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from py_clob_client.clob_types import OrderType
 
@@ -146,3 +146,94 @@ class TestReconcileOrders:
         client.get_orders.side_effect = RuntimeError("network timeout")
         # Should not raise
         mgr.reconcile_orders(client)
+
+
+class TestConsumedCrossing:
+    """Dry-run fill sim should track consumed crossing to prevent double-counting."""
+
+    def _place_dry_order(self, mgr):
+        market = _make_market()
+        mgr.place_order(
+            client=None, market=market, token_id="111", direction=Direction.UP,
+            price=Decimal("0.50"), size=Decimal("20"), seconds_to_end=300,
+            reason="TEST",
+        )
+        return market
+
+    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    def test_consumed_passed_and_incremented(self, mock_sim):
+        """consumed_crossing should be passed to get_simulated_fill_size and grow after fills."""
+        mgr = OrderManager(dry_run=True)
+        self._place_dry_order(mgr)
+        fills = []
+
+        # First tick: sim returns 10 shares filled
+        mock_sim.return_value = Decimal("10")
+        mgr.check_pending_orders(client=None, on_fill=lambda s, d: fills.append(d))
+
+        # Verify consumed was passed as 0 on first call
+        _, kwargs = mock_sim.call_args
+        assert kwargs["consumed"] == ZERO
+
+        state = mgr.get_order("111")
+        assert state.consumed_crossing == Decimal("10")
+        assert state.matched_size == Decimal("10")
+        assert len(fills) == 1
+        assert fills[0] == Decimal("10")
+
+        # Second tick: sim returns 5 more
+        mock_sim.return_value = Decimal("5")
+        mgr.check_pending_orders(client=None, on_fill=lambda s, d: fills.append(d))
+
+        # Verify consumed was passed as 10 (accumulated from first fill)
+        _, kwargs = mock_sim.call_args
+        assert kwargs["consumed"] == Decimal("10")
+
+        state = mgr.get_order("111")
+        assert state.consumed_crossing == Decimal("15")
+        assert state.matched_size == Decimal("15")
+
+    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    def test_stale_book_prevents_double_fill(self, mock_sim):
+        """Same crossing volume across ticks should not produce additional fills."""
+        mgr = OrderManager(dry_run=True)
+        self._place_dry_order(mgr)
+
+        # First tick: 15 shares available, fill 15
+        mock_sim.return_value = Decimal("15")
+        mgr.check_pending_orders(client=None)
+
+        state = mgr.get_order("111")
+        assert state.consumed_crossing == Decimal("15")
+
+        # Second tick: sim returns 0 (no new liquidity beyond consumed)
+        mock_sim.return_value = ZERO
+        mgr.check_pending_orders(client=None)
+
+        # consumed_crossing unchanged — no new fill
+        state = mgr.get_order("111")
+        assert state.consumed_crossing == Decimal("15")
+        assert state.matched_size == Decimal("15")
+
+    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    def test_consumed_resets_on_new_order(self, mock_sim):
+        """A new order should start with consumed_crossing=0."""
+        mgr = OrderManager(dry_run=True)
+        market = _make_market()
+
+        # Place, fill partially, cancel
+        mgr.place_order(
+            client=None, market=market, token_id="111", direction=Direction.UP,
+            price=Decimal("0.50"), size=Decimal("20"), seconds_to_end=300,
+        )
+        mock_sim.return_value = Decimal("8")
+        mgr.check_pending_orders(client=None)
+        mgr.cancel_order(client=None, token_id="111", reason="REPLACE")
+
+        # Place new order on same token
+        mgr.place_order(
+            client=None, market=market, token_id="111", direction=Direction.UP,
+            price=Decimal("0.48"), size=Decimal("15"), seconds_to_end=280,
+        )
+        state = mgr.get_order("111")
+        assert state.consumed_crossing == ZERO

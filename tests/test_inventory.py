@@ -98,6 +98,32 @@ class TestReduceMerged:
         inv = tracker.get_inventory("test")
         assert inv.last_merge_at is not None
 
+    def test_full_merge_no_fp_residual(self):
+        """Merging all shares should produce exact ZERO, not 0E-N artifacts."""
+        tracker = InventoryTracker(dry_run=True)
+        tracker._inventory_by_market["test"] = MarketInventory(
+            up_shares=Decimal("16"),
+            down_shares=Decimal("16"),
+            up_cost=Decimal("7.36"),
+            down_cost=Decimal("7.84"),
+            filled_up_shares=Decimal("16"),
+            filled_down_shares=Decimal("16"),
+        )
+        tracker.reduce_merged("test", Decimal("16"))
+        inv = tracker.get_inventory("test")
+        # All fields should be canonical ZERO, not 0E-25 or similar
+        assert inv.up_shares == ZERO
+        assert inv.down_shares == ZERO
+        assert inv.up_cost == ZERO
+        assert inv.down_cost == ZERO
+        assert inv.filled_up_shares == ZERO
+        assert inv.filled_down_shares == ZERO
+        # Verify string representation is clean (catches 0E-N)
+        assert str(inv.up_cost) == "0"
+        assert str(inv.down_cost) == "0"
+        assert str(inv.filled_up_shares) == "0"
+        assert str(inv.filled_down_shares) == "0"
+
     def test_prior_merge_pnl_accumulated(self):
         """Merge PnL accumulates across multiple merges for CLEAR_INVENTORY display."""
         tracker = InventoryTracker(dry_run=True)
@@ -168,6 +194,30 @@ class TestClearMarket:
         tracker.clear_market("test")
         # hedged=0, unhedged cost booked as loss: 10 shares * 0.40 vwap = -$4.00
         assert tracker.session_realized_pnl == Decimal("-4.00")
+
+
+    def test_unhedged_with_resolution_bids(self):
+        """clear_market with final bids logs resolution estimate but doesn't change PnL accounting."""
+        tracker = InventoryTracker(dry_run=True)
+        tracker._inventory_by_market["test"] = MarketInventory(
+            up_shares=Decimal("10"), up_cost=Decimal("4.00"),
+        )
+        tracker.clear_market("test", up_bid=Decimal("0.95"), down_bid=Decimal("0.05"))
+        # PnL accounting unchanged: unhedged cost = 10 * 0.40 = $4.00 loss
+        # (resolution_est is logging-only, doesn't affect session_realized_pnl)
+        assert tracker.session_realized_pnl == Decimal("-4.00")
+
+    def test_clear_with_no_bids_still_works(self):
+        """clear_market without bids works exactly as before."""
+        tracker = InventoryTracker(dry_run=True)
+        tracker._inventory_by_market["test"] = MarketInventory(
+            up_shares=Decimal("10"),
+            down_shares=Decimal("10"),
+            up_cost=Decimal("4.00"),
+            down_cost=Decimal("4.00"),
+        )
+        tracker.clear_market("test")
+        assert tracker.session_realized_pnl == Decimal("2.00")
 
 
 class TestSetEntryDynamicEdge:

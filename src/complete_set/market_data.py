@@ -365,13 +365,18 @@ def prefetch_order_books(client, markets: list[GabagoolMarket]) -> None:
 
 def get_simulated_fill_size(
     token_id: str, price: Decimal, side: str, remaining: Decimal,
+    consumed: Decimal = Decimal("0"),
 ) -> Decimal:
     """Estimate fillable shares from cached book depth.
 
     For BUY at P:  crossing = asks with price <= P, queue = bids at P.
     For SELL at P: crossing = bids with price >= P, queue = asks at P.
-    Fillable = max(0, crossing - queue).
+    Fillable = max(0, crossing - queue - consumed).
     Returns min(fillable, remaining), or ZERO if no fresh cache.
+
+    ``consumed`` tracks how much crossing volume this order has already
+    filled across previous ticks, preventing double-counting of the same
+    liquidity (our dry fills don't remove asks from the real book).
     """
     cached = _full_book_cache.get(token_id)
     if cached is None:
@@ -387,13 +392,13 @@ def get_simulated_fill_size(
         crossing = sum(sz for px, sz in parsed_bids if px >= price)
         queue = sum(sz for px, sz in parsed_asks if px == price)
 
-    fillable = max(Decimal(0), crossing - queue)
+    fillable = max(Decimal(0), crossing - queue - consumed)
     result = min(fillable, remaining)
 
     if crossing > 0:
         log.debug(
-            "SIM_FILL %s %s @%s │ cross=%s fill=%s rem=%s",
-            token_id[:16], side, price, crossing, fillable, result,
+            "SIM_FILL %s %s @%s │ cross=%s queue=%s consumed=%s fill=%s rem=%s",
+            token_id[:16], side, price, crossing, queue, consumed, result, remaining,
         )
 
     return result

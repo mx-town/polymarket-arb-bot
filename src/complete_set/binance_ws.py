@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -24,10 +25,36 @@ log = logging.getLogger("cs.binance_ws")
 _last_btc_move_ts: float = 0.0   # epoch when BTC moved significantly
 _last_btc_move_dir: int = 0      # +1 = up, -1 = down
 
+# Price history ring buffer for momentum detection
+_price_history: deque[tuple[float, Decimal]] = deque(maxlen=60)  # (timestamp, price)
+
 
 def get_last_btc_move() -> tuple[float, int]:
     """Return (timestamp, direction) of the last significant BTC move."""
     return _last_btc_move_ts, _last_btc_move_dir
+
+
+def is_btc_trending(lookback_sec: int = 30, threshold: Decimal = Decimal("50")) -> tuple[bool, Decimal]:
+    """Check if BTC moved >threshold USD net in one direction over lookback_sec.
+
+    Returns (is_trending, net_move) where net_move is signed (positive = up).
+    """
+    if not _price_history:
+        return False, ZERO
+
+    now = time.time()
+    cutoff = now - lookback_sec
+    current_price = _price_history[-1][1]
+
+    # Find the oldest price within the lookback window
+    oldest_price = current_price
+    for ts, price in _price_history:
+        if ts >= cutoff:
+            oldest_price = price
+            break
+
+    net_move = current_price - oldest_price
+    return abs(net_move) > threshold, net_move
 
 
 @dataclass
@@ -155,6 +182,7 @@ def _update_candle(price: Decimal) -> None:
     """Update the module-level candle state with a new price tick."""
     global _candle_state
     now = time.time()
+    _price_history.append((now, price))
 
     cs = _candle_state
     if cs.open_price == ZERO:

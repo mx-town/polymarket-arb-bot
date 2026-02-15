@@ -150,3 +150,4 @@ class OrderState:
     seconds_to_end_at_entry: Optional[int] = None
     reserved_hedge_notional: Decimal = field(default_factory=lambda: Decimal("0"))
     entry_dynamic_edge: Decimal = field(default_factory=lambda: Decimal("0"))
+    consumed_crossing: Decimal = field(default_factory=lambda: Decimal("0"))

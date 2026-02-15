@@ -8,7 +8,7 @@ complete_set:
   bankroll_usd: 500
 
   # Edge
-  min_edge: 0.01
+  min_edge: 0.02
   hedge_edge_buffer: 0.0          # extra edge required above min_edge before hedging (was 0.005)
 
 
@@ -62,8 +62,15 @@ complete_set:
   # BTC tick count — minimum WS ticks before allowing entry (5 ticks ≈ 16s of price history)
   min_btc_ticks: 5
 
+  # BTC momentum filter — block entries during one-directional BTC moves
+  momentum_filter_enabled: true
+  momentum_lookback_sec: 30
+  momentum_threshold_usd: 50
+
   # Abandon — stop evaluating positions where hedge edge is deeply negative
   abandon_edge_threshold: -0.10
+  abandon_sell_enabled: true           # place GTC SELL at bid when abandoning
+  abandon_min_bid: 0.03               # don't sell at dust bids
 
   # Log filters — suppress noisy DEBUG patterns (true = shown, false = hidden)
   log_filters:

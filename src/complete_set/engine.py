@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from py_clob_client.clob_types import OrderType
 
-from complete_set.binance_ws import get_candle_state, get_last_btc_move, set_market_window, start_binance_ws
+from complete_set.binance_ws import get_candle_state, get_last_btc_move, is_btc_trending, set_market_window, start_binance_ws
 from complete_set.config import CompleteSetConfig
 from complete_set.inventory import InventoryTracker
 from complete_set.market_data import discover_markets, get_top_of_book, prefetch_order_books
@@ -134,6 +134,12 @@ class Engine:
         log.info("  Swing filter    : %s (lookback=%ds, max_ask=%s)",
                  "ON" if self._cfg.swing_filter_enabled else "OFF",
                  self._cfg.swing_lookback_sec, self._cfg.swing_max_ask)
+        log.info("  Momentum filter : %s (lookback=%ds, threshold=$%s)",
+                 "ON" if self._cfg.momentum_filter_enabled else "OFF",
+                 self._cfg.momentum_lookback_sec, self._cfg.momentum_threshold_usd)
+        log.info("  Abandon sell    : %s (min_bid=%s)",
+                 "ON" if self._cfg.abandon_sell_enabled else "OFF",
+                 self._cfg.abandon_min_bid)
         log.info("  Chase protect   : first-leg=ON, hedge_chase=%dc",
                  self._cfg.max_hedge_chase_cents)
         if not self._cfg.dry_run and self._w3 and self._account:
@@ -294,7 +300,14 @@ class Engine:
                         eligible_at=market.end_time + 60,
                     )
                     log.info("%sREDEEM_QUEUED %s U%s/D%s%s", C_YELLOW, slug, inv.up_shares, inv.down_shares, C_RESET)
-                self._inventory.clear_market(slug)
+                # Pass final book bids for resolution estimate logging
+                final_up_bid = final_dn_bid = None
+                if market:
+                    up_book = get_top_of_book(self._client, market.up_token_id)
+                    dn_book = get_top_of_book(self._client, market.down_token_id)
+                    final_up_bid = up_book.best_bid if up_book else None
+                    final_dn_bid = dn_book.best_bid if dn_book else None
+                self._inventory.clear_market(slug, up_bid=final_up_bid, down_bid=final_dn_bid)
                 clear_market_history(slug)
         for token_id in list(self._order_mgr.get_open_orders()):
             order = self._order_mgr.get_order(token_id)
@@ -927,6 +940,30 @@ class Engine:
                     "ABANDON %s │ edge=%.3f < %.3f │ position unhedgeable, stopping evaluation",
                     slug, edge, self._cfg.abandon_edge_threshold,
                 )
+                # Try to sell unhedged shares at bid instead of holding to resolution
+                if self._cfg.abandon_sell_enabled and hedge_bid is not None:
+                    # We're holding the FIRST side (not the hedge side) — sell that
+                    held_is_up = (first_side == "UP")
+                    held_token = market.up_token_id if held_is_up else market.down_token_id
+                    held_dir = Direction.UP if held_is_up else Direction.DOWN
+                    held_shares = inv.up_shares if held_is_up else inv.down_shares
+                    # Bid for the held side (not the hedge side)
+                    held_bid = (
+                        get_top_of_book(self._client, held_token).best_bid
+                        if get_top_of_book(self._client, held_token) else None
+                    )
+                    if held_bid is not None and held_bid >= self._cfg.abandon_min_bid and held_shares > ZERO:
+                        log.info(
+                            "%sABANDON_SELL %s │ %s @%s │ %s shares%s",
+                            C_YELLOW, slug, first_side, held_bid, held_shares, C_RESET,
+                        )
+                        self._order_mgr.place_order(
+                            self._client, market, held_token, held_dir,
+                            held_bid, held_shares, seconds_to_end, "ABANDON_SELL",
+                            on_fill=self._handle_fill,
+                            order_type=OrderType.GTC,
+                            side="SELL",
+                        )
                 return
             log.debug(
                 "HEDGE_SKIP %s │ combined=%.3f │ edge=%.3f < %.3f",
@@ -1117,6 +1154,15 @@ class Engine:
             # Volume state for direction prediction
             vol_state = get_volume_state() if self._cfg.volume_imbalance_enabled else None
 
+            # ── BTC momentum check ──
+            trending = False
+            net_move = ZERO
+            if self._cfg.momentum_filter_enabled:
+                trending, net_move = is_btc_trending(
+                    self._cfg.momentum_lookback_sec,
+                    self._cfg.momentum_threshold_usd,
+                )
+
             # ── Approach 1: Stop hunt (minutes 2-5) ──
             sh_signal = None
             if self._cfg.stop_hunt_enabled:
@@ -1132,6 +1178,9 @@ class Engine:
                     volume=vol_state,
                     volume_min_btc=self._cfg.volume_min_btc,
                     volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
+                    btc_trending=trending,
+                    btc_net_move=net_move,
+                    momentum_lookback_sec=self._cfg.momentum_lookback_sec,
                 )
 
                 if sh_signal.direction != MRDirection.SKIP:

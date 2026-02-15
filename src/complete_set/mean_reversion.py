@@ -161,6 +161,9 @@ def evaluate_stop_hunt(
     volume: VolumeState | None = None,
     volume_min_btc: Decimal = ZERO,
     volume_imbalance_threshold: Decimal = ZERO,
+    btc_trending: bool = False,
+    btc_net_move: Decimal = ZERO,
+    momentum_lookback_sec: int = 30,
 ) -> StopHuntSignal:
     """Evaluate whether to enter based on cheap token price in early candle window.
 
@@ -199,6 +202,11 @@ def evaluate_stop_hunt(
     if range_filter_enabled and rng > max_range_pct:
         return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP,
                               f"range {rng:.5f} > {max_range_pct} (trending)")
+
+    # BTC momentum filter — block entries during one-directional moves
+    if btc_trending:
+        return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP,
+                              f"BTC trending (Δ=${btc_net_move:.0f} over {momentum_lookback_sec}s)")
 
     # Check if either side is cheap enough
     up_cheap = up_ask <= max_first_leg

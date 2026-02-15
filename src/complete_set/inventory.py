@@ -260,8 +260,16 @@ class InventoryTracker:
         """Get inventory for a market, returns empty if not tracked."""
         return self._inventory_by_market.get(slug, MarketInventory())
 
-    def clear_market(self, slug: str) -> None:
-        """Remove inventory for a resolved/expired market."""
+    def clear_market(
+        self, slug: str,
+        up_bid: Decimal | None = None,
+        down_bid: Decimal | None = None,
+    ) -> None:
+        """Remove inventory for a resolved/expired market.
+
+        When up_bid/down_bid are provided, estimates the resolution value of
+        unhedged shares based on final book prices (logging-only).
+        """
         removed = self._inventory_by_market.pop(slug, None)
         if removed is None:
             return
@@ -298,16 +306,29 @@ class InventoryTracker:
         else:
             unhedged_str = "none"
 
+        # Resolution estimate: what unhedged shares are likely worth at final book prices
+        resolution_str = ""
+        if (unhedged_up > ZERO or unhedged_down > ZERO) and (up_bid is not None or down_bid is not None):
+            resolution_value = ZERO
+            if unhedged_up > ZERO and up_bid is not None:
+                resolution_value += unhedged_up * up_bid
+            if unhedged_down > ZERO and down_bid is not None:
+                resolution_value += unhedged_down * down_bid
+            true_pnl = all_pnl + resolution_value - unhedged_cost  # re-add the cost we subtracted, add resolution
+            # Actually: true_pnl = hedged_pnl + prior_merge_pnl + (resolution_value - unhedged_cost)
+            true_pnl = hedged_pnl + removed.prior_merge_pnl + resolution_value - unhedged_cost
+            resolution_str = f" │ resolution_est=${resolution_value.quantize(Decimal('0.01'))} (true_pnl=${true_pnl.quantize(Decimal('0.01'))})"
+
         color = C_GREEN if all_pnl >= ZERO else C_RED
         log.info(
             "%sCLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ hedged_pnl=$%s │ "
-            "unhedged=%s (loss=$%s) │ prior_merge_pnl=$%s │ net=$%s%s",
+            "unhedged=%s (loss=$%s) │ prior_merge_pnl=$%s │ net=$%s%s%s",
             color, slug, removed.up_shares, removed.down_shares,
             hedged,
             hedged_pnl.quantize(Decimal("0.01")),
             unhedged_str, unhedged_cost.quantize(Decimal("0.01")),
             removed.prior_merge_pnl.quantize(Decimal("0.01")),
-            all_pnl.quantize(Decimal("0.01")), C_RESET,
+            all_pnl.quantize(Decimal("0.01")), resolution_str, C_RESET,
         )
 
     def reduce_merged(self, slug: str, merged_shares: Decimal) -> None:
@@ -329,14 +350,16 @@ class InventoryTracker:
         new_up = max(ZERO, inv.up_shares - merged_shares)
         new_down = max(ZERO, inv.down_shares - merged_shares)
 
-        # Reduce cost proportionally to shares removed
-        if inv.up_shares > ZERO:
+        # Reduce cost proportionally to shares removed.
+        # Short-circuit when new shares are zero to avoid Decimal division
+        # producing 0E-N artifacts (e.g. 0/16 → 0E-25 → propagates as 1E-26).
+        if inv.up_shares > ZERO and new_up > ZERO:
             up_ratio = new_up / inv.up_shares
             up_cost = inv.up_cost * up_ratio
         else:
             up_ratio = ZERO
             up_cost = ZERO
-        if inv.down_shares > ZERO:
+        if inv.down_shares > ZERO and new_down > ZERO:
             down_ratio = new_down / inv.down_shares
             down_cost = inv.down_cost * down_ratio
         else:
@@ -344,8 +367,8 @@ class InventoryTracker:
             down_cost = ZERO
 
         # Reduce filled shares proportionally
-        new_filled_up = inv.filled_up_shares * up_ratio if inv.up_shares > ZERO else ZERO
-        new_filled_down = inv.filled_down_shares * down_ratio if inv.down_shares > ZERO else ZERO
+        new_filled_up = inv.filled_up_shares * up_ratio if up_ratio > ZERO else ZERO
+        new_filled_down = inv.filled_down_shares * down_ratio if down_ratio > ZERO else ZERO
 
         self._inventory_by_market[slug] = replace(
             inv,

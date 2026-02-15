@@ -79,6 +79,15 @@ class CompleteSetConfig:
     # Abandon — stop evaluating unhedgeable positions
     abandon_edge_threshold: Decimal = Decimal("-0.10")
 
+    # BTC momentum filter — block entries during one-directional moves
+    momentum_filter_enabled: bool = True
+    momentum_lookback_sec: int = 30
+    momentum_threshold_usd: Decimal = Decimal("50")
+
+    # Abandon sell — place GTC SELL at bid when abandoning unhedged positions
+    abandon_sell_enabled: bool = True
+    abandon_min_bid: Decimal = Decimal("0.03")
+
     # Swing filter (require opposite side was recently cheap)
     swing_filter_enabled: bool = True
     swing_lookback_sec: int = 180
@@ -140,6 +149,14 @@ def validate_config(cfg: CompleteSetConfig) -> None:
         errors.append(f"min_btc_ticks must be >= 1, got {cfg.min_btc_ticks}")
     if cfg.abandon_edge_threshold >= ZERO:
         errors.append(f"abandon_edge_threshold must be < 0, got {cfg.abandon_edge_threshold}")
+
+    if cfg.momentum_filter_enabled:
+        if cfg.momentum_lookback_sec <= 0:
+            errors.append(f"momentum_lookback_sec must be > 0, got {cfg.momentum_lookback_sec}")
+        if cfg.momentum_threshold_usd <= ZERO:
+            errors.append(f"momentum_threshold_usd must be > 0, got {cfg.momentum_threshold_usd}")
+    if cfg.abandon_sell_enabled and cfg.abandon_min_bid <= ZERO:
+        errors.append(f"abandon_min_bid must be > 0, got {cfg.abandon_min_bid}")
 
     if cfg.swing_filter_enabled:
         if cfg.swing_lookback_sec <= 0:
@@ -212,6 +229,13 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         # BTC tick count + abandon
         min_btc_ticks=int(cs.get("min_btc_ticks", 5)),
         abandon_edge_threshold=Decimal(str(cs.get("abandon_edge_threshold", "-0.10"))),
+        # BTC momentum filter
+        momentum_filter_enabled=cs.get("momentum_filter_enabled", True),
+        momentum_lookback_sec=int(cs.get("momentum_lookback_sec", 30)),
+        momentum_threshold_usd=Decimal(str(cs.get("momentum_threshold_usd", "50"))),
+        # Abandon sell
+        abandon_sell_enabled=cs.get("abandon_sell_enabled", True),
+        abandon_min_bid=Decimal(str(cs.get("abandon_min_bid", "0.03"))),
         # Swing filter
         swing_filter_enabled=cs.get("swing_filter_enabled", True),
         swing_lookback_sec=int(cs.get("swing_lookback_sec", 180)),

@@ -14,11 +14,14 @@ dependencies = [
     "pyyaml",
     "web3",
     "websockets>=12.0",
+    "fastapi[standard]",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
 late-entry = "late_entry.bot:main"
 complete-set = "complete_set.bot:main"
+dashboard = "complete_set.dashboard:main"
 
 [dependency-groups]
 dev = ["ruff", "pytest"]
