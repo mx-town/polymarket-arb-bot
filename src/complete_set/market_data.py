@@ -392,8 +392,8 @@ def get_simulated_fill_size(
 
     if crossing > 0:
         log.debug(
-            "SIM_FILL %s %s @ %s │ crossing=%s queue=%s fillable=%s remaining=%s → %s",
-            token_id[:16], side, price, crossing, queue, fillable, remaining, result,
+            "SIM_FILL %s %s @%s │ cross=%s fill=%s rem=%s",
+            token_id[:16], side, price, crossing, fillable, result,
         )
 
     return result

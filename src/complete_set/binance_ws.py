@@ -182,7 +182,7 @@ def _update_candle(price: Decimal) -> None:
     if price != cs.current_price:
         global _last_btc_move_ts, _last_btc_move_dir
         delta = price - cs.current_price
-        log.debug("BTC_TICK │ %.6f │ %s → %s │ Δ=%s", now, cs.current_price, price, delta)
+        log.debug("BTC_TICK │ %.2f → %.2f │ Δ=%.2f", cs.current_price, price, delta)
         if abs(delta) > 1:
             _last_btc_move_ts = now
             _last_btc_move_dir = 1 if delta > 0 else -1

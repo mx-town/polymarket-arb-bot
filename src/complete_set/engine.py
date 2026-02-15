@@ -101,6 +101,7 @@ class Engine:
         self._tick_max_ms: float = 0.0
         self._last_reconcile: float = 0.0
         self._entry_price_caps: dict[str, Decimal] = {}  # slug -> max price for re-entry
+        self._last_hedge_freeze: dict[str, Decimal] = {}  # token_id -> last frozen maker_price
 
     async def run(self) -> None:
         """Main event loop."""
@@ -342,6 +343,8 @@ class Engine:
             if remaining_imbalance < self._cfg.min_merge_shares:
                 # Fully hedged — mark complete and cancel orders
                 self._completed_markets.add(state.market.slug)
+                self._last_hedge_freeze.pop(state.market.up_token_id, None)
+                self._last_hedge_freeze.pop(state.market.down_token_id, None)
                 edge = ONE - (inv.up_vwap + inv.down_vwap) if inv.up_vwap and inv.down_vwap else ZERO
                 log.info(
                     "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
@@ -862,8 +865,8 @@ class Engine:
 
         hedge_reserve = shares * max(ZERO, ONE - dynamic_edge - maker_price)
         log.info(
-            "%s%s %s │ %s maker=%s (bid=%s) │ %s │ shares=%s │ %ds left%s",
-            C_GREEN, reason, slug, side_label, maker_price, target_bid, extra_log,
+            "%s%s %s │ %s @%s │ %s │ %ssh │ %ds%s",
+            C_GREEN, reason, slug, side_label, maker_price, extra_log,
             shares, seconds_to_end, C_RESET,
         )
 
@@ -926,8 +929,8 @@ class Engine:
                 )
                 return
             log.debug(
-                "HEDGE_SKIP %s │ %s_vwap=%s + %s_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
-                slug, first_side, first_vwap, hedge_side, maker_price, combined, edge, hedge_edge,
+                "HEDGE_SKIP %s │ combined=%.3f │ edge=%.3f < %.3f",
+                slug, combined, edge, hedge_edge,
             )
             return
 
@@ -954,10 +957,18 @@ class Engine:
                     # Upward reprice = chasing hedge — check tolerance
                     chase_tolerance = Decimal(self._cfg.max_hedge_chase_cents) * Decimal("0.01")
                     if maker_price > existing.price + chase_tolerance:
-                        log.info(
-                            "HEDGE_FREEZE %s │ %s %s→%s (keeping original price)",
-                            slug, hedge_side, existing.price, maker_price,
-                        )
+                        last_frozen = self._last_hedge_freeze.get(hedge_token)
+                        if last_frozen != maker_price:
+                            self._last_hedge_freeze[hedge_token] = maker_price
+                            log.info(
+                                "HEDGE_FREEZE %s │ %s %s→%s",
+                                slug, hedge_side, existing.price, maker_price,
+                            )
+                        else:
+                            log.debug(
+                                "HEDGE_FREEZE %s │ %s %s→%s (held)",
+                                slug, hedge_side, existing.price, maker_price,
+                            )
                         return  # Keep existing order at better price
                     else:
                         log.info(
@@ -965,6 +976,7 @@ class Engine:
                             slug, hedge_side, existing.price, maker_price, self._cfg.max_hedge_chase_cents,
                         )
                 # Downward reprice or within-tolerance upward — allow
+                self._last_hedge_freeze.pop(hedge_token, None)
                 self._order_mgr.cancel_order(
                     self._client, hedge_token, "REPRICE", self._handle_fill)
                 remaining_shares = hedge_shares - (existing.matched_size or ZERO)
@@ -977,9 +989,10 @@ class Engine:
                         on_fill=self._handle_fill, order_type=OrderType.GTC)
             return
 
+        self._last_hedge_freeze.pop(hedge_token, None)
         log.info(
-            "%sHEDGE_LEG %s │ %s maker=%s (bid=%s) │ %s_vwap=%s │ edge=%.3f │ shares=%s │ %ds left%s",
-            C_GREEN, slug, hedge_side, maker_price, hedge_bid, first_side, first_vwap, edge,
+            "%sHEDGE_LEG %s │ %s @%s │ %s_vwap=%s │ edge=%.3f │ %ssh │ %ds%s",
+            C_GREEN, slug, hedge_side, maker_price, first_side, first_vwap, edge,
             hedge_shares, seconds_to_end, C_RESET,
         )
 
