@@ -9,6 +9,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useBotStore } from "@/stores/bot-store";
+import { useChartHistoryStore } from "@/stores/chart-history-store";
 import { chartOptions } from "@/lib/chart-config";
 import { ChartContainer } from "./chart-container";
 
@@ -87,11 +88,16 @@ export function ProbabilityChart() {
     const market = markets[0];
     if (!market) return;
 
-    // Detect market rotation — clear chart
+    // Detect market rotation — hydrate from history
     if (market.slug !== currentSlugRef.current) {
       currentSlugRef.current = market.slug;
-      upSeriesRef.current.setData([]);
-      downSeriesRef.current.setData([]);
+      const history = useChartHistoryStore.getState().probSeries[market.slug] ?? [];
+      upSeriesRef.current.setData(
+        history.map((p) => ({ time: p.time as UTCTimestamp, value: p.up_ask * 100 })),
+      );
+      downSeriesRef.current.setData(
+        history.map((p) => ({ time: p.time as UTCTimestamp, value: p.down_ask * 100 })),
+      );
     }
 
     const time = Math.floor(Date.now() / 1000) as UTCTimestamp;

@@ -103,6 +103,7 @@ class Engine:
         self._last_reconcile: float = 0.0
         self._entry_price_caps: dict[str, Decimal] = {}  # slug -> max price for re-entry
         self._last_hedge_freeze: dict[str, Decimal] = {}  # token_id -> last frozen maker_price
+        self._market_exit_data: dict[str, dict] = {}  # slug -> PnL dict from clear_market()
 
     async def run(self) -> None:
         """Main event loop."""
@@ -313,7 +314,9 @@ class Engine:
                     dn_book = get_top_of_book(self._client, market.down_token_id)
                     final_up_bid = up_book.best_bid if up_book else None
                     final_dn_bid = dn_book.best_bid if dn_book else None
-                self._inventory.clear_market(slug, up_bid=final_up_bid, down_bid=final_dn_bid)
+                exit_data = self._inventory.clear_market(slug, up_bid=final_up_bid, down_bid=final_dn_bid)
+                if exit_data is not None:
+                    self._market_exit_data[slug] = exit_data
                 clear_market_history(slug)
         for token_id in list(self._order_mgr.get_open_orders()):
             order = self._order_mgr.get_order(token_id)
@@ -649,7 +652,12 @@ class Engine:
                 }, market_slug=slug)
         for slug in sorted(exited):
             log.info("%sEXIT  window │ %s%s", C_YELLOW, slug, C_RESET)
-            emit(EventType.MARKET_EXITED, {"strategy": "complete_set"}, market_slug=slug)
+            exit_data = self._market_exit_data.pop(slug, {})
+            emit(EventType.MARKET_EXITED, {
+                "strategy": "complete_set",
+                "outcome": exit_data.get("outcome"),
+                "total_pnl": exit_data.get("total_pnl"),
+            }, market_slug=slug)
 
         self._prev_quotable_slugs = quotable_now
 

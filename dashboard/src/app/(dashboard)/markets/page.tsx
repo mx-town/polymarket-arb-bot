@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useBotStore } from "@/stores/bot-store";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn, formatPrice, formatPct, formatShares, formatUsd } from "@/lib/format";
@@ -237,7 +238,9 @@ export default function MarketsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {markets.map((market) => (
-            <MarketCard key={market.slug} market={market} strategy={trSlugs.has(market.slug) ? "TR" : market.position ? "CS" : undefined} />
+            <Link key={market.slug} href={`/markets/${encodeURIComponent(market.slug)}`} className="block">
+              <MarketCard market={market} strategy={trSlugs.has(market.slug) ? "TR" : market.position ? "CS" : undefined} />
+            </Link>
           ))}
         </div>
       )}

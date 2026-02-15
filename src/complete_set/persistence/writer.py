@@ -89,7 +89,15 @@ class BatchWriter:
         total = 0
         with engine.begin() as conn:
             for name, rows in by_table.items():
-                conn.execute(table_map[name].insert(), rows)
+                # Normalize all dicts to the union of keys (missing → None).
+                # SQLAlchemy uses the first row's keys as the INSERT template;
+                # without this, batches mixing e.g. HEDGE_COMPLETE + ORDER_FILLED
+                # crash with "A value is required for bind parameter 'side'".
+                all_keys: set[str] = set()
+                for r in rows:
+                    all_keys.update(r.keys())
+                normalized = [{k: r.get(k) for k in all_keys} for r in rows]
+                conn.execute(table_map[name].insert(), normalized)
                 total += len(rows)
 
             for table, values, slug in (updates or []):
@@ -166,8 +174,13 @@ class BatchWriter:
                 "market_slug": event.market_slug,
                 "event_type": "hedge_complete",
                 "direction": d.get("direction"),
+                "side": None,
                 "price": d.get("edge"),
                 "shares": d.get("hedged_shares"),
+                "reason": None,
+                "btc_price_at": None,
+                "order_id": None,
+                "tx_hash": None,
                 "session_id": self._session_id,
                 "strategy": d.get("strategy", "complete_set"),
             })]
@@ -177,7 +190,13 @@ class BatchWriter:
                 "ts": ts,
                 "market_slug": event.market_slug,
                 "event_type": "merge_complete",
+                "direction": None,
+                "side": None,
+                "price": None,
                 "shares": d.get("merged_shares"),
+                "reason": None,
+                "btc_price_at": None,
+                "order_id": None,
                 "tx_hash": d.get("tx_hash"),
                 "session_id": self._session_id,
                 "strategy": d.get("strategy", "complete_set"),

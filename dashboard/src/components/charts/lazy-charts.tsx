@@ -16,3 +16,13 @@ export const LazyPnlChart = dynamic(
   () => import("./pnl-chart").then((m) => ({ default: m.PnlChart })),
   { loading: () => <ChartSkeleton height={200} />, ssr: false }
 );
+
+export const LazyMarketProbabilityChart = dynamic(
+  () => import("./market-probability-chart").then((m) => ({ default: m.MarketProbabilityChart })),
+  { loading: () => <ChartSkeleton height={400} />, ssr: false }
+);
+
+export const LazyMarketBtcChart = dynamic(
+  () => import("./market-btc-chart").then((m) => ({ default: m.MarketBtcChart })),
+  { loading: () => <ChartSkeleton height={400} />, ssr: false }
+);

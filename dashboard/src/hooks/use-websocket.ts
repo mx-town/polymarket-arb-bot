@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useBotStore } from "@/stores/bot-store";
 import { useSessionStore } from "@/stores/session-store";
+import { useChartHistoryStore } from "@/stores/chart-history-store";
 import type { WsMessage, StateSnapshot, TickSnapshot, BtcPriceData, TradeEvent } from "@/lib/types";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/live";
@@ -24,6 +25,8 @@ export function useWebSocket() {
     updateBtc,
     addTradeEvent,
   } = useBotStore();
+
+  const { pushMarketTick, pushBtcTick } = useChartHistoryStore();
 
   const clearTimers = useCallback(() => {
     if (pingRef.current) {
@@ -66,12 +69,20 @@ export function useWebSocket() {
         case "initial_state":
           updateFromSnapshot(msg.data as StateSnapshot);
           break;
-        case "tick_snapshot":
-          updateTick(msg as unknown as TickSnapshot);
+        case "tick_snapshot": {
+          const tick = msg as unknown as TickSnapshot;
+          updateTick(tick);
+          for (const m of tick.data.markets) {
+            pushMarketTick(m.slug, m.up_ask, m.down_ask);
+          }
           break;
-        case "btc_price":
-          updateBtc(msg.data as BtcPriceData);
+        }
+        case "btc_price": {
+          const btcData = msg.data as BtcPriceData;
+          updateBtc(btcData);
+          if (btcData.price > 0) pushBtcTick(btcData.price, btcData.open);
           break;
+        }
         case "pong":
           // Keepalive response, nothing to do
           break;
@@ -98,7 +109,7 @@ export function useWebSocket() {
       // onclose will fire after onerror, triggering reconnect
       ws.close();
     };
-  }, [setConnected, updateFromSnapshot, updateTick, updateBtc, addTradeEvent, clearTimers]);
+  }, [setConnected, updateFromSnapshot, updateTick, updateBtc, addTradeEvent, clearTimers, pushMarketTick, pushBtcTick]);
 
   useEffect(() => {
     // Only connect WebSocket in live mode

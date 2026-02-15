@@ -264,7 +264,7 @@ class InventoryTracker:
         self, slug: str,
         up_bid: Decimal | None = None,
         down_bid: Decimal | None = None,
-    ) -> None:
+    ) -> dict | None:
         """Remove inventory for a resolved/expired market.
 
         When up_bid/down_bid are provided, estimates the resolution value of
@@ -272,7 +272,7 @@ class InventoryTracker:
         """
         removed = self._inventory_by_market.pop(slug, None)
         if removed is None:
-            return
+            return None
 
         hedged = min(removed.up_shares, removed.down_shares)
 
@@ -330,6 +330,25 @@ class InventoryTracker:
             removed.prior_merge_pnl.quantize(Decimal("0.01")),
             all_pnl.quantize(Decimal("0.01")), resolution_str, C_RESET,
         )
+
+        # Determine outcome for DB persistence
+        if removed.up_shares > removed.down_shares:
+            outcome = "unhedged_up"
+        elif removed.down_shares > removed.up_shares:
+            outcome = "unhedged_down"
+        elif hedged > ZERO:
+            outcome = "hedged"
+        else:
+            outcome = "empty"
+
+        return {
+            "total_pnl": float(all_pnl),
+            "outcome": outcome,
+            "hedged_shares": float(hedged),
+            "hedged_pnl": float(hedged_pnl),
+            "unhedged_cost": float(unhedged_cost),
+            "prior_merge_pnl": float(removed.prior_merge_pnl),
+        }
 
     def reduce_merged(self, slug: str, merged_shares: Decimal) -> None:
         """Reduce inventory after a successful merge.
