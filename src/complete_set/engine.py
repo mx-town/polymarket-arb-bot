@@ -98,6 +98,7 @@ class Engine:
         self._tick_total_ms: float = 0.0
         self._tick_max_ms: float = 0.0
         self._last_reconcile: float = 0.0
+        self._entry_price_caps: dict[str, Decimal] = {}  # slug -> max price for re-entry
 
     async def run(self) -> None:
         """Main event loop."""
@@ -130,6 +131,8 @@ class Engine:
         log.info("  Swing filter    : %s (lookback=%ds, max_ask=%s)",
                  "ON" if self._cfg.swing_filter_enabled else "OFF",
                  self._cfg.swing_lookback_sec, self._cfg.swing_max_ask)
+        log.info("  Chase protect   : first-leg=ON, hedge_chase=%dc",
+                 self._cfg.max_hedge_chase_cents)
         if not self._cfg.dry_run and self._w3 and self._account:
             redeem_mode = "enabled (on-chain)"
         elif self._cfg.dry_run:
@@ -272,6 +275,10 @@ class Engine:
 
         active_slugs = {m.slug for m in self._active_markets}
         self._completed_markets &= active_slugs
+        # Clean up entry price caps for rotated-out markets
+        for slug in list(self._entry_price_caps):
+            if slug not in active_slugs:
+                del self._entry_price_caps[slug]
         for slug in list(self._inventory.get_all_inventories()):
             if slug not in active_slugs:
                 inv = self._inventory.get_inventory(slug)
@@ -311,6 +318,8 @@ class Engine:
             return
 
         self._inventory.record_fill(state.market.slug, is_up, filled_shares, state.price)
+        # Clear entry price cap on fill (so hedge evaluation isn't blocked)
+        self._entry_price_caps.pop(state.market.slug, None)
         # Store dynamic edge from first leg entry
         if state.entry_dynamic_edge > ZERO:
             self._inventory.set_entry_dynamic_edge(state.market.slug, state.entry_dynamic_edge)
@@ -333,6 +342,11 @@ class Engine:
                 "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
                 C_GREEN, state.market.slug, hedged, edge, C_RESET,
             )
+            # Cancel remaining first-leg/hedge orders to prevent stale fills
+            self._order_mgr.cancel_market_orders(
+                self._client, state.market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
+            )
+            log.info("HEDGE_COMPLETE_CLEANUP %s │ cancelled remaining orders", state.market.slug)
 
     def _find_merge_candidate(self, now: float) -> tuple[GabagoolMarket, Decimal] | None:
         """Find the first market eligible for merge. Returns (market, hedged_shares) or None."""
@@ -422,6 +436,10 @@ class Engine:
                 log.info(
                     "DRY_MERGE %s │ merged=%s shares → freed $%s │ gas=-$%s",
                     market.slug, hedged, hedged, gas_cost,
+                )
+                # Belt-and-suspenders: cancel any remaining orders after merge
+                self._order_mgr.cancel_market_orders(
+                    self._client, market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
                 )
 
         # ── Redeem resolved positions ──
@@ -746,20 +764,41 @@ class Engine:
         existing = self._order_mgr.get_order(target_token)
         if existing:
             if existing.price != maker_price:
-                self._order_mgr.cancel_order(
-                    self._client, target_token, "REPRICE", self._handle_fill)
-                remaining = shares - (existing.matched_size or ZERO)
-                if remaining >= self._cfg.min_merge_shares:
-                    log.info("REPRICE %s │ %s %s→%s │ %s shares │ %ds left",
-                             reason, slug, existing.price, maker_price, remaining, seconds_to_end)
-                    rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
-                    self._order_mgr.place_order(
-                        self._client, market, target_token, target_dir,
-                        maker_price, remaining, seconds_to_end, reason,
-                        on_fill=self._handle_fill, order_type=OrderType.GTC,
-                        reserved_hedge_notional=rhr,
-                        entry_dynamic_edge=dynamic_edge)
+                if maker_price > existing.price:
+                    # Upward reprice = chasing — cancel and set price cap
+                    self._order_mgr.cancel_order(
+                        self._client, target_token, "CHASE_CANCEL", self._handle_fill)
+                    self._entry_price_caps[slug] = existing.price
+                    log.info(
+                        "CHASE_CANCEL %s │ %s %s→%s (book moved against us) │ cap=%s",
+                        slug, side_label, existing.price, maker_price, existing.price,
+                    )
+                else:
+                    # Downward reprice = better price for us — allow
+                    self._order_mgr.cancel_order(
+                        self._client, target_token, "REPRICE", self._handle_fill)
+                    remaining = shares - (existing.matched_size or ZERO)
+                    if remaining >= self._cfg.min_merge_shares:
+                        log.info("REPRICE %s │ %s %s→%s │ %s shares │ %ds left",
+                                 reason, slug, existing.price, maker_price, remaining, seconds_to_end)
+                        rhr = remaining * max(ZERO, ONE - dynamic_edge - maker_price)
+                        self._order_mgr.place_order(
+                            self._client, market, target_token, target_dir,
+                            maker_price, remaining, seconds_to_end, reason,
+                            on_fill=self._handle_fill, order_type=OrderType.GTC,
+                            reserved_hedge_notional=rhr,
+                            entry_dynamic_edge=dynamic_edge)
             return
+
+        # Price cap: block re-entry above cap set by CHASE_CANCEL
+        cap = self._entry_price_caps.get(slug)
+        if cap is not None:
+            if maker_price > cap:
+                log.debug("ENTRY_CAPPED %s │ %s maker=%s > cap=%s", slug, side_label, maker_price, cap)
+                return
+            else:
+                log.info("ENTRY_CAP_CLEARED %s │ %s maker=%s <= cap=%s", slug, side_label, maker_price, cap)
+                del self._entry_price_caps[slug]
 
         # Swing filter: only enter if opposite side was recently cheap
         if self._cfg.swing_filter_enabled:
@@ -853,6 +892,21 @@ class Engine:
         existing = self._order_mgr.get_order(hedge_token)
         if existing:
             if existing.price != maker_price:
+                if maker_price > existing.price:
+                    # Upward reprice = chasing hedge — check tolerance
+                    chase_tolerance = Decimal(self._cfg.max_hedge_chase_cents) * Decimal("0.01")
+                    if maker_price > existing.price + chase_tolerance:
+                        log.info(
+                            "HEDGE_FREEZE %s │ %s %s→%s (keeping original price)",
+                            slug, hedge_side, existing.price, maker_price,
+                        )
+                        return  # Keep existing order at better price
+                    else:
+                        log.info(
+                            "HEDGE_CHASE %s │ %s %s→%s (within %dc tolerance)",
+                            slug, hedge_side, existing.price, maker_price, self._cfg.max_hedge_chase_cents,
+                        )
+                # Downward reprice or within-tolerance upward — allow
                 self._order_mgr.cancel_order(
                     self._client, hedge_token, "REPRICE", self._handle_fill)
                 remaining_shares = hedge_shares - (existing.matched_size or ZERO)

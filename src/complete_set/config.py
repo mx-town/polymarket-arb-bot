@@ -55,6 +55,9 @@ class CompleteSetConfig:
     volume_short_window_sec: int = 30
     volume_medium_window_sec: int = 120
 
+    # Hedge chase protection
+    max_hedge_chase_cents: int = 0  # 0 = never reprice hedge upward
+
     # Swing filter (require opposite side was recently cheap)
     swing_filter_enabled: bool = True
     swing_lookback_sec: int = 180
@@ -154,6 +157,8 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         volume_min_btc=Decimal(str(cs.get("volume_min_btc", "50"))),
         volume_short_window_sec=int(cs.get("volume_short_window_sec", 30)),
         volume_medium_window_sec=int(cs.get("volume_medium_window_sec", 120)),
+        # Hedge chase protection
+        max_hedge_chase_cents=int(cs.get("max_hedge_chase_cents", 0)),
         # Swing filter
         swing_filter_enabled=cs.get("swing_filter_enabled", True),
         swing_lookback_sec=int(cs.get("swing_lookback_sec", 180)),

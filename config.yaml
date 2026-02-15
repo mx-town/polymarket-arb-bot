@@ -45,6 +45,9 @@ complete_set:
   volume_short_window_sec: 30
   volume_medium_window_sec: 120
 
+  # Hedge chase protection — max cents of upward reprice allowed (0 = freeze)
+  max_hedge_chase_cents: 0
+
   # Swing filter — require opposite side was recently cheap before first leg
   swing_filter_enabled: true
   swing_lookback_sec: 180         # 3 minutes of price history
