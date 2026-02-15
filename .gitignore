@@ -1,12 +1,63 @@
-.env
+# ── Python ────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.log
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Virtual environments ─────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Environment / secrets ────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Node / Next.js (dashboard) ───────────────────────────
+node_modules/
+.next/
+.turbo/
+.pnpm-store/
+dashboard/.pnpm-store
+dashboard/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# ── Editors / IDEs ───────────────────────────────────────
 .vscode/
 .idea/
-.venv/
-node_modules/
-*.egg-info/
+*.swp
+*.swo
+*~
+
+# ── OS files ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Data / databases ─────────────────────────────────────
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Research outputs ─────────────────────────────────────
 research/data/raw/
 research/output/
-dashboard/.pnpm-store
+
+# ── Misc ─────────────────────────────────────────────────
+*.bak
+*.tmp
