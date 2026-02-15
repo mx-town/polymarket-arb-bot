@@ -15,6 +15,8 @@ ONE = Decimal("1")
 C_GREEN = "\033[32m"
 C_RED = "\033[31m"
 C_YELLOW = "\033[33m"
+C_DIM = "\033[2m"
+C_BOLD = "\033[1m"
 C_RESET = "\033[0m"
 
 
@@ -58,6 +60,7 @@ class MarketInventory:
     filled_up_shares: Decimal = field(default_factory=lambda: Decimal("0"))
     filled_down_shares: Decimal = field(default_factory=lambda: Decimal("0"))
     entry_dynamic_edge: Decimal = field(default_factory=lambda: Decimal("0"))
+    prior_merge_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     bootstrapped_up: bool = False
     bootstrapped_down: bool = False
 

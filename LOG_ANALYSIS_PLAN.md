@@ -4,7 +4,7 @@ Reusable plan for analyzing complete-set arb bot dry-run logs. Focus: bot effici
 
 ## Log Location & Format
 
-- **Path**: `logs/complete_set_YYYY-MM-DD_HHMMSS.log`
+- **Path**: `logs/dry/complete_set_YYYY-MM-DD_HHMMSS.log` or `logs/live/complete_set_YYYY-MM-DD_HHMMSS.log`
 - **Format**: `YYYY-MM-DD HH:MM:SS │ logger_name │ MESSAGE`
 - **Loggers**: `cs.engine`, `cs.orders`, `cs.market_data`, `cs.inventory`, `cs.binance_ws`, `cs.chainlink`, `cs.bot`
 

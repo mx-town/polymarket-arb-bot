@@ -288,6 +288,9 @@ class InventoryTracker:
         total_pnl = hedged_pnl - unhedged_cost
         self.session_realized_pnl += total_pnl
 
+        # All-in PnL includes prior merge realizations for this market
+        all_pnl = total_pnl + removed.prior_merge_pnl
+
         if removed.up_shares > removed.down_shares:
             unhedged_str = f"U{unhedged_up}"
         elif removed.down_shares > removed.up_shares:
@@ -295,15 +298,16 @@ class InventoryTracker:
         else:
             unhedged_str = "none"
 
-        color = C_GREEN if total_pnl >= ZERO else C_RED
+        color = C_GREEN if all_pnl >= ZERO else C_RED
         log.info(
             "%sCLEAR_INVENTORY %s (was U%s/D%s) │ hedged=%s │ hedged_pnl=$%s │ "
-            "unhedged=%s (loss=$%s) │ net=$%s%s",
+            "unhedged=%s (loss=$%s) │ prior_merge_pnl=$%s │ net=$%s%s",
             color, slug, removed.up_shares, removed.down_shares,
             hedged,
             hedged_pnl.quantize(Decimal("0.01")),
             unhedged_str, unhedged_cost.quantize(Decimal("0.01")),
-            total_pnl.quantize(Decimal("0.01")), C_RESET,
+            removed.prior_merge_pnl.quantize(Decimal("0.01")),
+            all_pnl.quantize(Decimal("0.01")), C_RESET,
         )
 
     def reduce_merged(self, slug: str, merged_shares: Decimal) -> None:
@@ -316,6 +320,7 @@ class InventoryTracker:
             return
 
         # Record realized PnL from merged hedged pairs
+        merged_pnl = ZERO
         if merged_shares > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
             merged_cost = merged_shares * (inv.up_vwap + inv.down_vwap)
             merged_pnl = merged_shares * ONE - merged_cost
@@ -351,6 +356,7 @@ class InventoryTracker:
             last_merge_at=time.time(),
             filled_up_shares=new_filled_up,
             filled_down_shares=new_filled_down,
+            prior_merge_pnl=inv.prior_merge_pnl + merged_pnl,
         )
 
     def get_all_inventories(self) -> dict[str, MarketInventory]:

@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
+
+ZERO = Decimal("0")
+
+
+@dataclass(frozen=True)
+class LogFilters:
+    hedge_skip: bool = True
+    book_change: bool = True
+    lag_trace: bool = True
+    btc_tick: bool = True
+    buffer_hold: bool = True
 
 
 @dataclass(frozen=True)
@@ -21,7 +32,7 @@ class CompleteSetConfig:
 
     # Edge
     min_edge: Decimal = Decimal("0.01")
-    hedge_edge_buffer: Decimal = Decimal("0.005")
+    hedge_edge_buffer: Decimal = Decimal("0.0")
 
     # Bankroll
     bankroll_usd: Decimal = Decimal("100")
@@ -58,10 +69,23 @@ class CompleteSetConfig:
     # Hedge chase protection
     max_hedge_chase_cents: int = 0  # 0 = never reprice hedge upward
 
+    # Entry price bounds
+    max_entry_price: Decimal = Decimal("0.45")
+    min_entry_price: Decimal = Decimal("0.10")
+
+    # BTC tick count — minimum WS ticks before entry allowed
+    min_btc_ticks: int = 5
+
+    # Abandon — stop evaluating unhedgeable positions
+    abandon_edge_threshold: Decimal = Decimal("-0.10")
+
     # Swing filter (require opposite side was recently cheap)
     swing_filter_enabled: bool = True
     swing_lookback_sec: int = 180
     swing_max_ask: Decimal = Decimal("0.48")
+
+    # Log filters — suppress high-frequency debug patterns
+    log_filters: LogFilters = field(default_factory=LogFilters)
 
 
 def validate_config(cfg: CompleteSetConfig) -> None:
@@ -106,6 +130,17 @@ def validate_config(cfg: CompleteSetConfig) -> None:
                 f"mr_max_range_pct must be > 0 when range filter enabled, got {cfg.mr_max_range_pct}"
             )
 
+    if not (0 < cfg.min_entry_price < cfg.max_entry_price < Decimal("0.50")):
+        errors.append(
+            f"entry price bounds must satisfy 0 < min ({cfg.min_entry_price}) "
+            f"< max ({cfg.max_entry_price}) < 0.50"
+        )
+
+    if cfg.min_btc_ticks < 1:
+        errors.append(f"min_btc_ticks must be >= 1, got {cfg.min_btc_ticks}")
+    if cfg.abandon_edge_threshold >= ZERO:
+        errors.append(f"abandon_edge_threshold must be < 0, got {cfg.abandon_edge_threshold}")
+
     if cfg.swing_filter_enabled:
         if cfg.swing_lookback_sec <= 0:
             errors.append(f"swing_lookback_sec must be > 0, got {cfg.swing_lookback_sec}")
@@ -114,6 +149,18 @@ def validate_config(cfg: CompleteSetConfig) -> None:
 
     if errors:
         raise ValueError("Config validation failed:\n  " + "\n  ".join(errors))
+
+
+def _load_log_filters(lf: dict[str, Any] | None) -> LogFilters:
+    if not lf:
+        return LogFilters()
+    return LogFilters(
+        hedge_skip=lf.get("hedge_skip", True),
+        book_change=lf.get("book_change", True),
+        lag_trace=lf.get("lag_trace", True),
+        btc_tick=lf.get("btc_tick", True),
+        buffer_hold=lf.get("buffer_hold", True),
+    )
 
 
 def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
@@ -133,7 +180,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         max_seconds_to_end=cs.get("max_seconds_to_end", 3600),
         no_new_orders_sec=cs.get("no_new_orders_sec", 45),
         min_edge=Decimal(str(cs.get("min_edge", "0.01"))),
-        hedge_edge_buffer=Decimal(str(cs.get("hedge_edge_buffer", "0.005"))),
+        hedge_edge_buffer=Decimal(str(cs.get("hedge_edge_buffer", "0.0"))),
         bankroll_usd=Decimal(str(cs.get("bankroll_usd", "100"))),
         min_merge_shares=Decimal(str(cs.get("min_merge_shares", "10"))),
         min_merge_profit_usd=Decimal(str(cs.get("min_merge_profit_usd", "0.02"))),
@@ -157,12 +204,20 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         volume_min_btc=Decimal(str(cs.get("volume_min_btc", "50"))),
         volume_short_window_sec=int(cs.get("volume_short_window_sec", 30)),
         volume_medium_window_sec=int(cs.get("volume_medium_window_sec", 120)),
+        # Entry price bounds
+        max_entry_price=Decimal(str(cs.get("max_entry_price", "0.45"))),
+        min_entry_price=Decimal(str(cs.get("min_entry_price", "0.10"))),
         # Hedge chase protection
         max_hedge_chase_cents=int(cs.get("max_hedge_chase_cents", 0)),
+        # BTC tick count + abandon
+        min_btc_ticks=int(cs.get("min_btc_ticks", 5)),
+        abandon_edge_threshold=Decimal(str(cs.get("abandon_edge_threshold", "-0.10"))),
         # Swing filter
         swing_filter_enabled=cs.get("swing_filter_enabled", True),
         swing_lookback_sec=int(cs.get("swing_lookback_sec", 180)),
         swing_max_ask=Decimal(str(cs.get("swing_max_ask", "0.48"))),
+        # Log filters
+        log_filters=_load_log_filters(cs.get("log_filters", {})),
     )
     validate_config(cfg)
     return cfg

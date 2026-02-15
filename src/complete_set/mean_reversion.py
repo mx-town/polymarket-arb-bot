@@ -157,6 +157,7 @@ def evaluate_stop_hunt(
     sh_entry_end_sec: int,
     no_new_orders_sec: int,
     range_filter_enabled: bool = True,
+    min_ticks: int = 5,
     volume: VolumeState | None = None,
     volume_min_btc: Decimal = ZERO,
     volume_imbalance_threshold: Decimal = ZERO,
@@ -177,6 +178,11 @@ def evaluate_stop_hunt(
     # No open price — can't compute range
     if candle.open_price == ZERO:
         return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP, "no open price")
+
+    # Insufficient BTC price history — can't assess trend vs swing
+    if candle.tick_count < min_ticks:
+        return StopHuntSignal(up_ask, down_ask, rng, MRDirection.SKIP,
+                              f"insufficient ticks ({candle.tick_count}/{min_ticks})")
 
     # Time window check: must be between sh_entry_end_sec and sh_entry_start_sec
     if seconds_to_end > sh_entry_start_sec:

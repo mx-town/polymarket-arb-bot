@@ -572,3 +572,187 @@ class TestHedgeFreeze:
 
         assert len(cancelled) == 0, "Beyond tolerance, should freeze"
         assert "DOWN_TOKEN" in engine._order_mgr._orders
+
+
+# ── Fix 4: Partial hedge detection ──
+
+
+class TestHedgePartial:
+    """Partial hedge fills should NOT mark market complete."""
+
+    def test_partial_fill_does_not_complete(self):
+        """Fill 5 DOWN on top of 20 UP → hedged=5, imbalance=15. Must NOT mark complete."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+        engine._active_markets = [market]
+
+        # 20 UP shares filled, 0 DOWN
+        engine._inventory._inventory_by_market[slug] = MarketInventory(
+            up_shares=Decimal("20"),
+            up_cost=Decimal("8.00"),
+            filled_up_shares=Decimal("20"),
+        )
+
+        fill_state = OrderState(
+            order_id="dry-hedge-partial",
+            market=market,
+            token_id="DOWN_TOKEN",
+            direction=Direction.DOWN,
+            price=Decimal("0.50"),
+            size=Decimal("5"),
+            placed_at=time.time(),
+            side="BUY",
+        )
+
+        engine._handle_fill(fill_state, Decimal("5"))
+
+        # hedged=5 >= min_merge_shares(10)? No. But even if hedged were 10,
+        # imbalance=15 >= min_merge_shares → should NOT mark complete
+        assert slug not in engine._completed_markets, "Partial hedge must not mark complete"
+
+    def test_partial_fill_above_min_merge_not_complete(self):
+        """Fill 15 DOWN on top of 30 UP → hedged=15 >= 10, but imbalance=15 >= 10. NOT complete."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+        engine._active_markets = [market]
+
+        engine._inventory._inventory_by_market[slug] = MarketInventory(
+            up_shares=Decimal("30"),
+            up_cost=Decimal("12.00"),
+            filled_up_shares=Decimal("30"),
+        )
+
+        cancelled = []
+        def track_cancel(client, token_id, reason, on_fill=None):
+            cancelled.append(reason)
+            engine._order_mgr._orders.pop(token_id, None)
+        engine._order_mgr.cancel_order = track_cancel
+
+        fill_state = OrderState(
+            order_id="dry-partial",
+            market=market,
+            token_id="DOWN_TOKEN",
+            direction=Direction.DOWN,
+            price=Decimal("0.50"),
+            size=Decimal("15"),
+            placed_at=time.time(),
+            side="BUY",
+        )
+
+        engine._handle_fill(fill_state, Decimal("15"))
+
+        # hedged=15 >= 10 but imbalance=15 >= 10 → HEDGE_PARTIAL, not complete
+        assert slug not in engine._completed_markets, "Should log HEDGE_PARTIAL, not complete"
+        assert "HEDGE_COMPLETE_CLEANUP" not in cancelled, "Should NOT cancel orders on partial"
+
+    def test_full_fill_marks_complete(self):
+        """Fill 20 DOWN on top of 20 UP → hedged=20, imbalance=0. SHOULD mark complete."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+        engine._active_markets = [market]
+
+        engine._inventory._inventory_by_market[slug] = MarketInventory(
+            up_shares=Decimal("20"),
+            up_cost=Decimal("8.00"),
+            filled_up_shares=Decimal("20"),
+        )
+
+        fill_state = OrderState(
+            order_id="dry-full",
+            market=market,
+            token_id="DOWN_TOKEN",
+            direction=Direction.DOWN,
+            price=Decimal("0.50"),
+            size=Decimal("20"),
+            placed_at=time.time(),
+            side="BUY",
+        )
+
+        engine._handle_fill(fill_state, Decimal("20"))
+
+        assert slug in engine._completed_markets, "Fully hedged should mark complete"
+
+
+# ── Fix 5: Entry price bounds ──
+
+
+class TestEntryPriceBounds:
+    """Entry price guards in _place_first_leg."""
+
+    def test_rejects_above_max_entry(self):
+        """maker=0.48 > max_entry=0.45 → skip."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+
+        placed = []
+        def track_place(*a, **kw):
+            placed.append(True)
+        engine._order_mgr.place_order = track_place
+
+        from complete_set.mean_reversion import MRDirection
+        # bid=0.47, ask=0.50 → maker=min(0.48, 0.49) = 0.48 > max_entry 0.45
+        engine._place_first_leg(
+            MRDirection.BUY_UP, market, slug,
+            up_ask=Decimal("0.50"), down_ask=Decimal("0.50"),
+            up_bid=Decimal("0.47"), down_bid=Decimal("0.49"),
+            max_first_leg=Decimal("0.495"),
+            dynamic_edge=Decimal("0.01"),
+            seconds_to_end=600, exposure=ZERO,
+            reason="SH_ENTRY",
+        )
+
+        assert len(placed) == 0, "Should reject — above max_entry_price"
+
+    def test_rejects_below_min_entry(self):
+        """maker=0.06 < min_entry=0.10 → skip."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+
+        placed = []
+        def track_place(*a, **kw):
+            placed.append(True)
+        engine._order_mgr.place_order = track_place
+
+        from complete_set.mean_reversion import MRDirection
+        # bid=0.05, ask=0.08 → maker=min(0.06, 0.07) = 0.06 < min_entry 0.10
+        engine._place_first_leg(
+            MRDirection.BUY_UP, market, slug,
+            up_ask=Decimal("0.08"), down_ask=Decimal("0.92"),
+            up_bid=Decimal("0.05"), down_bid=Decimal("0.91"),
+            max_first_leg=Decimal("0.495"),
+            dynamic_edge=Decimal("0.01"),
+            seconds_to_end=600, exposure=ZERO,
+            reason="SH_ENTRY",
+        )
+
+        assert len(placed) == 0, "Should reject — below min_entry_price"
+
+    def test_accepts_within_bounds(self):
+        """maker=0.40 within [0.10, 0.45] → proceed."""
+        engine = _make_engine()
+        market = _make_market()
+        slug = market.slug
+
+        placed = []
+        def track_place(*a, **kw):
+            placed.append(True)
+        engine._order_mgr.place_order = track_place
+
+        from complete_set.mean_reversion import MRDirection
+        # bid=0.39, ask=0.42 → maker=min(0.40, 0.41) = 0.40
+        engine._place_first_leg(
+            MRDirection.BUY_UP, market, slug,
+            up_ask=Decimal("0.42"), down_ask=Decimal("0.58"),
+            up_bid=Decimal("0.39"), down_bid=Decimal("0.57"),
+            max_first_leg=Decimal("0.495"),
+            dynamic_edge=Decimal("0.01"),
+            seconds_to_end=600, exposure=ZERO,
+            reason="SH_ENTRY",
+        )
+
+        assert len(placed) == 1, "Should accept — within price bounds"

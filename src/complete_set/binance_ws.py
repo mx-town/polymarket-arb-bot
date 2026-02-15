@@ -40,6 +40,7 @@ class CandleState:
     low: Decimal = ZERO              # intra-window low
     last_update: float = 0.0         # epoch of last WS message
     _market_window_start: float = 0.0  # epoch of Polymarket window start
+    tick_count: int = 0              # WS ticks received since window start
 
     @property
     def deviation(self) -> Decimal:
@@ -165,6 +166,7 @@ def _update_candle(price: Decimal) -> None:
             low=min(cs.low, price) if cs.low > ZERO else price,
             last_update=now,
             _market_window_start=cs._market_window_start,
+            tick_count=cs.tick_count + 1,
         )
         return
 
@@ -175,6 +177,7 @@ def _update_candle(price: Decimal) -> None:
         low=min(cs.low, price) if cs.low > ZERO else price,
         last_update=now,
         _market_window_start=cs._market_window_start,
+        tick_count=cs.tick_count + 1,
     )
     if price != cs.current_price:
         global _last_btc_move_ts, _last_btc_move_dir

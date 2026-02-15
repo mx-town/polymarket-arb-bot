@@ -98,6 +98,48 @@ class TestReduceMerged:
         inv = tracker.get_inventory("test")
         assert inv.last_merge_at is not None
 
+    def test_prior_merge_pnl_accumulated(self):
+        """Merge PnL accumulates across multiple merges for CLEAR_INVENTORY display."""
+        tracker = InventoryTracker(dry_run=True)
+        # Start with 30/30, merge 10 twice
+        tracker._inventory_by_market["test"] = MarketInventory(
+            up_shares=Decimal("30"),
+            down_shares=Decimal("30"),
+            up_cost=Decimal("13.50"),   # VWAP = 0.45
+            down_cost=Decimal("13.50"),  # VWAP = 0.45
+            filled_up_shares=Decimal("30"),
+            filled_down_shares=Decimal("30"),
+        )
+        tracker.reduce_merged("test", Decimal("10"))
+        inv = tracker.get_inventory("test")
+        # PnL from first merge: 10 * (1 - 0.45 - 0.45) = 10 * 0.10 = $1.00
+        assert inv.prior_merge_pnl == Decimal("1.00")
+
+        tracker.reduce_merged("test", Decimal("10"))
+        inv = tracker.get_inventory("test")
+        # PnL from second merge: 10 * (1 - 0.45 - 0.45) = $1.00
+        # Accumulated: $1.00 + $1.00 = $2.00
+        assert inv.prior_merge_pnl == Decimal("2.00")
+
+    def test_clear_market_includes_prior_merge_pnl_in_session(self):
+        """clear_market books residual PnL; prior merge PnL was already booked in reduce_merged."""
+        tracker = InventoryTracker(dry_run=True)
+        # Simulate: had 20/20, merged 10, left with 10/10
+        tracker._inventory_by_market["test"] = MarketInventory(
+            up_shares=Decimal("10"),
+            down_shares=Decimal("10"),
+            up_cost=Decimal("4.50"),
+            down_cost=Decimal("4.50"),
+            prior_merge_pnl=Decimal("1.00"),  # from a previous merge of 10 shares
+        )
+        # Pre-load session_realized_pnl with the merge PnL (as reduce_merged would have)
+        tracker.session_realized_pnl = Decimal("1.00")
+
+        tracker.clear_market("test")
+        # clear_market books: hedged=10, pnl = 10*(1-0.45-0.45) = $1.00
+        # session total = $1.00 (from merge) + $1.00 (from clear) = $2.00
+        assert tracker.session_realized_pnl == Decimal("2.00")
+
 
 class TestClearMarket:
     def test_hedged_pnl(self):

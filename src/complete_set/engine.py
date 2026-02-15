@@ -27,6 +27,8 @@ from complete_set.mean_reversion import (
     evaluate_stop_hunt,
 )
 from complete_set.models import (
+    C_BOLD,
+    C_DIM,
     C_GREEN,
     C_RED,
     C_RESET,
@@ -332,21 +334,30 @@ class Engine:
             state.price,
             C_RESET,
         )
-        # Check if hedge is complete (both legs filled above min_merge_shares)
+        # Check if hedge is complete (both legs filled, remaining imbalance < min_merge_shares)
         inv = self._inventory.get_inventory(state.market.slug)
         hedged = min(inv.up_shares, inv.down_shares)
+        remaining_imbalance = abs(inv.imbalance)
         if hedged >= self._cfg.min_merge_shares:
-            self._completed_markets.add(state.market.slug)
-            edge = ONE - (inv.up_vwap + inv.down_vwap) if inv.up_vwap and inv.down_vwap else ZERO
-            log.info(
-                "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
-                C_GREEN, state.market.slug, hedged, edge, C_RESET,
-            )
-            # Cancel remaining first-leg/hedge orders to prevent stale fills
-            self._order_mgr.cancel_market_orders(
-                self._client, state.market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
-            )
-            log.info("HEDGE_COMPLETE_CLEANUP %s │ cancelled remaining orders", state.market.slug)
+            if remaining_imbalance < self._cfg.min_merge_shares:
+                # Fully hedged — mark complete and cancel orders
+                self._completed_markets.add(state.market.slug)
+                edge = ONE - (inv.up_vwap + inv.down_vwap) if inv.up_vwap and inv.down_vwap else ZERO
+                log.info(
+                    "%sHEDGE_COMPLETE %s │ hedged=%s │ edge=%s%s",
+                    C_GREEN, state.market.slug, hedged, edge, C_RESET,
+                )
+                self._order_mgr.cancel_market_orders(
+                    self._client, state.market, "HEDGE_COMPLETE_CLEANUP", self._handle_fill,
+                )
+                log.info("HEDGE_COMPLETE_CLEANUP %s │ cancelled remaining orders", state.market.slug)
+            else:
+                # Partial hedge — continue hedging the deficient side
+                edge = ONE - (inv.up_vwap + inv.down_vwap) if inv.up_vwap and inv.down_vwap else ZERO
+                log.info(
+                    "%sHEDGE_PARTIAL %s │ hedged=%s │ remaining=%s │ edge=%s%s",
+                    C_YELLOW, state.market.slug, hedged, remaining_imbalance, edge, C_RESET,
+                )
 
     def _find_merge_candidate(self, now: float) -> tuple[GabagoolMarket, Decimal] | None:
         """Find the first market eligible for merge. Returns (market, hedged_shares) or None."""
@@ -612,7 +623,14 @@ class Engine:
         total_pnl = (self._inventory.session_realized_pnl + total_unrealized).quantize(Decimal("0.01"))
         pnl_color = C_GREEN if total_pnl >= ZERO else C_RED
 
-        # ── SESSION summary every 300s ──
+        # ── Wallet balance (cached, refreshed in background every 60s) ──
+        wallet_str = self._cached_wallet_bal
+        if self._rpc_url and self._funder_address and now - self._last_wallet_refresh >= 60:
+            self._last_wallet_refresh = now
+            self._refresh_wallet_balance()
+
+        # ── SESSION banner (inline, every 300s) ──
+        session_str = ""
         if now - self._last_session_log >= 300:
             self._last_session_log = now
             runtime_s = int(now - self._start_time)
@@ -621,50 +639,52 @@ class Engine:
             else:
                 runtime_str = f"{runtime_s // 60}m"
             roi = (total_pnl / bankroll * 100).quantize(Decimal("0.01")) if bankroll > ZERO else ZERO
-            log.info(
-                "%s═══ SESSION ═══ runtime=%s │ realized=$%s │ unrealized=$%s │ "
-                "total=$%s │ ROI=%s%%%s",
-                pnl_color, runtime_str, realized, unrealized, total_pnl, roi, C_RESET,
-            )
+            session_str = f"  runtime={runtime_str}  ROI={roi}%"
 
-        # ── Wallet balance (cached, refreshed in background every 60s) ──
-        wallet_str = self._cached_wallet_bal
-        if self._rpc_url and self._funder_address and now - self._last_wallet_refresh >= 60:
-            self._last_wallet_refresh = now
-            self._refresh_wallet_balance()
-
-        # ── SUMMARY header ──
-        # Volume imbalance snapshot
+        # ── Volume imbalance snapshot ──
         vol_str = ""
         if self._cfg.volume_imbalance_enabled:
             vs = get_volume_state()
             if not vs.is_stale:
-                vol_str = f" │ vol_imb={vs.short_imbalance:+.3f}/{vs.medium_imbalance:+.3f} ({vs.short_volume_btc:.0f}BTC)"
+                vol_str = f"  vol={vs.short_imbalance:+.3f}/{vs.medium_imbalance:+.3f} ({vs.short_volume_btc:.0f}BTC)"
 
-        log.info(
-            "── SUMMARY ── markets=%d │ open_orders=%d │ completed=%d │ exposure=$%s │ "
-            "bankroll=$%s (%s%% used) │ wallet=%s │ %srealized=$%s │ unrealized=$%s │ total=$%s%s%s",
-            len(self._active_markets), open_count, len(self._completed_markets),
-            exposure.quantize(Decimal("0.01")),
-            bankroll, pct_used, wallet_str,
-            pnl_color, realized, unrealized, total_pnl, C_RESET,
-            vol_str,
-        )
+        # ── Box top ──
+        log.info("%s┌─ SUMMARY ─────────────────────────────────────────%s%s", C_BOLD, session_str, C_RESET)
+
+        # Row 1: status + ticks
+        tick_str = ""
         if self._tick_count > 0:
             avg_ms = self._tick_total_ms / self._tick_count
-            log.info(
-                "  TICK_STATS count=%d │ avg=%.0fms │ max=%.0fms",
-                self._tick_count, avg_ms, self._tick_max_ms,
-            )
+            tick_str = f"  ticks={self._tick_count} (avg {avg_ms:.0f}ms)"
         log.info(
-            "  EXPOSURE orders=$%s │ unhedged=$%s │ hedged_locked=$%s │ total=$%s │ remaining=$%s",
-            ord_notional.quantize(Decimal("0.01")),
-            unhedged_exp.quantize(Decimal("0.01")),
-            hedged_locked.quantize(Decimal("0.01")),
-            exposure.quantize(Decimal("0.01")),
-            remaining.quantize(Decimal("0.01")),
+            "│ markets=%d  orders=%d  completed=%d%s%s",
+            len(self._active_markets), open_count, len(self._completed_markets),
+            tick_str, vol_str,
         )
 
+        # Row 2: PnL
+        log.info(
+            "│ %sPnL: realized=$%s  unrealized=$%s  total=$%s%s",
+            pnl_color, realized, unrealized, total_pnl, C_RESET,
+        )
+
+        # Row 3: bankroll
+        log.info(
+            "│ bankroll=$%s (%s%% used)  wallet=%s  remaining=$%s",
+            bankroll, pct_used, wallet_str, remaining.quantize(Decimal("0.01")),
+        )
+
+        # Exposure breakdown (only when there's meaningful exposure)
+        if exposure > ZERO:
+            log.info(
+                "│ exposure: orders=$%s  unhedged=$%s  hedged=$%s  total=$%s",
+                ord_notional.quantize(Decimal("0.01")),
+                unhedged_exp.quantize(Decimal("0.01")),
+                hedged_locked.quantize(Decimal("0.01")),
+                exposure.quantize(Decimal("0.01")),
+            )
+
+        # Per-market lines
         for market in self._active_markets:
             ste = int(market.end_time - now)
             inv = self._inventory.get_inventory(market.slug)
@@ -684,7 +704,7 @@ class Engine:
                     at_risk = Decimal("0.00")
                 completed_str = " [DONE]" if market.slug in self._completed_markets else ""
                 log.info(
-                    "  POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ at_risk=$%s%s",
+                    "│ POSITION %s │ U%s/D%s (h%s) │ cost=$%s │ at_risk=$%s%s",
                     market.slug[-40:],
                     inv.up_shares, inv.down_shares, hedged,
                     cost, at_risk, completed_str,
@@ -698,12 +718,12 @@ class Engine:
                     h_pct = (h_pnl / h_cost * 100).quantize(Decimal("0.1")) if h_cost > ZERO else ZERO
                     color = C_GREEN if h_pnl >= ZERO else C_RED
                     log.info(
-                        "  %sUNREALIZED %s │ value=$%s │ cost=$%s │ pnl=$%s (%s%%)%s",
+                        "│ %sUNREALIZED %s │ value=$%s │ cost=$%s │ pnl=$%s (%s%%)%s",
                         color, market.slug[-40:],
                         h_value, h_cost, h_pnl, h_pct, C_RESET,
                     )
 
-            # MARKET line: book state + edge (always shown)
+            # MARKET line: book state + edge
             up_book = get_top_of_book(self._client, market.up_token_id)
             down_book = get_top_of_book(self._client, market.down_token_id)
 
@@ -718,10 +738,13 @@ class Engine:
                 edge_str = f"{edge:.3f}"
 
             log.debug(
-                "  MARKET %s │ %ds │ book=U[%s/%s] D[%s/%s] │ ask_edge=%s",
+                "│ MARKET %s │ %ds │ U[%s/%s] D[%s/%s] │ edge=%s",
                 market.slug[-30:], ste,
                 up_bid, up_ask, dn_bid, dn_ask, edge_str,
             )
+
+        # Box bottom
+        log.info("└───────────────────────────────────────────────────")
 
     def _place_first_leg(
         self,
@@ -752,6 +775,29 @@ class Engine:
             log.debug("%s_SKIP %s │ %s maker=%s > max_first=%.3f",
                       reason.split("_")[0], slug, side_label, maker_price, max_first_leg)
             return
+
+        if maker_price > self._cfg.max_entry_price:
+            log.debug("%s_SKIP %s │ %s maker=%s > max_entry=%s",
+                      reason.split("_")[0], slug, side_label, maker_price, self._cfg.max_entry_price)
+            return
+
+        if maker_price < self._cfg.min_entry_price:
+            log.debug("%s_SKIP %s │ %s maker=%s < min_entry=%s",
+                      reason.split("_")[0], slug, side_label, maker_price, self._cfg.min_entry_price)
+            return
+
+        # Hedge margin guard: reject if no profitable hedge path exists at current book
+        opp_bid = down_bid if direction == MRDirection.BUY_UP else up_bid
+        opp_ask = down_ask if direction == MRDirection.BUY_UP else up_ask
+        if opp_bid is not None:
+            opp_maker = min(opp_bid + TICK_SIZE, opp_ask - TICK_SIZE)
+            if maker_price + opp_maker >= ONE - dynamic_edge:
+                log.debug(
+                    "%s_SKIP %s │ no hedge path (entry=%s + hedge=%s = %.3f >= %.3f)",
+                    reason.split("_")[0], slug, maker_price, opp_maker,
+                    maker_price + opp_maker, ONE - dynamic_edge,
+                )
+                return
 
         shares = calculate_balanced_shares(
             slug, up_ask, down_ask, self._cfg, seconds_to_end, exposure,
@@ -871,6 +917,14 @@ class Engine:
         combined = first_vwap + maker_price
         edge = ONE - combined
         if edge < hedge_edge:
+            # Abandon deeply negative positions — stop spamming HEDGE_SKIP
+            if edge < self._cfg.abandon_edge_threshold:
+                self._completed_markets.add(slug)
+                log.warning(
+                    "ABANDON %s │ edge=%.3f < %.3f │ position unhedgeable, stopping evaluation",
+                    slug, edge, self._cfg.abandon_edge_threshold,
+                )
+                return
             log.debug(
                 "HEDGE_SKIP %s │ %s_vwap=%s + %s_bid+1c=%s = %.3f │ edge=%.3f < %.3f",
                 slug, first_side, first_vwap, hedge_side, maker_price, combined, edge, hedge_edge,
@@ -883,9 +937,13 @@ class Engine:
         if bankroll > ZERO:
             cap = total_bankroll_cap(bankroll)
             remaining = cap - exposure
-            if hedge_notional > remaining:
+            # Unhedged exposure already reserves ~(1 - first_vwap) per share for
+            # this hedge.  Add that back so the check sees actual available capital.
+            embedded_reserve = hedge_shares * (ONE - first_vwap) if first_vwap else ZERO
+            effective_remaining = remaining + embedded_reserve
+            if hedge_notional > effective_remaining:
                 log.debug("HEDGE_SKIP %s │ bankroll exhausted (need $%s, remaining $%s)",
-                          slug, hedge_notional.quantize(Decimal("0.01")), remaining.quantize(Decimal("0.01")))
+                          slug, hedge_notional.quantize(Decimal("0.01")), effective_remaining.quantize(Decimal("0.01")))
                 return
 
         # Reprice if book moved, or skip if price unchanged
@@ -1057,6 +1115,7 @@ class Engine:
                     sh_entry_end_sec=self._cfg.sh_entry_end_sec,
                     no_new_orders_sec=self._cfg.no_new_orders_sec,
                     range_filter_enabled=self._cfg.mr_range_filter_enabled,
+                    min_ticks=self._cfg.min_btc_ticks,
                     volume=vol_state,
                     volume_min_btc=self._cfg.volume_min_btc,
                     volume_imbalance_threshold=self._cfg.volume_imbalance_threshold,
@@ -1123,3 +1182,27 @@ class Engine:
                 hedge_token=market.up_token_id,
                 hedge_bid=up_bid, hedge_ask=up_ask,
             )
+            return
+
+        # ── Phase 2.5: Both sides filled but still imbalanced — continue hedging ──
+        if has_up and has_down and abs(inv.imbalance) >= self._cfg.min_merge_shares:
+            if inv.imbalance > ZERO:
+                # More UP than DOWN — hedge by buying DOWN
+                self._place_hedge_leg(
+                    market, slug, inv, dynamic_edge, seconds_to_end, exposure,
+                    first_side="UP", hedge_direction=Direction.DOWN,
+                    first_vwap=inv.up_vwap, first_filled=abs(inv.imbalance),
+                    bootstrapped=inv.bootstrapped_up,
+                    hedge_token=market.down_token_id,
+                    hedge_bid=down_bid, hedge_ask=down_ask,
+                )
+            else:
+                # More DOWN than UP — hedge by buying UP
+                self._place_hedge_leg(
+                    market, slug, inv, dynamic_edge, seconds_to_end, exposure,
+                    first_side="DOWN", hedge_direction=Direction.UP,
+                    first_vwap=inv.down_vwap, first_filled=abs(inv.imbalance),
+                    bootstrapped=inv.bootstrapped_down,
+                    hedge_token=market.up_token_id,
+                    hedge_bid=up_bid, hedge_ask=up_ask,
+                )

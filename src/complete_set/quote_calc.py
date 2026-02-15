@@ -44,8 +44,8 @@ def calculate_balanced_shares(
 ) -> Optional[Decimal]:
     """Calculate order size from bankroll, scaling with time-to-end.
 
-    Uses the MORE EXPENSIVE price for all caps so both legs fit
-    within the budget, preventing share imbalances from asymmetric capping.
+    Uses the MORE EXPENSIVE price for base sizing, and the round-trip
+    cost (up + down) for bankroll cap so both legs fit within budget.
     """
     if up_price is None or up_price <= ZERO or down_price is None or down_price <= ZERO:
         return None
@@ -67,12 +67,16 @@ def calculate_balanced_shares(
             break
     shares = (base * time_factor).quantize(TICK_001, rounding=ROUND_DOWN)
 
-    # Cap by total exposure
+    # Cap by total exposure — use round_trip cost (both legs) so bankroll
+    # reserves enough for the hedge leg after first-leg fill
     total_cap = total_bankroll_cap(bankroll)
     remaining = total_cap - current_exposure
     if remaining <= ZERO:
         return None
-    cap_shares = (remaining / expensive).quantize(TICK_001, rounding=ROUND_DOWN)
+    round_trip = up_price + down_price
+    if round_trip <= ZERO:
+        return None
+    cap_shares = (remaining / round_trip).quantize(TICK_001, rounding=ROUND_DOWN)
     shares = min(shares, cap_shares)
 
     if shares < MIN_ORDER_SIZE:
@@ -109,7 +113,7 @@ def calculate_exposure(
 
     Three components:
     1. Unfilled order notional (capital committed on the book)
-    2. Unhedged imbalance × $0.50 (directional risk)
+    2. Unhedged imbalance × $1.00 (first-leg cost + hedge reserve)
     3. Hedged-but-unmerged cost (capital locked until merge settles)
     """
     orders_notional = ZERO
@@ -134,7 +138,10 @@ def calculate_exposure(
                 vwap = inv.up_vwap or Decimal("0.50")
             else:
                 vwap = inv.down_vwap or Decimal("0.50")
-            unhedged_exposure += abs_imbalance * vwap
+            # Reserve for both the filled leg cost AND the hedge leg (~1-vwap per share)
+            first_leg_cost = abs_imbalance * vwap
+            hedge_reserve = abs_imbalance * (ONE - vwap)
+            unhedged_exposure += first_leg_cost + hedge_reserve
         hedged = min(inv.up_shares, inv.down_shares)
         if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
             hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)
@@ -149,7 +156,7 @@ def calculate_exposure_breakdown(
     """Return (orders_notional, unhedged_exposure, hedged_locked, total_exposure).
 
     - orders_notional: unfilled order notional on the book
-    - unhedged_exposure: imbalance × $0.50 (directional risk)
+    - unhedged_exposure: imbalance × $1.00 (first-leg cost + hedge reserve)
     - hedged_locked: cost of hedged-but-unmerged pairs (capital locked until merge)
     - total_exposure: sum of all three (what counts against bankroll)
     """
@@ -175,7 +182,10 @@ def calculate_exposure_breakdown(
                 vwap = inv.up_vwap or Decimal("0.50")
             else:
                 vwap = inv.down_vwap or Decimal("0.50")
-            unhedged_exposure += abs_imbalance * vwap
+            # Reserve for both the filled leg cost AND the hedge leg (~1-vwap per share)
+            first_leg_cost = abs_imbalance * vwap
+            hedge_reserve = abs_imbalance * (ONE - vwap)
+            unhedged_exposure += first_leg_cost + hedge_reserve
         hedged = min(inv.up_shares, inv.down_shares)
         if hedged > ZERO and inv.up_vwap is not None and inv.down_vwap is not None:
             hedged_locked += hedged * (inv.up_vwap + inv.down_vwap)

@@ -4,17 +4,27 @@ complete_set:
   refresh_millis: 500
   assets: [bitcoin]
 
+    # Bankroll
+  bankroll_usd: 500
+
+  # Edge
+  min_edge: 0.01
+  hedge_edge_buffer: 0.0          # extra edge required above min_edge before hedging (was 0.005)
+
+
+    # Hedge chase protection — max cents of upward reprice allowed (0 = freeze)
+  max_hedge_chase_cents: 0
+
+
   # Time window
   min_seconds_to_end: 90
   max_seconds_to_end: 900
   no_new_orders_sec: 90
 
-  # Edge
-  min_edge: 0.01
-  hedge_edge_buffer: 0.005        # extra edge required above min_edge before hedging
-
-  # Bankroll
-  bankroll_usd: 500
+  # Swing filter — require opposite side was recently cheap before first leg
+  swing_filter_enabled: true
+  swing_lookback_sec: 180         # 3 minutes of price history
+  swing_max_ask: 0.48             # opposite side must have been below this
 
   # Merge
   min_merge_shares: 10
@@ -45,10 +55,20 @@ complete_set:
   volume_short_window_sec: 30
   volume_medium_window_sec: 120
 
-  # Hedge chase protection — max cents of upward reprice allowed (0 = freeze)
-  max_hedge_chase_cents: 0
+  # Entry price bounds — reject first-leg entries outside this range
+  max_entry_price: 0.45
+  min_entry_price: 0.10
 
-  # Swing filter — require opposite side was recently cheap before first leg
-  swing_filter_enabled: true
-  swing_lookback_sec: 180         # 3 minutes of price history
-  swing_max_ask: 0.48             # opposite side must have been below this
+  # BTC tick count — minimum WS ticks before allowing entry (5 ticks ≈ 16s of price history)
+  min_btc_ticks: 5
+
+  # Abandon — stop evaluating positions where hedge edge is deeply negative
+  abandon_edge_threshold: -0.10
+
+  # Log filters — suppress noisy DEBUG patterns (true = shown, false = hidden)
+  log_filters:
+    hedge_skip: true
+    book_change: false
+    lag_trace: false
+    btc_tick: true
+    buffer_hold: true

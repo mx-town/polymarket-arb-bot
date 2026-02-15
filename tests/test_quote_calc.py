@@ -84,30 +84,29 @@ class TestExposure:
         assert exposure == Decimal("4.50")
 
     def test_unhedged_uses_vwap(self):
-        """Unhedged exposure should use actual VWAP, not hardcoded 0.50."""
+        """Unhedged exposure reserves for both legs: first_leg_cost + hedge_reserve."""
         inv = MarketInventory(
             up_shares=Decimal("10"),
             down_shares=ZERO,
             up_cost=Decimal("4.00"),  # VWAP = 0.40
         )
         exposure = calculate_exposure({}, {"test": inv})
-        # 10 shares unhedged * VWAP 0.40 = 4.00
-        assert exposure == Decimal("10") * Decimal("0.40")
+        # 10 shares unhedged: first_leg_cost=10*0.40=4.00, hedge_reserve=10*(1-0.40)=6.00
+        # total = 4.00 + 6.00 = 10.00
+        assert exposure == Decimal("10.00")
 
     def test_unhedged_fallback_050(self):
-        """Falls back to 0.50 when no VWAP available."""
+        """Falls back to 0.50 when no VWAP available, still reserves both legs."""
         inv = MarketInventory(
             up_shares=Decimal("10"),
             down_shares=ZERO,
             up_cost=ZERO,  # no cost info → vwap is None
         )
-        # up_shares=10, down_shares=0, imbalance=10 (positive)
-        # up_vwap is None (shares > 0 but cost is 0, so 0/10 = 0... wait
-        # Actually up_cost=0, up_shares=10, so up_vwap = 0/10 = 0
-        # The code says: vwap = inv.up_vwap or Decimal("0.50")
-        # 0 is falsy, so it falls back to 0.50
+        # up_vwap = 0/10 = 0 (falsy), falls back to 0.50
+        # first_leg_cost=10*0.50=5.00, hedge_reserve=10*(1-0.50)=5.00
+        # total = 5.00 + 5.00 = 10.00
         exposure = calculate_exposure({}, {"test": inv})
-        assert exposure == Decimal("5.00")
+        assert exposure == Decimal("10.00")
 
     def test_hedged_locked(self):
         inv = MarketInventory(

@@ -41,7 +41,19 @@ class _StripAnsiFormatter(logging.Formatter):
         return self._ansi_re.sub('', result)
 
 
-def _setup_logging(level_str: str) -> None:
+class _ColorFormatter(logging.Formatter):
+    """Dim DEBUG lines on the console for visual hierarchy."""
+    _DIM = "\033[2m"
+    _RESET = "\033[0m"
+
+    def format(self, record):
+        result = super().format(record)
+        if record.levelno <= logging.DEBUG:
+            return f"{self._DIM}{result}{self._RESET}"
+        return result
+
+
+def _setup_logging(level_str: str, dry_run: bool = True) -> None:
     level = getattr(logging, level_str.upper(), logging.INFO)
     logging.basicConfig(
         level=level,
@@ -49,9 +61,18 @@ def _setup_logging(level_str: str) -> None:
         datefmt="%H:%M:%S",
     )
 
-    # File handler — full timestamps, no ANSI colors
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    # Replace console handler formatter with dim-aware version
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.setFormatter(_ColorFormatter(
+                fmt="%(asctime)s │ %(name)-16s │ %(message)s",
+                datefmt="%H:%M:%S",
+            ))
+
+    # File handler — separate directories for dry vs live runs
+    mode = "dry" if dry_run else "live"
+    log_dir = Path("logs") / mode
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"complete_set_{datetime.now():%Y-%m-%d_%H%M%S}.log"
     fh = logging.FileHandler(log_file)
     fh.setLevel(level)
@@ -64,7 +85,42 @@ def _setup_logging(level_str: str) -> None:
     for noisy in ("httpx", "httpcore", "urllib3", "py_clob_client", "hpack", "h2", "h11", "web3", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+from complete_set.config import LogFilters
 from complete_set.models import C_RESET, C_YELLOW
+
+# Map config flag name → log message substring to match
+_LOG_FILTER_PATTERNS = {
+    "hedge_skip": "HEDGE_SKIP ",
+    "book_change": "BOOK_CHANGE ",
+    "lag_trace": "LAG_TRACE ",
+    "btc_tick": "BTC_TICK ",
+    "buffer_hold": "BUFFER_HOLD ",
+}
+
+
+class _PatternFilter(logging.Filter):
+    def __init__(self, suppressed: tuple[str, ...]):
+        super().__init__()
+        self._suppressed = suppressed
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p in msg for p in self._suppressed)
+
+
+def _install_log_filters(log_filters: LogFilters) -> None:
+    suppressed = tuple(
+        pattern for name, pattern in _LOG_FILTER_PATTERNS.items()
+        if not getattr(log_filters, name)
+    )
+    if suppressed:
+        pf = _PatternFilter(suppressed)
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(pf)
+        logging.getLogger("cs.bot").info(
+            "LOG_FILTERS suppressing %d patterns: %s",
+            len(suppressed), ", ".join(suppressed),
+        )
 
 log = logging.getLogger("cs.bot")
 
@@ -117,13 +173,14 @@ def _init_client(dry_run: bool) -> ClobClient:
 
 def main():
     args = _parse_args()
-    _setup_logging(args.log_level)
     load_dotenv()
 
     with open("config.yaml") as f:
         raw_cfg = yaml.safe_load(f)
 
     cfg = load_complete_set_config(raw_cfg)
+    _setup_logging(args.log_level, dry_run=cfg.dry_run)
+    _install_log_filters(cfg.log_filters)
 
     if not cfg.enabled:
         log.info("Complete-set strategy is disabled in config")
