@@ -134,6 +134,10 @@ class Engine:
         log.info("  Swing filter    : %s (lookback=%ds, max_ask=%s)",
                  "ON" if self._cfg.swing_filter_enabled else "OFF",
                  self._cfg.swing_lookback_sec, self._cfg.swing_max_ask)
+        log.info("  Entry margin    : %s (floor for hedge-margin guard)",
+                 self._cfg.min_entry_margin)
+        log.info("  Min BTC range   : %s (block entries when flat)",
+                 self._cfg.min_range_pct)
         log.info("  Momentum filter : %s (lookback=%ds, threshold=$%s)",
                  "ON" if self._cfg.momentum_filter_enabled else "OFF",
                  self._cfg.momentum_lookback_sec, self._cfg.momentum_threshold_usd)
@@ -803,15 +807,17 @@ class Engine:
             return
 
         # Hedge margin guard: reject if no profitable hedge path exists at current book
+        # Uses min_entry_margin as floor, decoupled from dynamic_edge (which controls hedge trigger)
         opp_bid = down_bid if direction == MRDirection.BUY_UP else up_bid
         opp_ask = down_ask if direction == MRDirection.BUY_UP else up_ask
         if opp_bid is not None:
             opp_maker = min(opp_bid + TICK_SIZE, opp_ask - TICK_SIZE)
-            if maker_price + opp_maker >= ONE - dynamic_edge:
+            entry_margin = max(dynamic_edge, self._cfg.min_entry_margin)
+            if maker_price + opp_maker >= ONE - entry_margin:
                 log.debug(
                     "%s_SKIP %s │ no hedge path (entry=%s + hedge=%s = %.3f >= %.3f)",
                     reason.split("_")[0], slug, maker_price, opp_maker,
-                    maker_price + opp_maker, ONE - dynamic_edge,
+                    maker_price + opp_maker, ONE - entry_margin,
                 )
                 return
 
@@ -941,7 +947,7 @@ class Engine:
                     slug, edge, self._cfg.abandon_edge_threshold,
                 )
                 # Try to sell unhedged shares at bid instead of holding to resolution
-                if self._cfg.abandon_sell_enabled and hedge_bid is not None:
+                if self._cfg.abandon_sell_enabled and hedge_bid is not None and seconds_to_end <= 60:
                     # We're holding the FIRST side (not the hedge side) — sell that
                     held_is_up = (first_side == "UP")
                     held_token = market.up_token_id if held_is_up else market.down_token_id
@@ -1150,6 +1156,14 @@ class Engine:
             window_start = market.end_time - max_lifetime
             set_market_window(window_start, rpc_url=self._rpc_url)
             candle = get_candle_state()
+
+            # Min range filter: block entries when BTC is too flat for swing opportunities
+            if candle and self._cfg.min_range_pct > ZERO and candle.range_pct < self._cfg.min_range_pct:
+                log.debug(
+                    "RANGE_SKIP %s │ range=%.5f < min=%.5f (BTC too flat)",
+                    slug, candle.range_pct, self._cfg.min_range_pct,
+                )
+                return
 
             # Volume state for direction prediction
             vol_state = get_volume_state() if self._cfg.volume_imbalance_enabled else None
