@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 from py_clob_client.clob_types import OrderType
 
-from complete_set.models import Direction, GabagoolMarket, OrderState
-from complete_set.order_mgr import OrderManager
+from rebate_maker.models import Direction, GabagoolMarket, OrderState
+from shared.order_mgr import OrderManager
 
 ZERO = Decimal("0")
 
@@ -92,7 +92,7 @@ class TestReconcileOrders:
         market = _make_market()
 
         # Insert sentinel
-        mgr._orders["111"] = OrderState(
+        mgr._orders["111"] = [OrderState(
             order_id="",
             market=market,
             token_id="111",
@@ -101,7 +101,7 @@ class TestReconcileOrders:
             size=Decimal("10"),
             placed_at=time.time(),
             side="BUY",
-        )
+        )]
 
         client = MagicMock()
         client.get_orders.return_value = [
@@ -160,7 +160,7 @@ class TestConsumedCrossing:
         )
         return market
 
-    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    @patch("shared.order_mgr.get_simulated_fill_size")
     def test_consumed_passed_and_incremented(self, mock_sim):
         """consumed_crossing should be passed to get_simulated_fill_size and grow after fills."""
         mgr = OrderManager(dry_run=True)
@@ -193,7 +193,7 @@ class TestConsumedCrossing:
         assert state.consumed_crossing == Decimal("15")
         assert state.matched_size == Decimal("15")
 
-    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    @patch("shared.order_mgr.get_simulated_fill_size")
     def test_stale_book_prevents_double_fill(self, mock_sim):
         """Same crossing volume across ticks should not produce additional fills."""
         mgr = OrderManager(dry_run=True)
@@ -215,7 +215,7 @@ class TestConsumedCrossing:
         assert state.consumed_crossing == Decimal("15")
         assert state.matched_size == Decimal("15")
 
-    @patch("complete_set.order_mgr.get_simulated_fill_size")
+    @patch("shared.order_mgr.get_simulated_fill_size")
     def test_consumed_resets_on_new_order(self, mock_sim):
         """A new order should start with consumed_crossing=0."""
         mgr = OrderManager(dry_run=True)

@@ -1,106 +1,62 @@
-complete_set:
+rebate_maker:
   enabled: true
   dry_run: true
   refresh_millis: 500
-  assets: [bitcoin]
-
-    # Bankroll
+  assets: [bitcoin, ethereum]
   bankroll_usd: 50
-
-  # Edge
-  min_edge: 0.01
-  hedge_edge_buffer: 0.0          # extra edge required above min_edge before hedging (was 0.005)
-
-
-    # Hedge chase protection — max cents of upward reprice allowed (0 = freeze)
-  max_hedge_chase_cents: 2
-
-
-  # Time window
+  min_edge: -0.02
   min_seconds_to_end: 90
   max_seconds_to_end: 900
   no_new_orders_sec: 90
-
-  # Swing filter — require opposite side was recently cheap before first leg
-  swing_filter_enabled: true
-  swing_lookback_sec: 180         # 3 minutes of price history
-  swing_max_ask: 0.48             # opposite side must have been below this
-
-  # Merge
+  grid_levels: 10
+  grid_step: 0.01
   min_merge_shares: 10
-  min_merge_profit_usd: 0.02
+  min_merge_profit_usd: -0.50
   merge_cooldown_sec: 15
-  post_merge_lockout: true        # block new entries on a market after merge
-
-  # Gas
+  post_merge_lockout: true
   max_gas_price_gwei: 200
   dry_merge_gas_cost_usd: 0.003
   matic_price_usd: 0.40
+  max_entry_price: 0.60
+  min_entry_price: 0.05
 
-  # Stop hunt — unified entry signal (minutes 2-12 of candle)
-  stop_hunt_enabled: true
-  sh_entry_start_sec: 780
-  sh_entry_end_sec: 90            # was 600, now covers full window (matches no_new_orders_sec)
-
-  # Mean reversion — disabled (MR falls through to cheapest-ask, same as SH)
-  mean_reversion_enabled: false
-  mr_deviation_threshold: 0.0010
-  mr_range_filter_enabled: false
-  mr_max_range_pct: 0.0050
-  mr_entry_window_sec: 600
-
-  # Volume imbalance — disabled (never influenced direction, threshold too high)
-  volume_imbalance_enabled: false
-  volume_imbalance_threshold: 0.15
-  volume_min_btc: 50
-  volume_short_window_sec: 30
-  volume_medium_window_sec: 120
-
-  # Entry price bounds — reject first-leg entries outside this range
-  max_entry_price: 0.45
-  min_entry_price: 0.10
-
-  # BTC tick count — minimum WS ticks before allowing entry (5 ticks ≈ 16s of price history)
-  min_btc_ticks: 5
-
-  # Min BTC range — block entries when BTC candle range is too flat for swing opportunities
-  min_range_pct: 0.002              # 0.2% minimum BTC range before entry
-
-  # BTC momentum filter — block entries during one-directional BTC moves
-  momentum_filter_enabled: true
-  momentum_lookback_sec: 30
-  momentum_threshold_usd: 100
-
-  # Abandon — stop evaluating positions where hedge edge is deeply negative
-  abandon_edge_threshold: -0.10
-  abandon_sell_enabled: true           # place GTC SELL at bid when abandoning
-  abandon_min_bid: 0.03               # don't sell at dust bids
-
-  # Log filters — suppress noisy DEBUG patterns (true = shown, false = hidden)
-  log_filters:
-    hedge_skip: true
-    book_change: false
-    lag_trace: false
-    btc_tick: true
-    buffer_hold: true
-
-trend_rider:
+grid_maker:
   enabled: true
   dry_run: true
   refresh_millis: 500
-  bankroll_usd: 100
+  bankroll_usd: 1000
+  max_markets: 5
+  assets: [bitcoin, ethereum]
+  timeframes: [5m, 15m, 1h]
+  # Grid (static mode — matches gabagool: full range, 26 shares/level)
+  grid_mode: static
+  grid_step: 0.01
+  fixed_size_shares: 26
+  min_entry_price: 0.01
+  max_entry_price: 0.99
+  # Dynamic mode fallback params
+  grid_levels_per_side: 30
+  base_size_shares: 7
+  size_curve: flat
+  # Timing
   min_seconds_to_end: 120
-  max_seconds_to_end: 480
-  momentum_lookback_sec: 60
-  momentum_threshold_usd: 80
-  min_favorite_price: 0.55
-  max_favorite_price: 0.80
-  min_underdog_ask: 0.20
-  min_combined_asks: 0.98
-  max_positions: 2
-  max_position_pct: 0.25
-  stop_loss_drop: 0.10
+  max_seconds_to_end: 5400
+  entry_delay_sec: 3
+  # Taker
+  taker_aggression_pct: 0.12
+  taker_trigger_imbalance: 0.15
   use_fok: true
+  # Merge (batch mode — gabagool merges every ~35-40 min)
+  merge_mode: batch
+  min_merge_shares: 10
+  merge_cooldown_sec: 15
+  merge_batch_interval_sec: 2400
+  # Gas
+  max_gas_price_gwei: 200
+  matic_price_usd: 0.40
+  # Compounding
+  compound: true
+  compound_interval_sec: 3600
 
 observer:
   enabled: true
@@ -111,12 +67,5 @@ observer:
   etherscan_page_size: 50
   backfill_on_start: true
   book_poll_interval: 3
+  balance_poll_interval_sec: 300
   log_level: INFO
-
-# Dashboard API
-api:
-  enabled: true
-  host: "0.0.0.0"
-  port: 8000
-  cors_origins:
-    - "http://localhost:4200"

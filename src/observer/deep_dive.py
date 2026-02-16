@@ -97,7 +97,7 @@ def load_data(db_path: str, session_id: str | None) -> dict[str, pd.DataFrame]:
     for table in [
         "obs_trades", "obs_merges", "obs_positions", "obs_position_changes",
         "obs_prices", "obs_redemptions", "obs_market_windows", "obs_book_snapshots",
-        "obs_sessions",
+        "obs_sessions", "obs_balance_snapshots", "obs_usdc_transfers",
     ]:
         try:
             q = f"SELECT * FROM {table}"
@@ -1080,6 +1080,213 @@ def section_cheat_sheet(dfs: dict) -> tuple[str, list]:
 
 
 # ===================================================================
+# Text Summary (stdout)
+# ===================================================================
+
+def _print_summary(dfs: dict[str, pd.DataFrame]) -> None:
+    """Print a compact text summary to stdout."""
+    t = dfs["obs_trades"]
+    if t.empty:
+        print("No trade data found.")
+        return
+
+    sess = dfs["obs_sessions"]
+    merges = dfs["obs_merges"]
+    redemptions = dfs["obs_redemptions"]
+
+    n_trades = len(t)
+    n_markets = t["slug"].nunique()
+    total_vol = t["usdc_size"].sum()
+    ts_min, ts_max = t["ts"].min(), t["ts"].max()
+    duration_hrs = (ts_max - ts_min) / 3600
+
+    maker_pct = (t["role"] == "MAKER").mean() * 100
+    maker_avg = t.loc[t["role"] == "MAKER", "usdc_size"].mean()
+    taker_avg = t.loc[t["role"] == "TAKER", "usdc_size"].mean()
+
+    # Per-market edge + P&L
+    market_pnl = []
+    for slug, grp in t.groupby("slug"):
+        up = grp[grp["outcome"] == "Up"]
+        down = grp[grp["outcome"] == "Down"]
+        if up.empty or down.empty:
+            continue
+        up_vwap = (up["price"] * up["size"]).sum() / up["size"].sum()
+        down_vwap = (down["price"] * down["size"]).sum() / down["size"].sum()
+        edge = 1 - up_vwap - down_vwap
+        mergeable = min(up["size"].sum(), down["size"].sum())
+        gross = mergeable * edge
+        market_pnl.append({"slug": slug, "edge": edge, "mergeable": mergeable, "gross": gross,
+                           "up_cost": up["usdc_size"].sum(), "down_cost": down["usdc_size"].sum()})
+    mp = pd.DataFrame(market_pnl) if market_pnl else pd.DataFrame()
+
+    avg_edge = mp["edge"].mean() if not mp.empty else 0
+    win_rate = (mp["edge"] > 0).mean() * 100 if not mp.empty else 0
+    combined_vwap = 1 - avg_edge if avg_edge else 0
+
+    # Merge/redemption revenue ($1 per share merged/redeemed)
+    merge_revenue = merges["shares"].sum() if not merges.empty and "shares" in merges.columns else 0
+    redeem_revenue = redemptions["shares"].sum() if not redemptions.empty and "shares" in redemptions.columns else 0
+    unmerged_cost = (mp["up_cost"].sum() + mp["down_cost"].sum()) if not mp.empty else 0
+
+    # BTC:ETH
+    asset_vol = t.groupby("asset_type")["usdc_size"].sum()
+    btc_v = asset_vol.get("BTC", 0)
+    eth_v = asset_vol.get("ETH", 0)
+    btc_n = t[t["asset_type"] == "BTC"]["slug"].nunique()
+    eth_n = t[t["asset_type"] == "ETH"]["slug"].nunique()
+
+    # Timeframe breakdown
+    tf_markets = t.groupby("timeframe")["slug"].nunique().sort_values(ascending=False)
+
+    print()
+    print("=" * 60)
+    print("  GABAGOOL DEEP DIVE SUMMARY")
+    print("=" * 60)
+    print(f"  Sessions: {len(sess)}  |  Duration: {duration_hrs:.1f} hrs")
+    print(f"  Trades: {n_trades:,}  |  Markets: {n_markets}  |  Volume: ${total_vol:,.0f}")
+    print(f"  MAKER: {maker_pct:.0f}% (${maker_avg:.2f} avg)  |  TAKER: {100-maker_pct:.0f}% (${taker_avg:.2f} avg)")
+    print()
+    print(f"  Combined VWAP: {combined_vwap:.4f}  |  Avg edge: {avg_edge*100:.2f}%  |  Win rate: {win_rate:.0f}%")
+    print()
+    print(f"  Merge revenue:      ${merge_revenue:,.0f}  ({len(merges)} merges)")
+    print(f"  Redemption revenue: ${redeem_revenue:,.0f}  ({len(redemptions)} redemptions)")
+    print(f"  Unmerged exposure:  ${unmerged_cost:,.0f}")
+    print()
+    print(f"  BTC: {btc_n} markets (${btc_v:,.0f})  |  ETH: {eth_n} markets (${eth_v:,.0f})")
+    print(f"  Timeframes: {', '.join(f'{k}:{v}' for k, v in tf_markets.items())}")
+
+    # Top 3 winners / losers
+    if not mp.empty and len(mp) >= 3:
+        top = mp.nlargest(3, "gross")
+        bot = mp.nsmallest(3, "gross")
+        print()
+        print("  Top 3 winners:")
+        for _, r in top.iterrows():
+            print(f"    {r['slug'][:45]:<45s}  edge={r['edge']*100:+.2f}%  gross=${r['gross']:+,.2f}")
+        print("  Top 3 losers:")
+        for _, r in bot.iterrows():
+            print(f"    {r['slug'][:45]:<45s}  edge={r['edge']*100:+.2f}%  gross=${r['gross']:+,.2f}")
+
+    print("=" * 60)
+    print()
+
+
+# ===================================================================
+# Section 10: Capital Growth
+# ===================================================================
+
+def section_capital_growth(dfs: dict) -> tuple[str, list]:
+    balances = dfs["obs_balance_snapshots"]
+    transfers = dfs["obs_usdc_transfers"]
+
+    figs = []
+    html_parts = []
+
+    if balances.empty:
+        return "<p>No balance data available.</p>", []
+
+    # Sort by timestamp
+    balances = balances.sort_values("ts")
+    balances["dt"] = balances["ts"].apply(_ts_to_dt)
+
+    # Chart 1: USDC balance + total equity over time
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(balances["dt"], balances["usdc_balance"],
+            label="USDC Balance", color="green", linewidth=2)
+    ax.plot(balances["dt"], balances["total_equity"],
+            label="Total Equity", color="blue", linewidth=2)
+    ax.fill_between(balances["dt"], balances["usdc_balance"],
+                    balances["total_position_value"] + balances["usdc_balance"],
+                    alpha=0.3, color="orange", label="Position Value")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("USD")
+    ax.set_title("Capital Growth: USDC Balance & Total Equity")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    fig.tight_layout()
+    figs.append(("s10_capital_growth", fig))
+
+    # Summary statistics
+    initial_equity = balances["total_equity"].iloc[0]
+    final_equity = balances["total_equity"].iloc[-1]
+    equity_change = final_equity - initial_equity
+    equity_pct = (equity_change / initial_equity * 100) if initial_equity > 0 else 0
+
+    initial_usdc = balances["usdc_balance"].iloc[0]
+    final_usdc = balances["usdc_balance"].iloc[-1]
+    usdc_change = final_usdc - initial_usdc
+
+    avg_position_value = balances["total_position_value"].mean()
+    max_position_value = balances["total_position_value"].max()
+
+    duration_hours = (balances["ts"].iloc[-1] - balances["ts"].iloc[0]) / 3600
+
+    html_parts.append(f"""
+    <h4>Capital Growth Summary</h4>
+    <table class="summary">
+    <tr><td>Initial equity</td><td>${initial_equity:,.2f}</td></tr>
+    <tr><td>Final equity</td><td>${final_equity:,.2f}</td></tr>
+    <tr><td>Total equity change</td><td>${equity_change:,.2f} ({equity_pct:+.2f}%)</td></tr>
+    <tr><td>Initial USDC</td><td>${initial_usdc:,.2f}</td></tr>
+    <tr><td>Final USDC</td><td>${final_usdc:,.2f}</td></tr>
+    <tr><td>USDC change</td><td>${usdc_change:,.2f}</td></tr>
+    <tr><td>Avg position value</td><td>${avg_position_value:,.2f}</td></tr>
+    <tr><td>Max position value</td><td>${max_position_value:,.2f}</td></tr>
+    <tr><td>Session duration</td><td>{duration_hours:.1f} hours</td></tr>
+    </table>
+    """)
+
+    # Rebate analysis
+    if not transfers.empty:
+        rebates = transfers[transfers["transfer_type"] == "rebate"]
+        if not rebates.empty:
+            total_rebates = rebates["amount"].sum()
+            n_rebates = len(rebates)
+            rebates_sorted = rebates.sort_values("ts")
+            rebates_sorted["dt"] = rebates_sorted["ts"].apply(_ts_to_dt)
+
+            # Calculate daily rebate income if we have enough data
+            if duration_hours >= 1:
+                daily_rebate = total_rebates * (24 / duration_hours)
+            else:
+                daily_rebate = 0
+
+            html_parts.append(f"""
+            <h4>Rebate Income</h4>
+            <table class="summary">
+            <tr><td>Total rebates</td><td>${total_rebates:,.2f}</td></tr>
+            <tr><td>Number of rebates</td><td>{n_rebates}</td></tr>
+            <tr><td>Average rebate</td><td>${total_rebates/n_rebates:,.2f}</td></tr>
+            <tr><td>Est. daily rebate rate</td><td>${daily_rebate:,.2f}/day</td></tr>
+            </table>
+            """)
+
+            # Chart 2: Cumulative rebate income
+            rebates_sorted["cumulative"] = rebates_sorted["amount"].cumsum()
+            fig2, ax2 = plt.subplots(figsize=(12, 5))
+            ax2.plot(rebates_sorted["dt"], rebates_sorted["cumulative"],
+                    color="green", linewidth=2)
+            ax2.scatter(rebates_sorted["dt"], rebates_sorted["cumulative"],
+                       s=40, alpha=0.6, color="darkgreen")
+            ax2.set_xlabel("Time")
+            ax2.set_ylabel("Cumulative Rebates (USD)")
+            ax2.set_title("Cumulative Rebate Income Over Time")
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            fig2.tight_layout()
+            figs.append(("s10_rebates", fig2))
+        else:
+            html_parts.append("<p><i>No rebate transfers observed.</i></p>")
+    else:
+        html_parts.append("<p><i>No transfer data available.</i></p>")
+
+    imgs = "".join(_save_and_embed(f, n) for n, f in figs)
+    return "\n".join(html_parts) + imgs, figs
+
+
+# ===================================================================
 # HTML Report Assembly
 # ===================================================================
 
@@ -1137,6 +1344,7 @@ SECTION_NAMES = [
     ("7. Market Selection & Capital Allocation", section_allocation),
     ("8. Volatility Regime Overlay", section_volatility),
     ("9. Actionable Cheat Sheet", section_cheat_sheet),
+    ("10. Capital Growth", section_capital_growth),
 ]
 
 
@@ -1144,14 +1352,13 @@ def generate_report(db_path: str, session_id: str | None = None) -> str:
     CHART_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading data from {db_path} ...")
     dfs = load_data(db_path, session_id)
-    n_trades = len(dfs["obs_trades"])
-    print(f"  {n_trades} trades loaded")
+
+    # Print compact text summary to stdout
+    _print_summary(dfs)
 
     sections_html = []
     for title, func in SECTION_NAMES:
-        print(f"  Generating: {title} ...")
         html, _ = func(dfs)
         sections_html.append(f'<div class="section"><h2>{title}</h2>\n{html}\n</div>')
 
@@ -1161,8 +1368,7 @@ def generate_report(db_path: str, session_id: str | None = None) -> str:
     )
 
     REPORT_PATH.write_text(report)
-    print(f"\nReport written to {REPORT_PATH}")
-    print(f"Charts saved to {CHART_DIR}/")
+    print(f"HTML report: {REPORT_PATH}")
     return str(REPORT_PATH)
 
 

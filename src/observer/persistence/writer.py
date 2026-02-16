@@ -23,6 +23,7 @@ from observer.models import (
 )
 from observer.persistence.db import get_engine
 from observer.persistence.schema import (
+    obs_balance_snapshots,
     obs_book_snapshots,
     obs_market_windows,
     obs_merges,
@@ -31,6 +32,7 @@ from observer.persistence.schema import (
     obs_prices,
     obs_redemptions,
     obs_trades,
+    obs_usdc_transfers,
 )
 
 log = logging.getLogger("obs.persistence.writer")
@@ -233,6 +235,40 @@ class ObserverWriter:
         async with self._lock:
             self._buffer.append((obs_prices, row))
 
+    async def enqueue_balance_snapshot(
+        self, usdc_balance: float, total_position_value: float
+    ) -> None:
+        """Queue a balance + equity snapshot."""
+        total_equity = usdc_balance + total_position_value
+        row = {
+            "ts": time.time(),
+            "usdc_balance": usdc_balance,
+            "total_position_value": total_position_value,
+            "total_equity": total_equity,
+            "session_id": self._session_id,
+        }
+        async with self._lock:
+            self._buffer.append((obs_balance_snapshots, row))
+
+    async def enqueue_usdc_transfers(self, transfers: list[dict]) -> None:
+        """Queue USDC transfer records."""
+        if not transfers:
+            return
+        rows = []
+        for t in transfers:
+            rows.append((obs_usdc_transfers, {
+                "ts": t.get("ts", time.time()),
+                "tx_hash": t.get("tx_hash", ""),
+                "from_address": t.get("from_address", ""),
+                "to_address": t.get("to_address", ""),
+                "amount": t.get("amount", 0),
+                "block_number": t.get("block_number", 0),
+                "transfer_type": t.get("transfer_type", ""),
+                "session_id": self._session_id,
+            }))
+        async with self._lock:
+            self._buffer.extend(rows)
+
     async def update_trade_role(self, tx_hash: str, role: str) -> None:
         """Queue a role update for a specific trade by tx_hash."""
         if not tx_hash or not role:
@@ -295,7 +331,7 @@ class ObserverWriter:
                     all_keys.update(r.keys())
                 normalized = [{k: r.get(k) for k in all_keys} for r in rows]
 
-                if name in ("obs_trades", "obs_merges"):
+                if name in ("obs_trades", "obs_merges", "obs_usdc_transfers"):
                     # INSERT OR IGNORE for idempotent restarts
                     conn.execute(
                         table.insert().prefix_with("OR IGNORE"),

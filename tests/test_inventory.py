@@ -2,8 +2,8 @@
 
 from decimal import Decimal
 
-from complete_set.inventory import InventoryTracker
-from complete_set.models import MarketInventory
+from rebate_maker.inventory import InventoryTracker
+from rebate_maker.models import MarketInventory
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
@@ -291,7 +291,7 @@ class TestBootstrapFlags:
         tracker = InventoryTracker(dry_run=False)
         import time
 
-        from complete_set.models import GabagoolMarket
+        from rebate_maker.models import GabagoolMarket
         market = GabagoolMarket(
             slug="test-bootstrap",
             up_token_id="tok-up",

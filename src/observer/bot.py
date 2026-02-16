@@ -15,6 +15,7 @@ import yaml
 from dotenv import load_dotenv
 
 from observer.analyzer import TradeAnalyzer
+from observer.balance_tracker import BalanceTracker
 from observer.book import BookPoller
 from observer.btc_price import BtcPriceTracker
 from observer.config import load_observer_config
@@ -126,6 +127,8 @@ async def _run(cfg) -> None:
     analyzer = TradeAnalyzer()
     price_tracker = BtcPriceTracker()
     book_poller = BookPoller()
+    balance_tracker = BalanceTracker(cfg.proxy_address)
+    _last_balance_poll = 0.0
 
     try:
         # Initial backfill
@@ -206,6 +209,32 @@ async def _run(cfg) -> None:
                         r["from_size"], r["to_size"],
                     )
                 await writer.enqueue_redemptions(redemptions)
+
+            # Balance poll (every balance_poll_interval_sec)
+            current_time = time.time()
+            if current_time - _last_balance_poll >= cfg.balance_poll_interval_sec:
+                _last_balance_poll = current_time
+                # Convert positions to dicts with current_value
+                position_data = [
+                    {
+                        "current_value": p.current_value,
+                        "slug": p.slug,
+                        "outcome": p.outcome,
+                        "size": p.size,
+                    }
+                    for p in pos_poller._prev.values()
+                ]
+                usdc_balance, total_position_value = await asyncio.to_thread(
+                    balance_tracker.poll_balance, position_data
+                )
+                await writer.enqueue_balance_snapshot(usdc_balance, total_position_value)
+                log.info(
+                    "BALANCE │ usdc=$%.2f positions=$%.2f equity=$%.2f",
+                    usdc_balance,
+                    total_position_value,
+                    usdc_balance + total_position_value,
+                )
+                # TODO: Add transfer scanning later (expensive, requires block range calculation)
 
             # Merge poll (every 6th tick)
             if tick % 6 == 0:

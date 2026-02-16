@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from complete_set.models import MarketInventory
+from rebate_maker.models import MarketInventory
 
 ZERO = Decimal("0")
 

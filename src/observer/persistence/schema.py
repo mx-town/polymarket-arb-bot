@@ -174,3 +174,30 @@ obs_book_snapshots = Table(
     Index("ix_obs_book_ts", "ts"),
     Index("ix_obs_book_token", "token_id"),
 )
+
+obs_balance_snapshots = Table(
+    "obs_balance_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("usdc_balance", Float),
+    Column("total_position_value", Float),
+    Column("total_equity", Float),
+    Column("session_id", String(50)),
+    Index("ix_obs_bal_ts", "ts"),
+)
+
+obs_usdc_transfers = Table(
+    "obs_usdc_transfers",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("tx_hash", String(80), unique=True),
+    Column("from_address", String(50)),
+    Column("to_address", String(50)),
+    Column("amount", Float),
+    Column("block_number", Integer),
+    Column("transfer_type", String(20)),
+    Column("session_id", String(50)),
+    Index("ix_obs_transfers_ts", "ts"),
+)

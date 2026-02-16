@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "polymarket-arb-bot"
 version = "0.1.0"
-description = "Polymarket arb bot — complete-set, trend-rider, and observer strategies"
+description = "Polymarket arb bot — rebate-maker, grid-maker, and observer strategies"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
@@ -14,8 +14,6 @@ dependencies = [
     "pyyaml",
     "web3",
     "websockets>=12.0",
-    "fastapi[standard]",
-    "uvicorn[standard]",
     "sqlalchemy>=2.0",
     "pandas>=3.0.0",
     "matplotlib>=3.10.8",
@@ -23,15 +21,16 @@ dependencies = [
 ]
 
 [project.scripts]
-complete-set = "complete_set.bot:main"
-trend-rider = "trend_rider.engine:main"
+rebate-maker = "rebate_maker.bot:main"
 observer = "observer.bot:main"
+grid-maker = "grid_maker.bot:main"
+clob-limit-test = "grid_maker.clob_limit_test:main"
 
 [dependency-groups]
 dev = ["ruff", "pytest"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/complete_set", "src/trend_rider", "src/observer"]
+packages = ["src/shared", "src/rebate_maker", "src/observer", "src/grid_maker"]
 
 [tool.ruff]
 line-length = 100

@@ -4,17 +4,17 @@ import time
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from complete_set.config import CompleteSetConfig
-from complete_set.models import GabagoolMarket, MarketInventory
+from rebate_maker.config import RebateMakerConfig
+from rebate_maker.models import GabagoolMarket, MarketInventory
 
 
 class TestBufferPhase:
     """Verify that the pre-resolution buffer cancels orders but does NOT sell."""
 
     def _make_engine(self):
-        from complete_set.engine import Engine
+        from rebate_maker.engine import Engine
 
-        cfg = CompleteSetConfig(
+        cfg = RebateMakerConfig(
             dry_run=True,
             no_new_orders_sec=90,
             min_merge_shares=Decimal("10"),
@@ -82,7 +82,7 @@ class TestBufferPhase:
 
         engine._order_mgr.cancel_market_orders = lambda *a, **kw: None
 
-        with patch("complete_set.engine.log") as mock_log:
+        with patch("rebate_maker.engine.log") as mock_log:
             engine._evaluate_market(market, time.time())
             # Check that BUFFER_HOLD was logged
             log_calls = [str(c) for c in mock_log.info.call_args_list]

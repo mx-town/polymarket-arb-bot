@@ -4,17 +4,17 @@ import time
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from complete_set.config import CompleteSetConfig
-from complete_set.models import GabagoolMarket, MarketInventory
+from rebate_maker.config import RebateMakerConfig
+from rebate_maker.models import GabagoolMarket, MarketInventory
 
 
 class TestMergeProfitabilityCheck:
     """Verify merge is skipped when gross profit is below threshold."""
 
     def _make_engine(self, min_merge_profit="0.02"):
-        from complete_set.engine import Engine
+        from rebate_maker.engine import Engine
 
-        cfg = CompleteSetConfig(
+        cfg = RebateMakerConfig(
             dry_run=True,
             no_new_orders_sec=90,
             min_merge_shares=Decimal("10"),

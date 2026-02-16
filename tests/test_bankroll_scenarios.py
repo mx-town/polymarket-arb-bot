@@ -11,15 +11,12 @@ Real market characteristics (BTC 15m up/down):
 Run with: uv run pytest tests/test_bankroll_scenarios.py -v -s
 """
 
-from decimal import ROUND_DOWN, Decimal
-from typing import NamedTuple
+from decimal import Decimal
 
 import pytest
 
-from complete_set.config import CompleteSetConfig
-from complete_set.models import MarketInventory, OrderState, Direction
-from complete_set.quote_calc import (
-    calculate_balanced_shares,
+from rebate_maker.models import MarketInventory, OrderState, Direction
+from rebate_maker.quote_calc import (
     calculate_exposure,
     calculate_exposure_breakdown,
     total_bankroll_cap,
@@ -27,163 +24,10 @@ from complete_set.quote_calc import (
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
-TICK = Decimal("0.01")
 
 
 # ---------------------------------------------------------------------------
-# Realistic market books (from actual Polymarket BTC 15m observations)
-# ---------------------------------------------------------------------------
-
-class Book(NamedTuple):
-    """One side of the order book."""
-    bid: Decimal
-    ask: Decimal
-
-    @property
-    def spread(self) -> Decimal:
-        return self.ask - self.bid
-
-    @property
-    def maker(self) -> Decimal:
-        """Price we'd get as GTC maker: bid+1c, capped below ask-1c."""
-        return min(self.bid + TICK, self.ask - TICK)
-
-
-class MarketBook(NamedTuple):
-    """Full market: UP and DOWN books."""
-    up: Book
-    down: Book
-    label: str = ""
-
-    @property
-    def ask_sum(self) -> Decimal:
-        return self.up.ask + self.down.ask
-
-    @property
-    def maker_sum(self) -> Decimal:
-        return self.up.maker + self.down.maker
-
-    @property
-    def round_trip(self) -> Decimal:
-        """Cost of both legs at ask prices."""
-        return self.up.ask + self.down.ask
-
-
-# Books observed in real sessions
-TIGHT_BOOK = MarketBook(
-    up=Book(Decimal("0.47"), Decimal("0.49")),
-    down=Book(Decimal("0.50"), Decimal("0.52")),
-    label="tight (2c spread, sum=1.01)",
-)
-NORMAL_BOOK = MarketBook(
-    up=Book(Decimal("0.46"), Decimal("0.49")),
-    down=Book(Decimal("0.50"), Decimal("0.53")),
-    label="normal (3c spread, sum=1.02)",
-)
-FAVORABLE_BOOK = MarketBook(
-    up=Book(Decimal("0.46"), Decimal("0.48")),
-    down=Book(Decimal("0.50"), Decimal("0.52")),
-    label="favorable (2c spread, sum=1.00)",
-)
-SKEWED_BOOK = MarketBook(
-    up=Book(Decimal("0.43"), Decimal("0.46")),
-    down=Book(Decimal("0.53"), Decimal("0.56")),
-    label="skewed (3c spread, sum=1.02)",
-)
-
-
-def _cfg(bankroll: int, **kw) -> CompleteSetConfig:
-    defaults = dict(
-        bankroll_usd=Decimal(str(bankroll)),
-        min_edge=Decimal("0.01"),
-        hedge_edge_buffer=Decimal("0.0"),
-        min_merge_shares=Decimal("10"),
-        no_new_orders_sec=90,
-        min_seconds_to_end=0,
-        max_seconds_to_end=900,
-    )
-    defaults.update(kw)
-    return CompleteSetConfig(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# Test 1: Sizing — does calculate_balanced_shares produce reasonable sizes?
-# ---------------------------------------------------------------------------
-
-class TestSizingRealistic:
-    """Verify order sizes make sense for real bankrolls and market conditions."""
-
-    @pytest.mark.parametrize("bankroll,book,seconds_left,expected_min,expected_max", [
-        # Small bankroll, tight book, mid-window → should get ~36-38 shares
-        # base = 200 * 0.20 / 0.52 = 76.92 → 76, time_factor(600s) = 0.95 → 72
-        # cap = 160 / 1.01 = 158 → shares = min(72, 158) = 72
-        (200, TIGHT_BOOK, 600, 60, 80),
-        # Medium bankroll, normal book, early window
-        # base = 500 * 0.20 / 0.53 = 188.67 → 188, time_factor(600s) = 0.95 → 178
-        # cap = 400 / 1.02 = 392 → shares = min(178, 392) = 178
-        (500, NORMAL_BOOK, 600, 150, 200),
-        # Large bankroll, tight book, late (60s left) → time_factor = 0.65
-        # (60 < 60 is False, falls to 180 bucket)
-        # base = 1000 * 0.20 / 0.52 = 384.61 → 384, time_factor = 0.65 → 249
-        # cap = 800 / 1.01 = 792 → shares = min(249, 792) = 249
-        (1000, TIGHT_BOOK, 60, 230, 260),
-        # Medium bankroll, already half-exposed
-        # remaining = 400 - 200 = 200, cap = 200 / 1.02 = 196
-        # base = 500 * 0.20 / 0.53 = 188 * 0.95 = 178 → min(178, 196) = 178
-        (500, NORMAL_BOOK, 600, 150, 200),
-    ], ids=["small-tight-mid", "medium-normal-mid", "large-tight-late", "medium-half-exposed"])
-    def test_sizing(self, bankroll, book, seconds_left, expected_min, expected_max):
-        cfg = _cfg(bankroll)
-        exposure = ZERO if "half" not in "" else Decimal("200")
-        shares = calculate_balanced_shares(
-            "btc-test", book.up.ask, book.down.ask, cfg, seconds_left, exposure,
-        )
-        assert shares is not None, f"Should produce shares for ${bankroll} bankroll"
-        assert expected_min <= shares <= expected_max, (
-            f"Expected {expected_min}-{expected_max} shares, got {shares} "
-            f"(bankroll=${bankroll}, book={book.label})"
-        )
-
-    def test_half_exposed_caps_by_round_trip(self):
-        """With $200 already deployed, remaining=$200, cap by round_trip."""
-        cfg = _cfg(500)
-        exposure = Decimal("200")
-        shares = calculate_balanced_shares(
-            "btc-test", NORMAL_BOOK.up.ask, NORMAL_BOOK.down.ask, cfg, 600, exposure,
-        )
-        assert shares is not None
-        # remaining = 400 - 200 = 200, round_trip = 1.02
-        # cap_shares = 200 / 1.02 = 196.07 → 196
-        # base = 188 * 0.95 = 178, min(178, 196) = 178
-        assert shares <= Decimal("196"), f"Round-trip cap should limit to ~196, got {shares}"
-
-    def test_bankroll_exhausted(self):
-        """When exposure >= cap, no shares returned."""
-        cfg = _cfg(500)
-        exposure = Decimal("400")  # cap = 400, remaining = 0
-        shares = calculate_balanced_shares(
-            "btc-test", TIGHT_BOOK.up.ask, TIGHT_BOOK.down.ask, cfg, 600, exposure,
-        )
-        assert shares is None, "Should return None when bankroll exhausted"
-
-    def test_round_trip_vs_expensive_cap(self):
-        """Round-trip cap is tighter than single-leg cap in skewed markets."""
-        cfg = _cfg(500)
-        # Skewed: expensive = 0.56, round_trip = 1.02
-        # Single-leg cap: 400 / 0.56 = 714
-        # Round-trip cap: 400 / 1.02 = 392
-        shares_actual = calculate_balanced_shares(
-            "btc-test", SKEWED_BOOK.up.ask, SKEWED_BOOK.down.ask, cfg, 600, ZERO,
-        )
-        assert shares_actual is not None
-        # Verify round-trip cost fits within cap
-        cost = shares_actual * (SKEWED_BOOK.up.ask + SKEWED_BOOK.down.ask)
-        cap = total_bankroll_cap(Decimal("500"))
-        assert cost <= cap, f"Round-trip cost ${cost} exceeds cap ${cap}"
-
-
-# ---------------------------------------------------------------------------
-# Test 2: Exposure — does it correctly reserve for hedge?
+# Test 1: Exposure — does it correctly reserve for hedge?
 # ---------------------------------------------------------------------------
 
 class TestExposureRealistic:
@@ -261,7 +105,7 @@ class TestExposureRealistic:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Hedge affordability — can the hedge leg proceed given exposure?
+# Test 2: Hedge affordability — can the hedge leg proceed given exposure?
 # ---------------------------------------------------------------------------
 
 class TestHedgeAffordability:
@@ -336,176 +180,11 @@ class TestHedgeAffordability:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Full lifecycle — sizing → fill → exposure → hedge affordability
-# ---------------------------------------------------------------------------
-
-class _ScenarioResult(NamedTuple):
-    bankroll: int
-    book_label: str
-    seconds_left: int
-    first_shares: Decimal
-    first_cost: Decimal
-    exposure_after_fill: Decimal
-    cap: Decimal
-    remaining: Decimal
-    hedge_notional: Decimal
-    hedge_affordable: bool
-    edge: Decimal
-
-
-class TestFullLifecycle:
-    """End-to-end: size a position, compute exposure after fill, check hedge."""
-
-    SCENARIOS = [
-        # (bankroll, book, seconds_left, other_exposure)
-        (200,  TIGHT_BOOK,     600, ZERO),
-        (200,  FAVORABLE_BOOK, 300, ZERO),
-        (500,  TIGHT_BOOK,     600, ZERO),
-        (500,  NORMAL_BOOK,    600, ZERO),
-        (500,  NORMAL_BOOK,    600, Decimal("200")),  # half-exposed from another market
-        (500,  SKEWED_BOOK,    600, ZERO),
-        (1000, TIGHT_BOOK,     600, ZERO),
-        (1000, TIGHT_BOOK,     600, Decimal("400")),  # two other markets running
-        (1000, NORMAL_BOOK,    60,  ZERO),             # late entry, 60s left
-    ]
-
-    def _run_scenario(self, bankroll, book, seconds_left, other_exposure) -> _ScenarioResult | None:
-        cfg = _cfg(bankroll)
-        shares = calculate_balanced_shares(
-            "btc-test", book.up.ask, book.down.ask, cfg, seconds_left, other_exposure,
-        )
-        if shares is None:
-            return None
-
-        # Simulate buying the cheaper side (DOWN) at maker price
-        down_maker = book.down.maker
-        first_cost = shares * down_maker
-
-        # Exposure after fill: this position + other exposure
-        inv = MarketInventory(
-            down_shares=shares,
-            down_cost=first_cost,
-        )
-        inventories = {"this": inv}
-        exposure = calculate_exposure({}, inventories) + other_exposure
-        cap = total_bankroll_cap(Decimal(str(bankroll)))
-        remaining = cap - exposure
-
-        # Hedge: buy UP at maker (mirrors engine.py embedded-reserve logic)
-        up_maker = book.up.maker
-        hedge_notional = shares * up_maker
-        down_vwap = first_cost / shares if shares > ZERO else Decimal("0.50")
-        embedded_reserve = shares * (ONE - down_vwap)
-        effective_remaining = remaining + embedded_reserve
-        hedge_affordable = hedge_notional <= effective_remaining
-
-        # Edge: 1 - (down_vwap + up_maker)
-        edge = ONE - (down_maker + up_maker)
-
-        return _ScenarioResult(
-            bankroll=bankroll,
-            book_label=book.label,
-            seconds_left=seconds_left,
-            first_shares=shares,
-            first_cost=first_cost,
-            exposure_after_fill=exposure,
-            cap=cap,
-            remaining=effective_remaining,
-            hedge_notional=hedge_notional,
-            hedge_affordable=hedge_affordable,
-            edge=edge,
-        )
-
-    @pytest.mark.parametrize("bankroll,book,seconds_left,other_exp", SCENARIOS, ids=[
-        f"${b}-{bk.label[:8]}-{s}s-{('clean' if o == ZERO else f'${o}used')}"
-        for b, bk, s, o in SCENARIOS
-    ])
-    def test_hedge_always_affordable_when_sized_correctly(
-        self, bankroll, book, seconds_left, other_exp
-    ):
-        """If calculate_balanced_shares returns shares, the hedge must be affordable.
-
-        This is the core invariant of Fix 5: round-trip sizing ensures the
-        bankroll can cover both legs.
-        """
-        result = self._run_scenario(bankroll, book, seconds_left, other_exp)
-        if result is None:
-            pytest.skip("Bankroll exhausted — no position to test")
-        assert result.hedge_affordable, (
-            f"INVARIANT VIOLATED: sized {result.first_shares} shares but "
-            f"hedge is unaffordable! need=${result.hedge_notional:.2f}, "
-            f"remaining=${result.remaining:.2f} (bankroll=${bankroll}, "
-            f"exposure=${result.exposure_after_fill:.2f})"
-        )
-
-    def test_summary_table(self, capsys):
-        """Print aggregated scenario results for manual review."""
-        results: list[_ScenarioResult] = []
-        for bankroll, book, seconds_left, other_exp in self.SCENARIOS:
-            r = self._run_scenario(bankroll, book, seconds_left, other_exp)
-            if r is not None:
-                results.append(r)
-
-        print("\n")
-        print("=" * 120)
-        print("BANKROLL SCENARIO SUMMARY — Full lifecycle: sizing → fill → exposure → hedge check")
-        print("=" * 120)
-        print(f"{'Bankroll':>8} │ {'Book':>24} │ {'T-s':>4} │ {'Shares':>6} │ "
-              f"{'1st Cost':>8} │ {'Exposure':>8} │ {'Cap':>6} │ {'Remain':>7} │ "
-              f"{'Hedge $':>7} │ {'Afford':>6} │ {'Edge':>5}")
-        print("─" * 120)
-        for r in results:
-            afford_str = "YES" if r.hedge_affordable else "NO"
-            afford_color = "" if r.hedge_affordable else " !!!"
-            print(
-                f"${r.bankroll:>7} │ {r.book_label:>24} │ {r.seconds_left:>4} │ "
-                f"{r.first_shares:>6} │ ${r.first_cost:>7.2f} │ ${r.exposure_after_fill:>7.2f} │ "
-                f"${r.cap:>5} │ ${r.remaining:>6.2f} │ ${r.hedge_notional:>6.2f} │ "
-                f"{afford_str:>6}{afford_color} │ {r.edge:>5.3f}"
-            )
-        print("─" * 120)
-
-        # Aggregates
-        total_scenarios = len(results)
-        affordable = sum(1 for r in results if r.hedge_affordable)
-        avg_shares = sum(r.first_shares for r in results) / total_scenarios
-        avg_exposure_pct = sum(
-            r.exposure_after_fill / r.cap * 100 for r in results
-        ) / total_scenarios
-
-        print(f"Scenarios: {total_scenarios} │ Hedge affordable: {affordable}/{total_scenarios} │ "
-              f"Avg shares: {avg_shares:.0f} │ Avg exposure: {avg_exposure_pct:.1f}% of cap")
-        print("=" * 120)
-
-
-# ---------------------------------------------------------------------------
-# Test 5: Edge cases — boundary conditions from real trading
+# Test 3: Edge cases — boundary conditions from real trading
 # ---------------------------------------------------------------------------
 
 class TestEdgeCases:
     """Boundary conditions observed in real trading sessions."""
-
-    def test_min_order_size_enforced(self):
-        """With tiny bankroll, shares < 5 → returns None."""
-        cfg = _cfg(25)  # tiny bankroll
-        shares = calculate_balanced_shares(
-            "btc-test", Decimal("0.49"), Decimal("0.52"), cfg, 600, ZERO,
-        )
-        # base = 25 * 0.20 / 0.52 = 9.61 → 9, * 0.95 = 8
-        # round_trip cap = 20 / 1.01 = 19.8 → 19
-        # shares = min(8, 19) = 8
-        # 8 >= MIN_ORDER_SIZE(5) → should return 8
-        assert shares is not None and shares >= Decimal("5")
-
-    def test_truly_tiny_bankroll_blocked(self):
-        """Bankroll so small that even base shares < 5."""
-        cfg = _cfg(10)
-        shares = calculate_balanced_shares(
-            "btc-test", Decimal("0.49"), Decimal("0.52"), cfg, 600, ZERO,
-        )
-        # base = 10 * 0.20 / 0.52 = 3.84 → 3
-        # 3 * 0.95 = 2.85 → 2 < MIN_ORDER_SIZE(5) → None
-        assert shares is None, "Should return None for bankroll too small"
 
     def test_exposure_with_pending_order_and_position(self):
         """Real scenario: first-leg GTC order + existing hedged position from prior window."""

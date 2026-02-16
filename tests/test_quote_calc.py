@@ -1,14 +1,12 @@
-"""Tests for quote_calc — dynamic edge, exposure, FOK sizing."""
+"""Tests for quote_calc — exposure calculations."""
 
 import time
 from decimal import Decimal
 
-from complete_set.models import Direction, GabagoolMarket, MarketInventory, OrderState
-from complete_set.quote_calc import (
-    calculate_dynamic_edge,
+from rebate_maker.models import Direction, GabagoolMarket, MarketInventory, OrderState
+from rebate_maker.quote_calc import (
     calculate_exposure,
     calculate_exposure_breakdown,
-    has_minimum_edge,
 )
 
 ZERO = Decimal("0")
@@ -36,45 +34,6 @@ def _order(price="0.45", size="10", reserved="0"):
         placed_at=time.time(),
         reserved_hedge_notional=Decimal(reserved),
     )
-
-
-class TestDynamicEdge:
-    def test_tight_spread(self):
-        """Spread < 6% returns base edge."""
-        result = calculate_dynamic_edge(Decimal("0.04"), Decimal("0.01"))
-        assert result == Decimal("0.01")
-
-    def test_moderate_spread(self):
-        """Spread 6-10% returns 1.5x edge."""
-        result = calculate_dynamic_edge(Decimal("0.08"), Decimal("0.01"))
-        assert result == Decimal("0.015")
-
-    def test_wide_spread(self):
-        """Spread >= 10% returns 2x edge."""
-        result = calculate_dynamic_edge(Decimal("0.12"), Decimal("0.01"))
-        assert result == Decimal("0.02")
-
-    def test_boundary_6pct(self):
-        """Exactly 6% triggers moderate tier."""
-        result = calculate_dynamic_edge(Decimal("0.06"), Decimal("0.01"))
-        assert result == Decimal("0.015")
-
-    def test_boundary_10pct(self):
-        """Exactly 10% triggers wide tier."""
-        result = calculate_dynamic_edge(Decimal("0.10"), Decimal("0.01"))
-        assert result == Decimal("0.02")
-
-
-class TestHasMinimumEdge:
-    def test_above_edge(self):
-        assert has_minimum_edge(Decimal("0.44"), Decimal("0.44"), Decimal("0.01")) is True
-
-    def test_exactly_at_edge(self):
-        # 1 - (0.495 + 0.495) = 0.01
-        assert has_minimum_edge(Decimal("0.495"), Decimal("0.495"), Decimal("0.01")) is True
-
-    def test_below_edge(self):
-        assert has_minimum_edge(Decimal("0.50"), Decimal("0.50"), Decimal("0.01")) is False
 
 
 class TestExposure:

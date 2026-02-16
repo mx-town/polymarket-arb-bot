@@ -1,4 +1,4 @@
-"""Shared fixtures for complete-set strategy tests."""
+"""Shared fixtures for rebate-maker strategy tests."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ from decimal import Decimal
 
 import pytest
 
-from complete_set.config import CompleteSetConfig
-from complete_set.models import Direction, GabagoolMarket, MarketInventory, OrderState
+from rebate_maker.config import RebateMakerConfig
+from rebate_maker.models import Direction, GabagoolMarket, MarketInventory, OrderState
 
 ZERO = Decimal("0")
 
 
 @pytest.fixture
-def default_cfg() -> CompleteSetConfig:
-    return CompleteSetConfig(
+def default_cfg() -> RebateMakerConfig:
+    return RebateMakerConfig(
         enabled=True,
         dry_run=True,
         refresh_millis=500,

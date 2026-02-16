@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from complete_set.redeem import (
+from shared.redeem import (
     _approved_pairs,
     _ensure_approval,
     _send_safe_tx,
@@ -28,7 +28,7 @@ class TestGasPriceCap:
         w3.eth.contract.return_value = safe
         w3.eth.get_transaction_count.return_value = 0
 
-        with patch("complete_set.redeem.Account") as mock_account:
+        with patch("shared.redeem.Account") as mock_account:
             mock_account.unsafe_sign_hash.return_value = MagicMock(
                 r=1, s=2, v=27,
             )
@@ -66,7 +66,7 @@ class TestGasPriceCap:
             "gasUsed": 100_000,
         }
 
-        with patch("complete_set.redeem.Account") as mock_account:
+        with patch("shared.redeem.Account") as mock_account:
             mock_account.unsafe_sign_hash.return_value = MagicMock(
                 r=1, s=2, v=27,
             )
@@ -75,7 +75,7 @@ class TestGasPriceCap:
                 "0x" + "cc" * 20, b"\x00",
                 max_gas_price_gwei=200,
             )
-            assert isinstance(result, str)
+            assert result.tx_hash is not None
 
 
 class TestApprovalCheck:
@@ -132,7 +132,7 @@ class TestApprovalCheck:
         w3.eth.contract.return_value = ctf
 
         # Mock _send_safe_tx to avoid actual tx
-        with patch("complete_set.redeem._send_safe_tx") as mock_send:
+        with patch("shared.redeem._send_safe_tx") as mock_send:
             mock_send.return_value = "0xfaketx"
             _ensure_approval(w3, account, safe, operator)
 
