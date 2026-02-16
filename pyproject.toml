@@ -17,6 +17,9 @@ dependencies = [
     "fastapi[standard]",
     "uvicorn[standard]",
     "sqlalchemy>=2.0",
+    "pandas>=3.0.0",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]
 
 [project.scripts]

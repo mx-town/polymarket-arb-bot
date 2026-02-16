@@ -15,6 +15,8 @@ import yaml
 from dotenv import load_dotenv
 
 from observer.analyzer import TradeAnalyzer
+from observer.book import BookPoller
+from observer.btc_price import BtcPriceTracker
 from observer.config import load_observer_config
 from observer.models import C_RESET, C_YELLOW
 from observer.onchain import MergeDetector
@@ -122,6 +124,8 @@ async def _run(cfg) -> None:
     pos_poller = PositionPoller(cfg.proxy_address, limit=cfg.positions_limit)
     merge_detector = MergeDetector(cfg.proxy_address, page_size=cfg.etherscan_page_size)
     analyzer = TradeAnalyzer()
+    price_tracker = BtcPriceTracker()
+    book_poller = BookPoller()
 
     try:
         # Initial backfill
@@ -142,6 +146,9 @@ async def _run(cfg) -> None:
             merges = await asyncio.to_thread(merge_detector.poll_merges)
             analyzer.ingest_merges(merges)
             await writer.enqueue_merges(merges)
+
+            price_snap = await asyncio.to_thread(price_tracker.snapshot)
+            await writer.enqueue_price_snapshot(price_snap)
 
         log.info(
             "READY │ session=%s │ proxy=%s │ poll=%ds │ seen=%d trades │ %d windows",
@@ -170,17 +177,35 @@ async def _run(cfg) -> None:
                         log.info("ROLE │ %s │ %s %s │ %s", role, trade.side, trade.outcome, trade.slug)
                         await writer.update_trade_role(trade.tx_hash, role)
 
+            # Price poll (every tick)
+            price_snap = await asyncio.to_thread(price_tracker.poll)
+            await writer.enqueue_price_snapshot(price_snap)
+
+            # Book snapshot poll (every book_poll_interval ticks)
+            if tick % cfg.book_poll_interval == 0:
+                token_ids = pos_poller.active_token_ids
+                if token_ids:
+                    snapshots = await asyncio.to_thread(book_poller.poll, token_ids)
+                    await writer.enqueue_book_snapshots(snapshots)
+
             # Position poll (every 3rd tick)
             if tick % 3 == 0:
                 positions, changes = await asyncio.to_thread(pos_poller.poll)
                 await writer.enqueue_positions(positions)
                 await writer.enqueue_position_changes(changes)
 
-                # Detect merges from simultaneous Up+Down decreases
-                detected = detect_merges_from_changes(changes)
-                for m in detected:
+                # Detect merges and redemptions from position decreases
+                merges, redemptions = detect_merges_from_changes(changes)
+                for m in merges:
                     analyzer.ingest_merge_from_position(m["slug"], m["shares"])
                     await writer.enqueue_detected_merge(m["slug"], m["shares"])
+                for r in redemptions:
+                    log.info(
+                        "REDEMPTION │ %s │ %s │ %.1f shares (%.1f → %.1f)",
+                        r["slug"], r["outcome"], r["shares"],
+                        r["from_size"], r["to_size"],
+                    )
+                await writer.enqueue_redemptions(redemptions)
 
             # Merge poll (every 6th tick)
             if tick % 6 == 0:
@@ -203,6 +228,12 @@ async def _run(cfg) -> None:
                     poller.seen_count,
                     pos_poller.position_count,
                     writer.stats["total_written"],
+                )
+                log.info(
+                    "PRICES │ btc=$%.2f eth=$%.2f │ btc_1m=%.3f%% btc_5m=%.3f%% vol_5m=%.4f%% range_5m=%.3f%%",
+                    price_snap.btc_price, price_snap.eth_price,
+                    price_snap.btc_pct_change_1m, price_snap.btc_pct_change_5m,
+                    price_snap.btc_rolling_vol_5m, price_snap.btc_range_pct_5m,
                 )
 
     finally:

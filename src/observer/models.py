@@ -57,6 +57,19 @@ class ObservedPosition:
     end_date: str
 
 
+@dataclass(frozen=True)
+class BtcPriceSnapshot:
+    timestamp: float  # unix epoch
+    btc_price: float
+    eth_price: float
+    btc_pct_change_1m: float
+    btc_pct_change_5m: float
+    btc_rolling_vol_5m: float  # std dev of 1-tick pct returns over 5m window
+    btc_range_pct_5m: float    # (max-min)/mean over 5m window
+    eth_pct_change_1m: float
+    eth_pct_change_5m: float
+
+
 @dataclass
 class MarketWindow:
     slug: str
@@ -77,3 +90,19 @@ class MarketWindow:
     hedge_delay_sec: float = 0.0  # seconds between first UP and first DOWN trade
     merged_shares: float = 0.0
     status: str = "OPEN"  # "OPEN", "HEDGED", "MERGED", "CLOSED"
+
+
+@dataclass(frozen=True)
+class BookSnapshot:
+    token_id: str
+    timestamp: float  # unix epoch
+    best_bid: float
+    best_ask: float
+    spread: float
+    mid_price: float
+    bid_depth_10c: float  # total size within 10c of best bid
+    ask_depth_10c: float  # total size within 10c of best ask
+    bid_levels: int  # number of distinct bid price levels
+    ask_levels: int  # number of distinct ask price levels
+    total_bid_size: float
+    total_ask_size: float

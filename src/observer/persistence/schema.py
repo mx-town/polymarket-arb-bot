@@ -100,6 +100,38 @@ obs_position_changes = Table(
     Index("ix_obs_pos_changes_ts", "ts"),
 )
 
+obs_prices = Table(
+    "obs_prices",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("btc_price", Float),
+    Column("eth_price", Float),
+    Column("btc_pct_change_1m", Float),
+    Column("btc_pct_change_5m", Float),
+    Column("btc_rolling_vol_5m", Float),
+    Column("btc_range_pct_5m", Float),
+    Column("eth_pct_change_1m", Float),
+    Column("eth_pct_change_5m", Float),
+    Column("session_id", String(50)),
+    Index("ix_obs_prices_ts", "ts"),
+)
+
+obs_redemptions = Table(
+    "obs_redemptions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("slug", String(120)),
+    Column("outcome", String(10)),
+    Column("shares", Float),
+    Column("from_size", Float),
+    Column("to_size", Float),
+    Column("session_id", String(50)),
+    Index("ix_obs_redemptions_ts", "ts"),
+    Index("ix_obs_redemptions_slug", "slug"),
+)
+
 obs_market_windows = Table(
     "obs_market_windows",
     metadata,
@@ -120,4 +152,25 @@ obs_market_windows = Table(
     Column("last_trade_at", String(50)),
     Column("session_id", String(50)),
     Index("ix_obs_mw_slug", "slug"),
+)
+
+obs_book_snapshots = Table(
+    "obs_book_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("token_id", String(120)),
+    Column("best_bid", Float),
+    Column("best_ask", Float),
+    Column("spread", Float),
+    Column("mid_price", Float),
+    Column("bid_depth_10c", Float),
+    Column("ask_depth_10c", Float),
+    Column("bid_levels", Integer),
+    Column("ask_levels", Integer),
+    Column("total_bid_size", Float),
+    Column("total_ask_size", Float),
+    Column("session_id", String(50)),
+    Index("ix_obs_book_ts", "ts"),
+    Index("ix_obs_book_token", "token_id"),
 )

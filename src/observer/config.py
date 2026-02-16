@@ -15,6 +15,7 @@ class ObserverConfig:
     positions_limit: int = 100
     etherscan_page_size: int = 50
     backfill_on_start: bool = True
+    book_poll_interval: int = 3
     log_level: str = "INFO"
 
 
@@ -30,5 +31,6 @@ def load_observer_config(raw: dict[str, Any]) -> ObserverConfig:
         positions_limit=int(obs.get("positions_limit", 100)),
         etherscan_page_size=int(obs.get("etherscan_page_size", 50)),
         backfill_on_start=obs.get("backfill_on_start", True),
+        book_poll_interval=int(obs.get("book_poll_interval", 3)),
         log_level=obs.get("log_level", "INFO"),
     )

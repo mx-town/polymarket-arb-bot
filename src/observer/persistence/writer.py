@@ -14,6 +14,8 @@ from datetime import datetime
 from sqlalchemy import Table
 
 from observer.models import (
+    BookSnapshot,
+    BtcPriceSnapshot,
     MarketWindow,
     ObservedMerge,
     ObservedPosition,
@@ -21,10 +23,13 @@ from observer.models import (
 )
 from observer.persistence.db import get_engine
 from observer.persistence.schema import (
+    obs_book_snapshots,
     obs_market_windows,
     obs_merges,
     obs_position_changes,
     obs_positions,
+    obs_prices,
+    obs_redemptions,
     obs_trades,
 )
 
@@ -99,6 +104,25 @@ class ObserverWriter:
         async with self._lock:
             self._buffer.append((obs_merges, row))
 
+    async def enqueue_redemptions(self, redemptions: list[dict]) -> None:
+        """Queue redemption records (single-sided position decreases from resolved markets)."""
+        if not redemptions:
+            return
+        now = time.time()
+        rows = []
+        for r in redemptions:
+            rows.append((obs_redemptions, {
+                "ts": now,
+                "slug": r.get("slug", ""),
+                "outcome": r.get("outcome", ""),
+                "shares": r.get("shares", 0),
+                "from_size": r.get("from_size", 0),
+                "to_size": r.get("to_size", 0),
+                "session_id": self._session_id,
+            }))
+        async with self._lock:
+            self._buffer.extend(rows)
+
     async def enqueue_positions(self, positions: list[ObservedPosition]) -> None:
         if not positions:
             return
@@ -169,6 +193,45 @@ class ObserverWriter:
                 else:
                     self._buffer.append((obs_market_windows, row))
                     self._known_window_slugs.add(w.slug)
+
+    async def enqueue_book_snapshots(self, snapshots: list[BookSnapshot]) -> None:
+        if not snapshots:
+            return
+        rows = []
+        for s in snapshots:
+            rows.append((obs_book_snapshots, {
+                "ts": s.timestamp,
+                "token_id": s.token_id,
+                "best_bid": s.best_bid,
+                "best_ask": s.best_ask,
+                "spread": s.spread,
+                "mid_price": s.mid_price,
+                "bid_depth_10c": s.bid_depth_10c,
+                "ask_depth_10c": s.ask_depth_10c,
+                "bid_levels": s.bid_levels,
+                "ask_levels": s.ask_levels,
+                "total_bid_size": s.total_bid_size,
+                "total_ask_size": s.total_ask_size,
+                "session_id": self._session_id,
+            }))
+        async with self._lock:
+            self._buffer.extend(rows)
+
+    async def enqueue_price_snapshot(self, snap: BtcPriceSnapshot) -> None:
+        row = {
+            "ts": snap.timestamp,
+            "btc_price": snap.btc_price,
+            "eth_price": snap.eth_price,
+            "btc_pct_change_1m": snap.btc_pct_change_1m,
+            "btc_pct_change_5m": snap.btc_pct_change_5m,
+            "btc_rolling_vol_5m": snap.btc_rolling_vol_5m,
+            "btc_range_pct_5m": snap.btc_range_pct_5m,
+            "eth_pct_change_1m": snap.eth_pct_change_1m,
+            "eth_pct_change_5m": snap.eth_pct_change_5m,
+            "session_id": self._session_id,
+        }
+        async with self._lock:
+            self._buffer.append((obs_prices, row))
 
     async def update_trade_role(self, tx_hash: str, role: str) -> None:
         """Queue a role update for a specific trade by tx_hash."""

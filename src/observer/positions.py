@@ -65,6 +65,16 @@ class PositionPoller:
     def position_count(self) -> int:
         return len(self._prev)
 
+    @property
+    def active_token_ids(self) -> list[str]:
+        """Return token_ids of all currently tracked positions."""
+        ids = []
+        for pos in self._prev.values():
+            ids.append(pos.asset)
+            if pos.opposite_asset:
+                ids.append(pos.opposite_asset)
+        return list(set(ids))
+
 
 def _parse_position(item: dict[str, Any]) -> ObservedPosition | None:
     """Parse a Positions API item into an ObservedPosition."""
@@ -163,14 +173,19 @@ def _diff_positions(
 
 def detect_merges_from_changes(
     changes: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Detect merges from position changes.
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Detect merges and redemptions from position changes.
 
-    When both Up and Down sides of the same slug decrease in the same snapshot,
-    it's a merge. Returns list of dicts with keys: slug, shares.
+    Merges: both Up and Down sides decrease simultaneously (complete-set merge).
+    Redemptions: single-sided decreases (winning position cashed out after resolution).
+
+    Returns (merges, redemptions) where each is a list of dicts with keys:
+      merges: {slug, shares}
+      redemptions: {slug, outcome, shares, from_size, to_size}
     """
-    # Collect size decreases by slug+outcome
+    # Collect size decreases by slug+outcome, keeping old/new for redemption records
     decreases: dict[str, dict[str, float]] = {}  # slug -> {outcome -> decrease}
+    size_info: dict[str, dict[str, tuple[float, float]]] = {}  # slug -> {outcome -> (old, new)}
     for ch in changes:
         if ch["field"] != "size":
             continue
@@ -181,21 +196,40 @@ def detect_merges_from_changes(
         outcome = ch["outcome"]
         if slug not in decreases:
             decreases[slug] = {}
+            size_info[slug] = {}
         decreases[slug][outcome] = abs(delta)
+        size_info[slug][outcome] = (ch["old"], ch["new"])
 
     merges: list[dict[str, Any]] = []
+    redemptions: list[dict[str, Any]] = []
     for slug, sides in decreases.items():
         up_dec = sides.get("Up", 0.0)
         down_dec = sides.get("Down", 0.0)
         if up_dec > 0 and down_dec > 0:
+            # Both sides decreased — complete-set merge
             merged = min(up_dec, down_dec)
             merges.append({"slug": slug, "shares": merged})
             log.info(
                 "%sMERGE_DETECTED%s │ %s │ shares=%.2f (up -%.2f, down -%.2f)",
                 C_GREEN, C_RESET, slug, merged, up_dec, down_dec,
             )
+        else:
+            # Single-sided decrease — redemption of winning position
+            for outcome, dec in sides.items():
+                old_size, new_size = size_info[slug][outcome]
+                redemptions.append({
+                    "slug": slug,
+                    "outcome": outcome,
+                    "shares": dec,
+                    "from_size": old_size,
+                    "to_size": new_size,
+                })
+                log.info(
+                    "%sREDEMPTION_DETECTED%s │ %s │ %s │ shares=%.2f (%.2f → %.2f)",
+                    C_YELLOW, C_RESET, slug, outcome, dec, old_size, new_size,
+                )
 
-    return merges
+    return merges, redemptions
 
 
 def _log_change(ch: dict[str, Any]) -> None:

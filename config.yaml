@@ -110,6 +110,7 @@ observer:
   positions_limit: 100
   etherscan_page_size: 50
   backfill_on_start: true
+  book_poll_interval: 3
   log_level: INFO
 
 # Dashboard API
