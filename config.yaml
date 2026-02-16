@@ -5,7 +5,7 @@ complete_set:
   assets: [bitcoin]
 
     # Bankroll
-  bankroll_usd: 500
+  bankroll_usd: 50
 
   # Edge
   min_edge: 0.01
@@ -35,6 +35,7 @@ complete_set:
   # Gas
   max_gas_price_gwei: 200
   dry_merge_gas_cost_usd: 0.003
+  matic_price_usd: 0.40
 
   # Stop hunt — unified entry signal (minutes 2-12 of candle)
   stop_hunt_enabled: true
@@ -100,6 +101,16 @@ trend_rider:
   max_position_pct: 0.25
   stop_loss_drop: 0.10
   use_fok: true
+
+observer:
+  enabled: true
+  proxy_address: "0x6031b6eed1c97e853c6e0f03ad3ce3529351f96d"
+  poll_interval_sec: 10
+  activity_limit: 50
+  positions_limit: 100
+  etherscan_page_size: 50
+  backfill_on_start: true
+  log_level: INFO
 
 # Dashboard API
 api:

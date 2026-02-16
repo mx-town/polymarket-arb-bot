@@ -36,6 +36,7 @@ class InventoryTracker:
         self._last_refresh: float = 0.0
         self._inventory_by_market: dict[str, MarketInventory] = {}
         self.session_realized_pnl: Decimal = ZERO
+        self.session_gas_spent: Decimal = ZERO
 
     def refresh_if_stale(self, client, markets: list[GabagoolMarket] | None = None) -> None:
         """Refresh positions from CLOB if cache is stale (>5s).

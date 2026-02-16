@@ -46,6 +46,7 @@ class CompleteSetConfig:
     # Gas
     max_gas_price_gwei: int = 200
     dry_merge_gas_cost_usd: Decimal = Decimal("0.003")
+    matic_price_usd: Decimal = Decimal("0.40")
 
     # Stop hunt (early entry, minutes 2-5)
     stop_hunt_enabled: bool = True
@@ -208,6 +209,7 @@ def load_complete_set_config(raw: dict[str, Any]) -> CompleteSetConfig:
         post_merge_lockout=cs.get("post_merge_lockout", True),
         max_gas_price_gwei=int(cs.get("max_gas_price_gwei", 200)),
         dry_merge_gas_cost_usd=Decimal(str(cs.get("dry_merge_gas_cost_usd", "0.003"))),
+        matic_price_usd=Decimal(str(cs.get("matic_price_usd", "0.40"))),
         # Stop hunt
         stop_hunt_enabled=cs.get("stop_hunt_enabled", True),
         sh_entry_start_sec=int(cs.get("sh_entry_start_sec", 780)),

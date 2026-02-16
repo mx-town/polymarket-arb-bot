@@ -11,11 +11,18 @@ import math
 import time
 from decimal import Decimal
 
+from typing import NamedTuple
+
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from web3 import Web3
 
 log = logging.getLogger("cs.redeem")
+
+
+class TxResult(NamedTuple):
+    tx_hash: str
+    gas_cost_wei: int  # gasUsed * gasPrice in native wei
 
 # ── Contract addresses (Polygon mainnet) ──
 CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -228,11 +235,12 @@ def _send_safe_tx(
     data: bytes,
     chain_id: int = 137,
     max_gas_price_gwei: int = 200,
-) -> str:
+) -> TxResult:
     """Execute a call through a Gnosis Safe v1.3.0 (1-of-1 multisig).
 
     Builds an execTransaction call with the EOA owner's signature,
-    then submits it on-chain from the EOA.
+    then submits it on-chain from the EOA.  Returns TxResult with
+    the tx hash and actual gas cost in native wei.
     """
     safe_cs = Web3.to_checksum_address(safe_address)
     to_cs = Web3.to_checksum_address(to)
@@ -322,8 +330,9 @@ def _send_safe_tx(
                         f"Transaction reverted on-chain (tx={tx_hash_hex}, "
                         f"gasUsed={receipt['gasUsed']})"
                     )
+                gas_cost_wei = receipt["gasUsed"] * gas_price
                 log.info("TX_CONFIRMED hash=%s gasUsed=%d", tx_hash_hex, receipt["gasUsed"])
-                return tx_hash_hex
+                return TxResult(tx_hash_hex, gas_cost_wei)
         except Exception as e:
             if "reverted" in str(e).lower():
                 raise
@@ -410,10 +419,10 @@ def merge_positions(
     neg_risk: bool = False,
     chain_id: int = 137,
     max_gas_price_gwei: int = 200,
-) -> str:
+) -> TxResult:
     """Merge hedged UP+DOWN positions back to USDC via Gnosis Safe.
 
-    amount is in base units (6 decimals).  Returns tx hash hex string.
+    amount is in base units (6 decimals).  Returns TxResult with hash and gas cost.
     """
     if not condition_id:
         raise ValueError("condition_id is empty — cannot merge")
@@ -433,12 +442,12 @@ def merge_positions(
 
     merge_target, merge_data = _encode_merge(condition_id, amount, neg_risk)
     inner_data = bytes.fromhex(merge_data.removeprefix("0x"))
-    tx_hash = _send_safe_tx(
+    result = _send_safe_tx(
         w3, account, safe_address, merge_target, inner_data, chain_id,
         max_gas_price_gwei=max_gas_price_gwei,
     )
-    log.info("MERGE_CONFIRMED tx=%s", tx_hash)
-    return tx_hash
+    log.info("MERGE_CONFIRMED tx=%s", result.tx_hash)
+    return result
 
 
 def redeem_positions(
@@ -450,10 +459,10 @@ def redeem_positions(
     amount: int = 0,
     chain_id: int = 137,
     max_gas_price_gwei: int = 200,
-) -> str:
+) -> TxResult:
     """Redeem resolved positions on-chain via Gnosis Safe.
 
-    Returns tx hash hex string.
+    Returns TxResult with hash and gas cost.
     """
     if not condition_id:
         raise ValueError("condition_id is empty — cannot redeem")
@@ -473,9 +482,9 @@ def redeem_positions(
 
     redeem_target, redeem_data = _encode_redeem(condition_id, neg_risk, amount)
     inner_data = bytes.fromhex(redeem_data.removeprefix("0x"))
-    tx_hash = _send_safe_tx(
+    result = _send_safe_tx(
         w3, account, safe_address, redeem_target, inner_data, chain_id,
         max_gas_price_gwei=max_gas_price_gwei,
     )
-    log.info("REDEEM_CONFIRMED tx=%s", tx_hash)
-    return tx_hash
+    log.info("REDEEM_CONFIRMED tx=%s", result.tx_hash)
+    return result

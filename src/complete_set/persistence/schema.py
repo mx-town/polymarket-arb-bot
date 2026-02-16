@@ -82,6 +82,7 @@ pnl_snapshots = Table(
     Column("total", Float),
     Column("exposure", Float),
     Column("exposure_pct", Float),
+    Column("gas_spent", Float),
     Column("session_id", String(50)),
     Index("ix_pnl_ts", "ts"),
 )

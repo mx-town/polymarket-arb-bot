@@ -210,6 +210,7 @@ class BatchWriter:
                 "total": d.get("total"),
                 "exposure": d.get("exposure"),
                 "exposure_pct": d.get("exposure_pct"),
+                "gas_spent": d.get("gas_spent"),
                 "session_id": self._session_id,
             })]
 

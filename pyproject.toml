@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "polymarket-late-entry"
+name = "polymarket-arb-bot"
 version = "0.1.0"
-description = "Late-entry bot for Polymarket 15m crypto Up/Down markets"
+description = "Polymarket arb bot — complete-set, trend-rider, and observer strategies"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
@@ -20,15 +20,15 @@ dependencies = [
 ]
 
 [project.scripts]
-late-entry = "late_entry.bot:main"
 complete-set = "complete_set.bot:main"
 trend-rider = "trend_rider.engine:main"
+observer = "observer.bot:main"
 
 [dependency-groups]
 dev = ["ruff", "pytest"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/late_entry", "src/complete_set", "src/trend_rider"]
+packages = ["src/complete_set", "src/trend_rider", "src/observer"]
 
 [tool.ruff]
 line-length = 100

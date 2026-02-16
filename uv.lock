@@ -1422,7 +1422,7 @@ wheels = [
 ]
 
 [[package]]
-name = "polymarket-late-entry"
+name = "polymarket-arb-bot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

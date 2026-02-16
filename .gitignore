@@ -30,6 +30,7 @@ node_modules/
 .turbo/
 .pnpm-store/
 dashboard/.pnpm-store
+dashboard/.next
 dashboard/tsconfig.tsbuildinfo
 *.tsbuildinfo
 

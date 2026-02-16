@@ -50,6 +50,7 @@ from complete_set.quote_calc import (
 )
 from complete_set.redeem import (
     CTF_DECIMALS,
+    TxResult,
     get_ctf_balances,
     get_usdc_balance,
     merge_positions,
@@ -446,18 +447,24 @@ class Engine:
                     result = task.result()
                     if result is None:
                         continue
-                    tx_hash, merged_display = result
+                    tx_hash, merged_display, gas_cost_wei = result
                     self._inventory.reduce_merged(slug, merged_display)
                     self._merge_failures.pop(slug, None)
                     if not self._cfg.post_merge_lockout:
                         self._completed_markets.discard(slug)
+                    gas_matic = Decimal(gas_cost_wei) / Decimal(10**18)
+                    gas_usd = gas_matic * self._cfg.matic_price_usd
+                    self._inventory.session_realized_pnl -= gas_usd
+                    self._inventory.session_gas_spent += gas_usd
                     log.info(
-                        "%sMERGE_POSITION %s │ merged=%s shares │ tx=%s%s",
-                        C_GREEN, slug, merged_display, tx_hash, C_RESET,
+                        "%sMERGE_POSITION %s │ merged=%s shares │ gas=$%s │ tx=%s%s",
+                        C_GREEN, slug, merged_display,
+                        gas_usd.quantize(Decimal("0.0001")), tx_hash, C_RESET,
                     )
                     emit(EventType.MERGE_COMPLETE, {
                         "merged_shares": float(merged_display),
                         "tx_hash": tx_hash,
+                        "gas_cost_usd": float(gas_usd),
                         "strategy": "complete_set",
                     }, market_slug=slug)
                 except Exception as e:
@@ -512,8 +519,16 @@ class Engine:
                 continue
             del self._pending_redeem_task[slug]
             try:
-                tx_hash = task.result()
-                log.info("%sREDEEMED %s tx=%s%s", C_GREEN, slug, tx_hash, C_RESET)
+                redeem_result: TxResult = task.result()
+                gas_matic = Decimal(redeem_result.gas_cost_wei) / Decimal(10**18)
+                gas_usd = gas_matic * self._cfg.matic_price_usd
+                self._inventory.session_realized_pnl -= gas_usd
+                self._inventory.session_gas_spent += gas_usd
+                log.info(
+                    "%sREDEEMED %s │ gas=$%s │ tx=%s%s",
+                    C_GREEN, slug, gas_usd.quantize(Decimal("0.0001")),
+                    redeem_result.tx_hash, C_RESET,
+                )
                 self._pending_redemptions.pop(slug, None)
             except Exception as e:
                 pr = self._pending_redemptions.get(slug)
@@ -579,8 +594,8 @@ class Engine:
 
     def _do_merge_io(
         self, slug: str, market: GabagoolMarket, min_base: int,
-    ) -> tuple[str, Decimal] | None:
-        """Run balance check + merge in thread pool. Returns (tx_hash, merged_shares) or None."""
+    ) -> tuple[str, Decimal, int] | None:
+        """Run balance check + merge in thread pool. Returns (tx_hash, merged_shares, gas_cost_wei) or None."""
         actual_up, actual_down = get_ctf_balances(
             self._rpc_url, self._funder_address,
             market.up_token_id, market.down_token_id,
@@ -590,12 +605,12 @@ class Engine:
             log.debug("MERGE_SKIP %s │ on-chain balance too low (up=%d, down=%d)", slug, actual_up, actual_down)
             return None
         merged_display = Decimal(amount_base) / Decimal(10 ** CTF_DECIMALS)
-        tx_hash = merge_positions(
+        result = merge_positions(
             self._w3, self._account, self._funder_address,
             market.condition_id, amount_base, neg_risk=market.neg_risk,
             max_gas_price_gwei=self._cfg.max_gas_price_gwei,
         )
-        return (tx_hash, merged_display)
+        return (result.tx_hash, merged_display, result.gas_cost_wei)
 
     def _refresh_wallet_balance(self) -> None:
         """Refresh wallet balance synchronously (called from thread pool)."""
@@ -721,6 +736,7 @@ class Engine:
             "total": float(total_pnl),
             "exposure": float(exposure),
             "exposure_pct": float(pct_used),
+            "gas_spent": float(self._inventory.session_gas_spent),
         })
 
         # ── Box top ──
