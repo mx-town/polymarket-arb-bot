@@ -27,7 +27,7 @@ _book_prev: dict[str, tuple] = {}   # token_id -> (prev_bid, prev_ask) for lag t
 # TOB cache — avoids redundant HTTP fetches within the same tick
 # ---------------------------------------------------------------------------
 _tob_cache: dict[str, tuple[Optional[TopOfBook], float]] = {}  # token_id -> (tob, mono_ts)
-_TOB_TTL = 0.4  # seconds — slightly under 500ms tick interval
+_TOB_TTL = 1.5  # seconds — covers batch fetch + full order evaluation loop
 
 # Full book cache — parsed (price, size) levels for depth simulation
 _full_book_cache: dict[str, tuple[list[tuple[Decimal, Decimal]], list[tuple[Decimal, Decimal]], float]] = {}
@@ -406,24 +406,35 @@ def prefetch_order_books(client, markets: list[GabagoolMarket]) -> None:
 def get_simulated_fill_size(
     token_id: str, price: Decimal, side: str, remaining: Decimal,
     consumed: Decimal = Decimal("0"),
-) -> Decimal:
+    queue_position_pct: float = 0.5,
+) -> tuple[Decimal, Decimal]:
     """Estimate fillable shares from cached book depth.
 
     For BUY at P:  crossing = asks with price <= P, queue = bids at P.
     For SELL at P: crossing = bids with price >= P, queue = asks at P.
-    Fillable = max(0, crossing - queue - consumed).
-    Returns min(fillable, remaining), or ZERO if no fresh cache.
+    Fillable = max(0, crossing - queue_adj - effective_consumed).
+
+    Returns (fill_size, new_consumed) tuple:
+    - fill_size: min(fillable, remaining), or ZERO if no fresh cache.
+    - new_consumed: updated consumed value to store back on OrderState.
 
     ``consumed`` tracks how much crossing volume this order has already
     filled across previous ticks, preventing double-counting of the same
     liquidity (our dry fills don't remove asks from the real book).
+
+    Book turnover reset: if current crossing < consumed, the ask side has
+    turned over (old sellers gone, fresh ones arrived), so we reset
+    consumed to 0 to allow fills from the new liquidity.
+
+    ``queue_position_pct`` (0.0=front, 1.0=back, default 0.5=mid-queue)
+    controls what fraction of same-price queue we assume is ahead of us.
     """
     cached = _full_book_cache.get(token_id)
     if cached is None:
-        return Decimal(0)
+        return Decimal(0), consumed
     parsed_bids, parsed_asks, ts = cached
     if time.monotonic() - ts > _TOB_TTL:
-        return Decimal(0)
+        return Decimal(0), consumed
 
     if side == "BUY":
         crossing = sum(sz for px, sz in parsed_asks if px <= price)
@@ -432,13 +443,20 @@ def get_simulated_fill_size(
         crossing = sum(sz for px, sz in parsed_bids if px >= price)
         queue = sum(sz for px, sz in parsed_asks if px == price)
 
-    fillable = max(Decimal(0), crossing - queue - consumed)
+    # Reset consumed if book has turned over (crossing dropped below consumed)
+    effective_consumed = consumed if crossing >= consumed else Decimal("0")
+
+    queue_adj = queue * Decimal(str(queue_position_pct))
+    fillable = max(Decimal(0), crossing - queue_adj - effective_consumed)
     result = min(fillable, remaining)
 
     if crossing > 0:
         log.debug(
-            "SIM_FILL %s %s @%s │ cross=%s queue=%s consumed=%s fill=%s rem=%s",
-            token_id[:16], side, price, crossing, queue, consumed, result, remaining,
+            "SIM_FILL %s %s @%s │ cross=%s queue=%s(%.0f%%) consumed=%s(eff=%s) fill=%s rem=%s",
+            token_id[:16], side, price, crossing, queue,
+            queue_position_pct * 100, consumed, effective_consumed,
+            result, remaining,
         )
 
-    return result
+    new_consumed = effective_consumed + result
+    return result, new_consumed

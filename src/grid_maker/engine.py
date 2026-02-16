@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from py_clob_client.clob_types import OrderType
@@ -45,9 +46,19 @@ from shared.models import (
     GabagoolMarket,
 )
 from shared.order_mgr import OrderManager
-from shared.redeem import merge_positions
+from shared.redeem import CTF_DECIMALS, merge_positions, redeem_positions
 
 log = logging.getLogger("gm.engine")
+
+
+@dataclass
+class _PendingRedemption:
+    market: GabagoolMarket
+    up_shares: Decimal
+    down_shares: Decimal
+    eligible_at: float       # market.end_time + redeem_delay_sec
+    attempts: int = 0
+    last_attempt_at: float = 0.0
 
 
 class GridMakerEngine:
@@ -78,6 +89,10 @@ class GridMakerEngine:
         self._session_pnl = ZERO
         self._last_compound_at: float = 0.0
         self._effective_bankroll = cfg.bankroll_usd
+
+        # Redemption tracking
+        self._pending_redemptions: dict[str, _PendingRedemption] = {}  # slug -> redemption info
+        self._pending_redeem_task: dict[str, asyncio.Task] = {}        # slug -> running task
 
         # Static grid state
         self._grid_spec: dict[str, list[tuple[Decimal, Decimal]]] = {}  # token_id -> intended grid
@@ -154,6 +169,9 @@ class GridMakerEngine:
         if self._cfg.merge_mode == "batch":
             self._batch_merge(now)
 
+        # Process redemptions for expired markets
+        self._check_redemptions(now)
+
         # Periodic compounding
         if self._cfg.compound and now - self._last_compound_at > self._cfg.compound_interval_sec:
             self._compound(now)
@@ -167,6 +185,28 @@ class GridMakerEngine:
         )
         if new_markets:
             active_slugs = {m.slug for m in new_markets}
+
+            # Queue redemptions for markets that rotated out with remaining fills
+            old_by_slug = {m.slug: m for m in self._markets}
+            for slug, mkt in old_by_slug.items():
+                if slug in active_slugs:
+                    continue
+                if slug in self._pending_redemptions:
+                    continue
+                up_rem = self._filled_shares.get(mkt.up_token_id, ZERO)
+                down_rem = self._filled_shares.get(mkt.down_token_id, ZERO)
+                if up_rem > ZERO or down_rem > ZERO:
+                    self._pending_redemptions[slug] = _PendingRedemption(
+                        market=mkt,
+                        up_shares=up_rem,
+                        down_shares=down_rem,
+                        eligible_at=mkt.end_time + self._cfg.redeem_delay_sec,
+                    )
+                    log.info(
+                        "REDEEM_QUEUED_ROTATION %s │ up=%s down=%s",
+                        slug[:40], up_rem, down_rem,
+                    )
+
             self._completed_markets &= active_slugs
             self._markets = new_markets
             log.info("DISCOVERY │ %d markets active", len(new_markets))
@@ -672,7 +712,89 @@ class GridMakerEngine:
         self._grid_spec.pop(market.down_token_id, None)
         self._active_grid_levels.pop(market.up_token_id, None)
         self._active_grid_levels.pop(market.down_token_id, None)
+
+        # Queue redemption if any filled shares remain
+        up_remaining = self._filled_shares.get(market.up_token_id, ZERO)
+        down_remaining = self._filled_shares.get(market.down_token_id, ZERO)
+        if up_remaining > ZERO or down_remaining > ZERO:
+            self._pending_redemptions[market.slug] = _PendingRedemption(
+                market=market,
+                up_shares=up_remaining,
+                down_shares=down_remaining,
+                eligible_at=market.end_time + self._cfg.redeem_delay_sec,
+            )
+            log.info(
+                "REDEEM_QUEUED %s │ up=%s down=%s │ eligible in %ds",
+                market.slug[:40], up_remaining, down_remaining,
+                self._cfg.redeem_delay_sec,
+            )
+
         log.info("%sCLEANUP %s │ %s%s", C_DIM, market.slug[:40], reason, C_RESET)
+
+    def _check_redemptions(self, now: float) -> None:
+        """Process pending redemptions for expired markets."""
+        # Phase A — harvest completed tasks
+        for slug in list(self._pending_redeem_task):
+            task = self._pending_redeem_task[slug]
+            if not task.done():
+                continue
+            del self._pending_redeem_task[slug]
+            try:
+                result = task.result()
+                pr = self._pending_redemptions.pop(slug, None)
+                if pr:
+                    winning = max(pr.up_shares, pr.down_shares)
+                    self._session_pnl += winning
+                    self._filled_shares.pop(pr.market.up_token_id, None)
+                    self._filled_shares.pop(pr.market.down_token_id, None)
+                log.info(
+                    "%sREDEEM_CONFIRMED %s │ tx=%s%s",
+                    C_GREEN, slug[:40], result.tx_hash, C_RESET,
+                )
+            except Exception as e:
+                pr = self._pending_redemptions.get(slug)
+                if pr:
+                    pr.attempts += 1
+                log.warning("REDEEM_FAILED %s │ %s", slug[:40], e)
+
+        # Phase B — launch new redemptions
+        for slug, pr in list(self._pending_redemptions.items()):
+            if slug in self._pending_redeem_task:
+                continue
+            if now < pr.eligible_at:
+                continue
+            if pr.attempts >= self._cfg.redeem_max_attempts:
+                log.warning(
+                    "REDEEM_ABANDONED %s after %d attempts",
+                    slug[:40], pr.attempts,
+                )
+                self._pending_redemptions.pop(slug)
+                continue
+
+            if self._cfg.dry_run:
+                winning = max(pr.up_shares, pr.down_shares)
+                log.info(
+                    "%sDRY_REDEEM %s │ winning=%s shares │ +$%.2f%s",
+                    C_GREEN, slug[:40], winning, float(winning), C_RESET,
+                )
+                self._session_pnl += winning
+                self._filled_shares.pop(pr.market.up_token_id, None)
+                self._filled_shares.pop(pr.market.down_token_id, None)
+                self._pending_redemptions.pop(slug)
+                continue
+
+            # Live: launch async redeem
+            redeem_amount = 0
+            if pr.market.neg_risk:
+                redeem_amount = int(max(pr.up_shares, pr.down_shares) * 10**CTF_DECIMALS)
+            pr.last_attempt_at = now
+            task = asyncio.ensure_future(asyncio.to_thread(
+                redeem_positions, self._w3, self._account, self._funder,
+                pr.market.condition_id, neg_risk=pr.market.neg_risk,
+                amount=redeem_amount,
+                max_gas_price_gwei=self._cfg.max_gas_price_gwei,
+            ))
+            self._pending_redeem_task[slug] = task
 
     def _compound(self, now: float) -> None:
         """Recalculate effective bankroll from session P&L."""

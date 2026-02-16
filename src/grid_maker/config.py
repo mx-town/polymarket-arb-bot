@@ -51,6 +51,10 @@ class GridMakerConfig:
     max_gas_price_gwei: int = 200
     matic_price_usd: Decimal = Decimal("0.40")
 
+    # Redemption
+    redeem_delay_sec: int = 60           # wait after market.end_time before attempting
+    redeem_max_attempts: int = 3         # give up after N failures
+
     # Compounding
     compound: bool = True
     compound_interval_sec: int = 3600
@@ -109,6 +113,10 @@ def validate_config(cfg: GridMakerConfig) -> None:
         errors.append(f"merge_mode must be 'eager' or 'batch', got {cfg.merge_mode}")
     if cfg.merge_batch_interval_sec <= 0:
         errors.append(f"merge_batch_interval_sec must be > 0, got {cfg.merge_batch_interval_sec}")
+    if cfg.redeem_delay_sec < 0:
+        errors.append(f"redeem_delay_sec must be >= 0, got {cfg.redeem_delay_sec}")
+    if cfg.redeem_max_attempts <= 0:
+        errors.append(f"redeem_max_attempts must be > 0, got {cfg.redeem_max_attempts}")
 
     if errors:
         raise ValueError("GridMakerConfig validation failed:\n  " + "\n  ".join(errors))
@@ -149,6 +157,8 @@ def load_grid_maker_config(raw: dict[str, Any]) -> GridMakerConfig:
         merge_batch_interval_sec=int(gm.get("merge_batch_interval_sec", 3600)),
         max_gas_price_gwei=int(gm.get("max_gas_price_gwei", 200)),
         matic_price_usd=Decimal(str(gm.get("matic_price_usd", "0.40"))),
+        redeem_delay_sec=int(gm.get("redeem_delay_sec", 60)),
+        redeem_max_attempts=int(gm.get("redeem_max_attempts", 3)),
         compound=gm.get("compound", True),
         compound_interval_sec=int(gm.get("compound_interval_sec", 3600)),
         max_entry_price=Decimal(str(gm.get("max_entry_price", "0.60"))),

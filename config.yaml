@@ -24,8 +24,8 @@ grid_maker:
   enabled: true
   dry_run: true
   refresh_millis: 500
-  bankroll_usd: 1000
-  max_markets: 5
+  bankroll_usd: 10000
+  max_markets: 50
   assets: [bitcoin, ethereum]
   timeframes: [5m, 15m, 1h]
   # Grid (static mode — matches gabagool: full range, 26 shares/level)
@@ -46,11 +46,14 @@ grid_maker:
   taker_aggression_pct: 0.12
   taker_trigger_imbalance: 0.15
   use_fok: true
-  # Merge (batch mode — gabagool merges every ~35-40 min)
+  # Merge (batch mode — gabagool merges every ~60 min)
   merge_mode: batch
   min_merge_shares: 10
   merge_cooldown_sec: 15
-  merge_batch_interval_sec: 2400
+  merge_batch_interval_sec: 3600
+  # Redemption
+  redeem_delay_sec: 60
+  redeem_max_attempts: 3
   # Gas
   max_gas_price_gwei: 200
   matic_price_usd: 0.40

@@ -167,8 +167,8 @@ class TestConsumedCrossing:
         self._place_dry_order(mgr)
         fills = []
 
-        # First tick: sim returns 10 shares filled
-        mock_sim.return_value = Decimal("10")
+        # First tick: sim returns (delta=10, new_consumed=10)
+        mock_sim.return_value = (Decimal("10"), Decimal("10"))
         mgr.check_pending_orders(client=None, on_fill=lambda s, d: fills.append(d))
 
         # Verify consumed was passed as 0 on first call
@@ -181,8 +181,8 @@ class TestConsumedCrossing:
         assert len(fills) == 1
         assert fills[0] == Decimal("10")
 
-        # Second tick: sim returns 5 more
-        mock_sim.return_value = Decimal("5")
+        # Second tick: sim returns (delta=5, new_consumed=15)
+        mock_sim.return_value = (Decimal("5"), Decimal("15"))
         mgr.check_pending_orders(client=None, on_fill=lambda s, d: fills.append(d))
 
         # Verify consumed was passed as 10 (accumulated from first fill)
@@ -200,14 +200,14 @@ class TestConsumedCrossing:
         self._place_dry_order(mgr)
 
         # First tick: 15 shares available, fill 15
-        mock_sim.return_value = Decimal("15")
+        mock_sim.return_value = (Decimal("15"), Decimal("15"))
         mgr.check_pending_orders(client=None)
 
         state = mgr.get_order("111")
         assert state.consumed_crossing == Decimal("15")
 
-        # Second tick: sim returns 0 (no new liquidity beyond consumed)
-        mock_sim.return_value = ZERO
+        # Second tick: sim returns (0, 15) — no new liquidity beyond consumed
+        mock_sim.return_value = (ZERO, Decimal("15"))
         mgr.check_pending_orders(client=None)
 
         # consumed_crossing unchanged — no new fill
@@ -226,7 +226,7 @@ class TestConsumedCrossing:
             client=None, market=market, token_id="111", direction=Direction.UP,
             price=Decimal("0.50"), size=Decimal("20"), seconds_to_end=300,
         )
-        mock_sim.return_value = Decimal("8")
+        mock_sim.return_value = (Decimal("8"), Decimal("8"))
         mgr.check_pending_orders(client=None)
         mgr.cancel_order(client=None, token_id="111", reason="REPLACE")
 

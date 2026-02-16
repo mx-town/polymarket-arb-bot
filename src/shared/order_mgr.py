@@ -446,7 +446,7 @@ class OrderManager:
                     # until ask drops).
                     if state.matched_size < state.size:
                         remaining = state.size - state.matched_size
-                        delta = get_simulated_fill_size(
+                        delta, new_consumed = get_simulated_fill_size(
                             state.token_id, state.price, state.side, remaining,
                             consumed=state.consumed_crossing,
                         )
@@ -455,7 +455,7 @@ class OrderManager:
                             orders[idx] = replace(
                                 state,
                                 matched_size=new_matched,
-                                consumed_crossing=state.consumed_crossing + delta,
+                                consumed_crossing=new_consumed,
                                 last_status_check_at=now,
                             )
                             if on_fill:
@@ -470,18 +470,19 @@ class OrderManager:
                                 now - state.placed_at,
                                 C_RESET,
                             )
+                        elif new_consumed != state.consumed_crossing:
+                            # Book turnover detected — update consumed even
+                            # when no fill so the reset sticks.
+                            orders[idx] = replace(
+                                state,
+                                consumed_crossing=new_consumed,
+                                last_status_check_at=now,
+                            )
 
-                    # Remove stale orders
-                    if now - state.placed_at > ORDER_STALE_TIMEOUT_S:
-                        log.info(
-                            "%sRemoving stale dry-run order %s token=%s after %ds%s",
-                            C_YELLOW,
-                            state.order_id,
-                            token_id[:16],
-                            int(now - state.placed_at),
-                            C_RESET,
-                        )
-                        orders.pop(idx)
+                    # Skip stale timeout purge for dry-run orders — let the
+                    # engine's _cleanup_market handle removal when the market
+                    # ends.  The 300s timeout kills grid orders too early in
+                    # 5m markets (grid lives ~360s, last 60s has no orders).
                     continue
 
                 # Check if due for status poll
