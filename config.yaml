@@ -1,63 +1,30 @@
-rebate_maker:
-  enabled: true
-  dry_run: true
-  refresh_millis: 500
-  assets: [bitcoin, ethereum]
-  bankroll_usd: 50
-  min_edge: -0.02
-  min_seconds_to_end: 90
-  max_seconds_to_end: 900
-  no_new_orders_sec: 90
-  grid_levels: 10
-  grid_step: 0.01
-  min_merge_shares: 10
-  min_merge_profit_usd: -0.50
-  merge_cooldown_sec: 15
-  post_merge_lockout: true
-  max_gas_price_gwei: 200
-  dry_merge_gas_cost_usd: 0.003
-  matic_price_usd: 0.40
-  max_entry_price: 0.60
-  min_entry_price: 0.05
-
 grid_maker:
   enabled: true
   dry_run: true
   refresh_millis: 500
   bankroll_usd: 10000
-  max_markets: 50
+  max_markets: 10
   assets: [bitcoin, ethereum]
   timeframes: [5m, 15m, 1h]
-  # Grid (static mode — matches gabagool: full range, 26 shares/level)
-  grid_mode: static
   grid_step: 0.01
-  fixed_size_shares: 26
+  grid_sizes:
+    bitcoin:
+      5m: 20
+      15m: 15
+      1h: 26
+    ethereum:
+      15m: 10
+      1h: 16
   min_entry_price: 0.01
   max_entry_price: 0.99
-  # Dynamic mode fallback params
-  grid_levels_per_side: 30
-  base_size_shares: 7
-  size_curve: flat
-  # Timing
-  min_seconds_to_end: 120
-  max_seconds_to_end: 5400
-  entry_delay_sec: 3
-  # Taker
-  taker_aggression_pct: 0.12
-  taker_trigger_imbalance: 0.15
-  use_fok: true
-  # Merge (batch mode — gabagool merges every ~60 min)
-  merge_mode: batch
+  min_seconds_to_end: 30
+  entry_delay_sec: 5
   min_merge_shares: 10
-  merge_cooldown_sec: 15
   merge_batch_interval_sec: 3600
-  # Redemption
   redeem_delay_sec: 60
   redeem_max_attempts: 3
-  # Gas
   max_gas_price_gwei: 200
   matic_price_usd: 0.40
-  # Compounding
   compound: true
   compound_interval_sec: 3600
 

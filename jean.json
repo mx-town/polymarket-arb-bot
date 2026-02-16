@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "setup": "uv sync",
+    "run": null
+  }
+}

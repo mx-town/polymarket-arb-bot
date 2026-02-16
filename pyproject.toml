@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "polymarket-arb-bot"
 version = "0.1.0"
-description = "Polymarket arb bot — rebate-maker, grid-maker, and observer strategies"
+description = "Polymarket arb bot — grid-maker and observer strategies"
 requires-python = ">=3.11"
 dependencies = [
     "py-clob-client",
@@ -21,7 +21,6 @@ dependencies = [
 ]
 
 [project.scripts]
-rebate-maker = "rebate_maker.bot:main"
 observer = "observer.bot:main"
 grid-maker = "grid_maker.bot:main"
 clob-limit-test = "grid_maker.clob_limit_test:main"
@@ -30,7 +29,7 @@ clob-limit-test = "grid_maker.clob_limit_test:main"
 dev = ["ruff", "pytest"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shared", "src/rebate_maker", "src/observer", "src/grid_maker"]
+packages = ["src/shared", "src/observer", "src/grid_maker"]
 
 [tool.ruff]
 line-length = 100

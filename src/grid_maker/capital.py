@@ -23,97 +23,25 @@ def calculate_per_market_budget(
     return (bankroll / n_active_markets).quantize(TICK, rounding=ROUND_DOWN)
 
 
-def calculate_grid_allocation(
-    budget: Decimal,
-    grid_levels: int,
-    base_size: Decimal,
-    grid_step: Decimal,
-    best_bid: Decimal,
-    size_curve: str = "flat",
-) -> list[tuple[Decimal, Decimal]]:
-    """Calculate (price, size) pairs for one side of a grid.
-
-    Posts grid_levels GTC BUY orders from best_bid + step*1 up to
-    best_bid + step*grid_levels.
-
-    size_curve:
-        "flat" — uniform size across all levels
-        "bell" — larger sizes near the mid, tapering at edges
-
-    Returns list of (price, size) tuples. Total notional ≤ budget.
-    """
-    if grid_levels <= 0 or budget <= ZERO or best_bid is None:
-        return []
-
-    # Generate price levels
-    prices: list[Decimal] = []
-    for i in range(1, grid_levels + 1):
-        p = best_bid + grid_step * i
-        if ZERO < p < ONE:
-            prices.append(p)
-
-    if not prices:
-        return []
-
-    # Calculate sizes based on curve
-    if size_curve == "bell":
-        # Bell curve: peak at middle level, taper at edges
-        mid = len(prices) / 2.0
-        raw_weights = [
-            Decimal(str(math.exp(-((i - mid) ** 2) / (2 * (len(prices) / 4) ** 2))))
-            for i in range(len(prices))
-        ]
-        total_weight = sum(raw_weights)
-        if total_weight <= ZERO:
-            return []
-        sizes = [
-            (base_size * w / total_weight * len(prices)).quantize(TICK, rounding=ROUND_DOWN)
-            for w in raw_weights
-        ]
-    else:
-        # Flat: uniform size
-        sizes = [base_size] * len(prices)
-
-    # Cap total notional to budget
-    result: list[tuple[Decimal, Decimal]] = []
-    total_notional = ZERO
-    for price, size in zip(prices, sizes):
-        if size <= ZERO:
-            continue
-        notional = price * size
-        if total_notional + notional > budget:
-            # Reduce this level to fit within budget
-            remaining_budget = budget - total_notional
-            if remaining_budget <= ZERO:
-                break
-            capped_size = (remaining_budget / price).quantize(TICK, rounding=ROUND_DOWN)
-            if capped_size >= ONE:
-                result.append((price, capped_size))
-            break
-        result.append((price, size))
-        total_notional += notional
-
-    return result
-
-
 def calculate_static_grid(
     min_price: Decimal,
     max_price: Decimal,
     grid_step: Decimal,
-    fixed_size: Decimal,
+    target_size: Decimal,
     budget: Decimal,
 ) -> list[tuple[Decimal, Decimal]]:
     """Calculate (price, size) pairs for a static full-range grid.
 
-    Generates prices from min_price to max_price at grid_step increments.
-    Every level gets fixed_size shares. Budget cap is applied from the
-    cheapest end (most levels for the money).
+    Always returns ALL levels from min_price to max_price at grid_step
+    increments.  If the budget can afford target_size at every level, use
+    target_size.  Otherwise scale down proportionally so every level gets
+    the same (smaller) size — never truncate coverage.
 
-    Does NOT depend on best_bid — prices are absolute.
+    Minimum size per level is 1 share.
     """
     if min_price <= ZERO or max_price < min_price or grid_step <= ZERO:
         return []
-    if fixed_size <= ZERO or budget <= ZERO:
+    if target_size <= ZERO or budget <= ZERO:
         return []
 
     # Generate all price levels
@@ -126,23 +54,26 @@ def calculate_static_grid(
     if not prices:
         return []
 
-    # Assign fixed_size to every level, cap at budget (cheapest first)
-    result: list[tuple[Decimal, Decimal]] = []
-    total_notional = ZERO
-    for price in prices:
-        notional = price * fixed_size
-        if total_notional + notional > budget:
-            remaining = budget - total_notional
-            if remaining <= ZERO:
-                break
-            capped_size = (remaining / price).quantize(TICK, rounding=ROUND_DOWN)
-            if capped_size >= ONE:
-                result.append((price, capped_size))
-            break
-        result.append((price, fixed_size))
-        total_notional += notional
+    # Compute ideal cost at full target_size
+    ideal_cost = sum(price * target_size for price in prices)
 
-    return result
+    if budget >= ideal_cost:
+        # Full size at every level
+        return [(price, target_size) for price in prices]
+
+    # Scale down: every level gets floor(target_size * scale_factor), min 1
+    scale_factor = budget / ideal_cost
+    scaled_raw = target_size * scale_factor
+    # Use math.floor on float conversion for clean integer-like sizing
+    scaled_int = max(1, math.floor(float(scaled_raw)))
+    scaled_size = Decimal(str(scaled_int))
+
+    # Verify we can actually afford this — if even 1 share/level exceeds budget, cap
+    total_at_scaled = sum(price * scaled_size for price in prices)
+    if total_at_scaled > budget:
+        scaled_size = ONE
+
+    return [(price, scaled_size) for price in prices]
 
 
 def compound_bankroll(
@@ -157,39 +88,3 @@ def compound_bankroll(
     """
     new_bankroll = current_bankroll + session_pnl + rebate_income
     return max(current_bankroll, new_bankroll)
-
-
-def scale_grid_params(
-    bankroll: Decimal,
-    base_levels: int,
-    base_size: Decimal,
-) -> tuple[int, Decimal]:
-    """Scale grid levels and size as bankroll grows.
-
-    At 2x bankroll: +50% levels, same size (wider coverage)
-    At 4x bankroll: +50% levels, +50% size (both dimensions)
-
-    Returns (scaled_levels, scaled_size).
-    """
-    base_bankroll = Decimal("500")  # reference point
-    if bankroll <= base_bankroll:
-        return base_levels, base_size
-
-    ratio = bankroll / base_bankroll
-
-    # Scale levels: sqrt growth (more coverage, not linear)
-    level_factor = Decimal(str(math.sqrt(float(ratio))))
-    scaled_levels = max(base_levels, int(base_levels * level_factor))
-
-    # Scale size: only after 4x bankroll
-    if ratio >= 4:
-        size_factor = Decimal(str(math.sqrt(float(ratio / 4))))
-        scaled_size = (base_size * size_factor).quantize(TICK, rounding=ROUND_DOWN)
-    else:
-        scaled_size = base_size
-
-    log.info(
-        "SCALE │ bankroll=$%s ratio=%.1fx │ levels=%d→%d size=%s→%s",
-        bankroll, float(ratio), base_levels, scaled_levels, base_size, scaled_size,
-    )
-    return scaled_levels, scaled_size

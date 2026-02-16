@@ -2,13 +2,12 @@
 
 ## Overview
 
-Multi-strategy Polymarket trading bot targeting crypto Up/Down markets on 5m/15m/1h timeframes. Three strategies (rebate-maker, grid-maker, observer) as separate packages sharing a src layout.
+Polymarket trading bot targeting crypto Up/Down markets on 5m/15m/1h timeframes. Two packages (grid-maker, observer) sharing a src layout. Grid-maker is a reverse-engineered clone of competitor "gabagool".
 
 ## Architecture
 
 ```
-src/rebate_maker/    → Rebate-only market maker (post grids both sides, merge for rebates)
-src/grid_maker/      → Grid market maker (configurable grid levels, compound mode)
+src/grid_maker/      → Grid market maker (static penny-grid, gabagool clone)
 src/observer/        → Observation bot (reverse-engineer competitor strategies)
 src/shared/          → Shared modules (order_mgr, market_data, redeem, events, models)
 config.yaml          → All tunable parameters
@@ -21,7 +20,6 @@ Uses **src layout** with `hatchling` build backend.
 
 ```bash
 uv sync
-uv run rebate-maker      # rebate-only market maker
 uv run grid-maker        # grid market maker
 uv run observer          # observer bot
 ```
@@ -34,15 +32,17 @@ uv run observer          # observer bot
 - `ETHERSCAN_API_KEY` — for observer on-chain lookups
 - `POLYGON_RPC_URL` — for observer receipt decoding and on-chain operations
 
-## Rebate-Maker Strategy
+## Grid-Maker Strategy (Gabagool Clone)
 
-Dual-sided passive GTC maker strategy (0% maker fee):
-1. **Grid posting**: post GTC BUY grids on both Up and Down sides simultaneously
-2. **Fill collection**: collect maker fills on both sides through grid levels
-3. **Merge**: when both sides filled and balanced → on-chain merge for $1/pair, profit = rebate + (1 - up_vwap - down_vwap - gas)
-4. **Repricing**: every tick, if best_bid changed → cancel + repost at new level (downward only)
-- All orders are GTC maker (never FOK/taker)
-- No signal-based entries — pure rebate collection
+Static full-range penny-grid market maker:
+1. **Grid posting**: post GTC BUY grids $0.01-$0.99 at every cent, both Up+Down, 26 shares/level
+2. **Fill collection**: collect fills passively; replenish consumed levels (fire-and-forget, no repricing)
+3. **Batch merge**: sweep all markets every ~60 min, merge balanced pairs on-chain for $1/pair
+4. **Redemption**: redeem winning positions after market expiry
+- All orders are GTC (no post_only) — organic taker fills happen when GTC crosses the ask
+- No deliberate taker/FOK orders, no dynamic grid, no eager merge
+- Entry delay: 5s after first seeing a market
+- Orders ride through market expiry — no TIME_UP cancellation
 
 ## Coding Conventions
 
@@ -56,16 +56,15 @@ Dual-sided passive GTC maker strategy (0% maker fee):
 Observing competitor "gabagool" (`0x6031b6eed1c97e853c6e0f03ad3ce3529351f96d`) via `src/observer/`.
 Data stored in `data/observer.db` (tables: `obs_sessions`, `obs_trades`, `obs_merges`, `obs_positions`, `obs_position_changes`, `obs_market_windows`, `obs_prices`, `obs_redemptions`, `obs_book_snapshots`).
 
-**Confirmed findings** (2 sessions, 40K trades, 147 markets, $168K volume, 6 hours):
-- **Static full-range grid**: $0.01-$0.99 at every cent, BOTH Up+Down simultaneously (not ~30 levels — full book)
+**Confirmed findings** (3 sessions, 65K trades, 242 markets, $280K volume, 10.8 hours):
+- **Static full-range grid**: $0.01-$0.99 at every cent, BOTH Up+Down simultaneously
 - **Fixed 26 shares/level**: max fill always 26.0, notional scales with price naturally
-- **88% MAKER** ($3.85 avg fill), 12% TAKER ($6.89 avg) — taker fills used for rebalancing
-- Enters both sides within **2-5 seconds** of market discovery (fire-and-forget, no repricing)
+- **87% MAKER** ($3.86 avg fill), 13% TAKER ($6.98 avg) — taker fills are organic GTC crossings
+- Enters both sides within **10-30 seconds** of market discovery (fire-and-forget, no repricing)
 - **100% BUY**, exit only via merge/redemption. Zero sell trades observed.
 - **Batch merges** every ~60 min (4-5 markets per batch, not per-market eager)
-- Combined VWAP ~0.986 → **1.38% net edge** → ~$2,227 gross in 6 hrs
-- Win rate: **72%** of markets. Winners avg +3%, losers avg -1.7%
-- **BTC:ETH ratio 4.1:1**. All timeframes (5m:79, 15m:54, 1h:14 markets)
+- Combined VWAP ~0.9812 → **1.88% avg edge**, win rate 74%
+- **BTC:ETH ratio 3.3:1**. Timeframes: 5m, 15m, 1h
 - Position scale: $500-$2K per market
 
 **Analysis artifacts**: Deep dive script (`src/observer/deep_dive.py`), HTML report (`data/analysis/deep_dive_report.html`), session reports (`data/analysis/session_*.md`), strategy plan (`docs/STRATEGY_PLAN.md`).

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from py_clob_client.clob_types import OrderType
 
-from rebate_maker.models import Direction, GabagoolMarket, OrderState
+from shared.models import Direction, GabagoolMarket, OrderState
 from shared.order_mgr import OrderManager
 
 ZERO = Decimal("0")

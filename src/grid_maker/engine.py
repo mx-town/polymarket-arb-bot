@@ -1,16 +1,12 @@
 """Grid-maker engine — dense penny-grid market making (Gabagool clone).
 
 Posts GTC BUY grids on both Up and Down simultaneously, collects fills,
-merges balanced pairs, and uses TAKER aggression to hedge imbalances.
-Revenue comes from maker rebates, not edge.
+merges balanced pairs via batch sweep, and redeems winning positions.
+Revenue comes from maker rebates + (1 - combined_vwap).
 
-Supports two grid modes:
-  - "dynamic": builds grids from best_bid, reprices on drift (original)
-  - "static": full-range $0.01-$0.99 grid, fire-and-forget (gabagool clone)
-
-Supports two merge modes:
-  - "eager": per-market merge when balanced (original)
-  - "batch": sweep all markets every merge_batch_interval_sec
+Static grid only: full-range $0.01-$0.99, fire-and-forget, no repricing.
+Batch merge only: sweep all markets every merge_batch_interval_sec.
+No deliberate taker orders — organic GTC crossings happen naturally.
 """
 
 from __future__ import annotations
@@ -21,14 +17,10 @@ import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from py_clob_client.clob_types import OrderType
-
 from grid_maker.capital import (
-    calculate_grid_allocation,
     calculate_per_market_budget,
     calculate_static_grid,
     compound_bankroll,
-    scale_grid_params,
 )
 from grid_maker.config import GridMakerConfig
 from grid_maker.market_data import discover_markets
@@ -49,6 +41,30 @@ from shared.order_mgr import OrderManager
 from shared.redeem import CTF_DECIMALS, merge_positions, redeem_positions
 
 log = logging.getLogger("gm.engine")
+
+# Slug prefix → canonical asset name for grid_sizes lookup
+_SLUG_PREFIX_TO_ASSET = {"btc": "bitcoin", "eth": "ethereum"}
+
+
+def _parse_market_asset_tf(market: GabagoolMarket) -> tuple[str, str] | None:
+    """Extract (asset, timeframe) from a market's slug.
+
+    Slug format: {prefix}-updown-{tf}-{epoch}  (e.g. btc-updown-5m-1739...)
+    Returns None if the slug doesn't match the expected pattern.
+    """
+    parts = market.slug.split("-")
+    if len(parts) < 3:
+        return None
+    prefix = parts[0]  # btc / eth
+    asset = _SLUG_PREFIX_TO_ASSET.get(prefix)
+    if not asset:
+        return None
+    # Timeframe is embedded in market_type ("updown-5m", "updown-15m", "up-or-down")
+    # or directly in slug parts[2] ("5m", "15m", "1h")
+    tf = parts[2] if len(parts) >= 4 else None
+    if tf not in ("5m", "15m", "1h"):
+        return None
+    return asset, tf
 
 
 @dataclass
@@ -98,6 +114,9 @@ class GridMakerEngine:
         self._grid_spec: dict[str, list[tuple[Decimal, Decimal]]] = {}  # token_id -> intended grid
         self._active_grid_levels: dict[str, set[Decimal]] = {}  # token -> live prices
 
+        # First-seen tracking for entry delay
+        self._first_seen_at: dict[str, float] = {}  # slug -> epoch when first discovered
+
     async def run(self) -> None:
         """Main loop — discover markets and tick."""
         interval = self._cfg.refresh_millis / 1000.0
@@ -112,25 +131,29 @@ class GridMakerEngine:
             "%s╚══════════════════════════════════════╝%s", C_BOLD, C_RESET,
         )
         log.info(
-            "bankroll=$%s │ mode=%s │ step=%s │ dry=%s │ merge=%s │ assets=%s │ tf=%s",
+            "bankroll=$%s │ step=%s │ dry=%s │ assets=%s │ tf=%s",
             self._cfg.bankroll_usd,
-            self._cfg.grid_mode,
             self._cfg.grid_step,
             self._cfg.dry_run,
-            self._cfg.merge_mode,
             ",".join(self._cfg.assets),
             ",".join(self._cfg.timeframes),
         )
-        if self._cfg.grid_mode == "static":
-            log.info(
-                "static grid │ range=$%s-$%s │ fixed_size=%s shares/level",
-                self._cfg.min_entry_price, self._cfg.max_entry_price,
-                self._cfg.fixed_size_shares,
-            )
+        sizes_str = ", ".join(
+            f"{a}/{tf}={sz}"
+            for a, tf_map in self._cfg.grid_sizes.items()
+            for tf, sz in tf_map.items()
+        )
+        log.info(
+            "static grid │ range=$%s-$%s │ sizes=[%s] │ "
+            "entry_delay=%ds │ min_end=%ds",
+            self._cfg.min_entry_price, self._cfg.max_entry_price,
+            sizes_str,
+            self._cfg.entry_delay_sec,
+            self._cfg.min_seconds_to_end,
+        )
 
         # Restore grid state from existing CLOB orders on restart
-        if self._cfg.grid_mode == "static":
-            self._restore_grid_state()
+        self._restore_grid_state()
 
         while True:
             try:
@@ -153,11 +176,8 @@ class GridMakerEngine:
         # Prefetch all order books in one batch
         prefetch_order_books(self._client, self._markets)
 
-        # Check pending orders for fills — use bulk when static mode
-        if self._cfg.grid_mode == "static":
-            self._order_mgr.check_pending_orders_bulk(self._client, on_fill=self._on_fill)
-        else:
-            self._order_mgr.check_pending_orders(self._client, on_fill=self._on_fill)
+        # Check pending orders for fills — bulk mode for large order counts
+        self._order_mgr.check_pending_orders_bulk(self._client, on_fill=self._on_fill)
 
         # Evaluate each market
         for market in list(self._markets):
@@ -165,9 +185,8 @@ class GridMakerEngine:
                 continue
             self._evaluate_market(market, now)
 
-        # Batch merge (if configured)
-        if self._cfg.merge_mode == "batch":
-            self._batch_merge(now)
+        # Batch merge sweep
+        self._batch_merge(now)
 
         # Process redemptions for expired markets
         self._check_redemptions(now)
@@ -207,13 +226,23 @@ class GridMakerEngine:
                         slug[:40], up_rem, down_rem,
                     )
 
+            # Track first-seen for new markets
+            for m in new_markets:
+                if m.slug not in self._first_seen_at:
+                    self._first_seen_at[m.slug] = now
+
+            # Clean up first-seen for markets that rotated out
+            for slug in list(self._first_seen_at):
+                if slug not in active_slugs:
+                    del self._first_seen_at[slug]
+
             self._completed_markets &= active_slugs
             self._markets = new_markets
             log.info("DISCOVERY │ %d markets active", len(new_markets))
         self._last_discovery = now
 
     def _evaluate_market(self, market: GabagoolMarket, now: float) -> None:
-        """Evaluate a single market: post grid, maintain, hedge, merge."""
+        """Evaluate a single market: post grid, maintain, batch merge."""
         seconds_to_end = int(market.end_time - now)
 
         # Market expired
@@ -221,55 +250,54 @@ class GridMakerEngine:
             self._cleanup_market(market, "EXPIRED")
             return
 
-        # Outside time window
-        if seconds_to_end > self._cfg.max_seconds_to_end:
-            return
+        # Don't enter dying markets (but let existing orders ride)
         if seconds_to_end < self._cfg.min_seconds_to_end:
-            self._cleanup_market(market, "TIME_UP")
+            has_up_orders = self._order_mgr.has_order(market.up_token_id)
+            has_down_orders = self._order_mgr.has_order(market.down_token_id)
+            if not has_up_orders and not has_down_orders:
+                return
+            # Existing orders ride through — no cancellation, no new posting
             return
 
-        # Entry delay — don't post grid too early in the window
-        window_elapsed = self._cfg.max_seconds_to_end - seconds_to_end
-        if window_elapsed < self._cfg.entry_delay_sec:
+        # Entry delay — wait entry_delay_sec after first seeing the market
+        first_seen = self._first_seen_at.get(market.slug)
+        if first_seen is None:
+            self._first_seen_at[market.slug] = now
             return
-
-        # Get TOB for both sides
-        up_tob = get_top_of_book(self._client, market.up_token_id)
-        down_tob = get_top_of_book(self._client, market.down_token_id)
-
-        if up_tob is None or down_tob is None:
+        if now - first_seen < self._cfg.entry_delay_sec:
             return
 
         # Check if we have existing orders
         has_up_orders = self._order_mgr.has_order(market.up_token_id)
         has_down_orders = self._order_mgr.has_order(market.down_token_id)
 
-        if self._cfg.grid_mode == "static":
-            if not has_up_orders and not has_down_orders:
-                self._post_initial_grid_static(market, seconds_to_end)
-            else:
-                self._maintain_grid_static(market, seconds_to_end)
+        if not has_up_orders and not has_down_orders:
+            self._post_initial_grid_static(market, seconds_to_end)
         else:
-            if not has_up_orders and not has_down_orders:
-                self._post_initial_grid(market, up_tob, down_tob, seconds_to_end)
-            else:
-                self._maintain_grid(market, up_tob, down_tob, seconds_to_end)
-
-        # Check for TAKER hedge opportunity
-        self._check_taker_hedge(market, up_tob, down_tob, seconds_to_end)
-
-        # Check for eager merge (per-market)
-        if self._cfg.merge_mode == "eager":
-            self._check_merge(market, now)
+            self._maintain_grid_static(market, seconds_to_end)
 
     # -----------------------------------------------------------------
-    # Static grid mode
+    # Static grid
     # -----------------------------------------------------------------
 
     def _post_initial_grid_static(
         self, market: GabagoolMarket, seconds_to_end: int,
     ) -> None:
         """Post full-range static grid on both sides."""
+        parsed = _parse_market_asset_tf(market)
+        if parsed is None:
+            log.warning("GRID_SKIP %s │ cannot parse asset/tf from slug", market.slug[:40])
+            return
+
+        asset, tf = parsed
+        target_shares = self._cfg.get_size_for(asset, tf)
+        if target_shares is None:
+            log.info("GRID_SKIP %s │ no size for %s/%s", market.slug[:40], asset, tf)
+            self._completed_markets.add(market.slug)
+            return
+
+        target_size = Decimal(str(target_shares))
+
         budget = calculate_per_market_budget(
             self._effective_bankroll, max(1, len(self._markets)),
         )
@@ -286,7 +314,7 @@ class GridMakerEngine:
                 self._cfg.min_entry_price,
                 self._cfg.max_entry_price,
                 self._cfg.grid_step,
-                self._cfg.fixed_size_shares,
+                target_size,
                 side_budget,
             )
             self._grid_spec[token_id] = grid
@@ -301,12 +329,13 @@ class GridMakerEngine:
                 self._active_grid_levels[token_id].add(price)
 
         n_levels = len(self._grid_spec.get(market.up_token_id, []))
+        actual_size = self._grid_spec[market.up_token_id][0][1] if n_levels else ZERO
         log.info(
-            "%sGRID_POST_STATIC %s │ budget=$%s │ %d levels/side │ "
-            "$%s-$%s @ %s shares%s",
-            C_GREEN, market.slug[:40], budget, n_levels,
+            "%sGRID_POST_STATIC %s │ %s/%s │ budget=$%s │ %d levels/side │ "
+            "$%s-$%s @ %s shares (target %s)%s",
+            C_GREEN, market.slug[:40], asset, tf, budget, n_levels,
             self._cfg.min_entry_price, self._cfg.max_entry_price,
-            self._cfg.fixed_size_shares, C_RESET,
+            actual_size, target_size, C_RESET,
         )
 
     def _maintain_grid_static(
@@ -389,201 +418,8 @@ class GridMakerEngine:
             )
 
     # -----------------------------------------------------------------
-    # Dynamic grid mode (original behavior)
+    # Merge (batch only)
     # -----------------------------------------------------------------
-
-    def _post_initial_grid(
-        self, market: GabagoolMarket, up_tob, down_tob, seconds_to_end: int,
-    ) -> None:
-        """Post initial grid on both sides of a market (dynamic mode)."""
-        budget = calculate_per_market_budget(
-            self._effective_bankroll, max(1, len(self._markets)),
-        )
-        if budget <= ZERO:
-            return
-
-        # Half budget per side
-        side_budget = budget / 2
-
-        # Scale grid params based on bankroll
-        levels, size = scale_grid_params(
-            self._effective_bankroll,
-            self._cfg.grid_levels_per_side,
-            self._cfg.base_size_shares,
-        )
-
-        # Generate grid for UP side
-        if up_tob.best_bid is not None:
-            up_levels = calculate_grid_allocation(
-                side_budget, levels, size,
-                self._cfg.grid_step, up_tob.best_bid,
-                self._cfg.size_curve,
-            )
-            for price, sz in up_levels:
-                if price < self._cfg.min_entry_price or price > self._cfg.max_entry_price:
-                    continue
-                self._order_mgr.place_order(
-                    self._client, market, market.up_token_id,
-                    Direction.UP, price, sz, seconds_to_end,
-                    reason="GRID_INIT",
-                )
-
-        # Generate grid for DOWN side
-        if down_tob.best_bid is not None:
-            down_levels = calculate_grid_allocation(
-                side_budget, levels, size,
-                self._cfg.grid_step, down_tob.best_bid,
-                self._cfg.size_curve,
-            )
-            for price, sz in down_levels:
-                if price < self._cfg.min_entry_price or price > self._cfg.max_entry_price:
-                    continue
-                self._order_mgr.place_order(
-                    self._client, market, market.down_token_id,
-                    Direction.DOWN, price, sz, seconds_to_end,
-                    reason="GRID_INIT",
-                )
-
-        log.info(
-            "%sGRID_POST %s │ budget=$%s │ %d levels/side%s",
-            C_GREEN, market.slug[:40], budget, levels, C_RESET,
-        )
-
-    def _maintain_grid(
-        self, market: GabagoolMarket, up_tob, down_tob, seconds_to_end: int,
-    ) -> None:
-        """Maintain grid — cancel stale levels, post new ones tracking book (dynamic mode)."""
-        for token_id, tob, direction in [
-            (market.up_token_id, up_tob, Direction.UP),
-            (market.down_token_id, down_tob, Direction.DOWN),
-        ]:
-            if tob is None or tob.best_bid is None:
-                continue
-
-            orders = self._order_mgr.get_all_orders_for_token(token_id)
-            if not orders:
-                # No orders on this side — repost
-                budget = calculate_per_market_budget(
-                    self._effective_bankroll, max(1, len(self._markets)),
-                ) / 2
-                levels, size = scale_grid_params(
-                    self._effective_bankroll,
-                    self._cfg.grid_levels_per_side,
-                    self._cfg.base_size_shares,
-                )
-                grid = calculate_grid_allocation(
-                    budget, levels, size,
-                    self._cfg.grid_step, tob.best_bid,
-                    self._cfg.size_curve,
-                )
-                for price, sz in grid:
-                    if price < self._cfg.min_entry_price or price > self._cfg.max_entry_price:
-                        continue
-                    self._order_mgr.place_order(
-                        self._client, market, token_id,
-                        direction, price, sz, seconds_to_end,
-                        reason="GRID_REPOST",
-                    )
-                continue
-
-            # Check if book has moved significantly — if best_bid moved by
-            # more than 2 steps from the nearest order, cancel and repost
-            order_prices = [o.price for o in orders]
-            if order_prices:
-                nearest = min(order_prices, key=lambda p: abs(p - tob.best_bid))
-                drift = abs(nearest - tob.best_bid)
-                if drift > self._cfg.grid_step * 3:
-                    log.debug(
-                        "GRID_DRIFT %s %s │ drift=%s > %s │ reposting",
-                        market.slug[:30], direction.value, drift, self._cfg.grid_step * 3,
-                    )
-                    self._order_mgr.cancel_all_for_token(
-                        self._client, token_id, reason="GRID_DRIFT",
-                        on_fill=self._on_fill,
-                    )
-                    # Repost will happen next tick when no orders exist
-
-    # -----------------------------------------------------------------
-    # Taker hedge
-    # -----------------------------------------------------------------
-
-    def _check_taker_hedge(
-        self, market: GabagoolMarket, up_tob, down_tob, seconds_to_end: int,
-    ) -> None:
-        """Use FOK TAKER buy on deficit side when imbalance exceeds threshold."""
-        up_filled = self._filled_shares.get(market.up_token_id, ZERO)
-        down_filled = self._filled_shares.get(market.down_token_id, ZERO)
-
-        total_filled = up_filled + down_filled
-        if total_filled <= ZERO:
-            return
-
-        imbalance = abs(up_filled - down_filled) / total_filled
-        if imbalance < self._cfg.taker_trigger_imbalance:
-            return
-
-        # Determine deficit side
-        if up_filled > down_filled:
-            deficit_token = market.down_token_id
-            deficit_direction = Direction.DOWN
-            deficit_tob = down_tob
-            deficit_shares = up_filled - down_filled
-        else:
-            deficit_token = market.up_token_id
-            deficit_direction = Direction.UP
-            deficit_tob = up_tob
-            deficit_shares = down_filled - up_filled
-
-        if deficit_tob is None or deficit_tob.best_ask is None:
-            return
-
-        # Taker budget = aggression_pct of per-market budget
-        taker_budget = (
-            calculate_per_market_budget(self._effective_bankroll, max(1, len(self._markets)))
-            * self._cfg.taker_aggression_pct
-        )
-        max_taker_shares = (taker_budget / deficit_tob.best_ask).quantize(
-            Decimal("0.01"), rounding=0  # ROUND_DOWN
-        )
-        hedge_size = min(deficit_shares, max_taker_shares)
-
-        if hedge_size < Decimal("5"):
-            return
-
-        log.info(
-            "%sTAKER_HEDGE %s │ %s deficit=%s imbalance=%.0f%% │ FOK %s x%s @ %s%s",
-            C_YELLOW, market.slug[:30], deficit_direction.value,
-            deficit_shares, float(imbalance * 100),
-            deficit_direction.value, hedge_size, deficit_tob.best_ask,
-            C_RESET,
-        )
-
-        self._order_mgr.place_order(
-            self._client, market, deficit_token,
-            deficit_direction, deficit_tob.best_ask, hedge_size,
-            seconds_to_end, reason="TAKER_HEDGE",
-            order_type=OrderType.FOK if self._cfg.use_fok else None,
-        )
-
-    # -----------------------------------------------------------------
-    # Merge
-    # -----------------------------------------------------------------
-
-    def _check_merge(self, market: GabagoolMarket, now: float) -> None:
-        """Check if balanced shares are ready to merge (eager mode, per-market)."""
-        up_filled = self._filled_shares.get(market.up_token_id, ZERO)
-        down_filled = self._filled_shares.get(market.down_token_id, ZERO)
-
-        balanced = min(up_filled, down_filled)
-        if balanced < self._cfg.min_merge_shares:
-            return
-
-        # Cooldown
-        last_merge = self._last_merge_at.get(market.slug, 0.0)
-        if now - last_merge < self._cfg.merge_cooldown_sec:
-            return
-
-        self._execute_merge(market, balanced, now)
 
     def _batch_merge(self, now: float) -> None:
         """Sweep all markets for merge opportunities on a timer."""
@@ -690,22 +526,22 @@ class GridMakerEngine:
             self._filled_shares[token_id], C_RESET,
         )
 
-        # In static mode, remove the filled price from active levels
-        # so maintain_grid_static will replenish it
-        if self._cfg.grid_mode == "static":
-            active = self._active_grid_levels.get(token_id)
-            if active is not None:
-                active.discard(order_state.price)
+        # Remove the filled price from active levels so
+        # maintain_grid_static will replenish it
+        active = self._active_grid_levels.get(token_id)
+        if active is not None:
+            active.discard(order_state.price)
 
     # -----------------------------------------------------------------
     # Cleanup & compounding
     # -----------------------------------------------------------------
 
     def _cleanup_market(self, market: GabagoolMarket, reason: str) -> None:
-        """Cancel all orders for a market and mark as completed."""
-        self._order_mgr.cancel_market_orders(
-            self._client, market, reason=reason, on_fill=self._on_fill,
-        )
+        """Mark market as completed; queue redemption if fills remain.
+
+        Does NOT cancel active grid orders — gabagool lets orders sit
+        through expiry and the CLOB handles expired markets.
+        """
         self._completed_markets.add(market.slug)
         # Clean up static grid state
         self._grid_spec.pop(market.up_token_id, None)

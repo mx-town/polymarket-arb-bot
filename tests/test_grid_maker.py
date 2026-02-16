@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from grid_maker.capital import calculate_grid_allocation, calculate_static_grid
+from grid_maker.capital import calculate_static_grid
 from grid_maker.config import GridMakerConfig, load_grid_maker_config, validate_config
 from shared.models import ZERO, Direction, GabagoolMarket, OrderState
 from shared.order_mgr import OrderManager
@@ -23,40 +23,71 @@ D = Decimal
 
 
 class TestCalculateStaticGrid:
-    def test_full_range(self):
-        """99 levels from $0.01 to $0.99, all sizes = fixed."""
+    def test_full_range_all_99_levels(self):
+        """99 levels from $0.01 to $0.99, all sizes = target when budget is huge."""
         grid = calculate_static_grid(
             min_price=D("0.01"),
             max_price=D("0.99"),
             grid_step=D("0.01"),
-            fixed_size=D("26"),
-            budget=D("100000"),  # huge budget, no cap
+            target_size=D("20"),
+            budget=D("100000"),
         )
         assert len(grid) == 99
-        # All sizes should be 26
         for price, size in grid:
-            assert size == D("26")
-        # First and last prices
+            assert size == D("20")
         assert grid[0][0] == D("0.01")
         assert grid[-1][0] == D("0.99")
 
-    def test_budget_cap(self):
-        """Budget=$50 should truncate from the expensive end."""
+    def test_budget_scaling_keeps_99_levels(self):
+        """Small budget scales down shares but keeps ALL 99 levels."""
         grid = calculate_static_grid(
             min_price=D("0.01"),
             max_price=D("0.99"),
             grid_step=D("0.01"),
-            fixed_size=D("26"),
+            target_size=D("20"),
             budget=D("50"),
         )
-        # Budget caps: cheapest levels first, so should get fewer than 99
-        assert len(grid) < 99
-        assert len(grid) > 0
-        # Total notional should be <= $50
+        # Must still have all 99 levels — never truncate coverage
+        assert len(grid) == 99
+        assert grid[0][0] == D("0.01")
+        assert grid[-1][0] == D("0.99")
+        # All sizes should be the same (uniform scaling)
+        sizes = {s for _, s in grid}
+        assert len(sizes) == 1
+        # Scaled size must be less than target
+        actual_size = grid[0][1]
+        assert actual_size < D("20")
+        assert actual_size >= D("1")  # minimum floor
+        # Total notional should be <= budget
         total = sum(p * s for p, s in grid)
         assert total <= D("50")
-        # First price should still be $0.01
-        assert grid[0][0] == D("0.01")
+
+    def test_min_1_share_floor(self):
+        """Extremely tight budget still gives at least 1 share per level."""
+        grid = calculate_static_grid(
+            min_price=D("0.01"),
+            max_price=D("0.99"),
+            grid_step=D("0.01"),
+            target_size=D("26"),
+            budget=D("100"),  # full grid at 26 shares costs ~$1300, so heavy scaling
+        )
+        assert len(grid) == 99
+        for _, size in grid:
+            assert size >= D("1")
+
+    def test_full_budget_at_target_size(self):
+        """When budget covers full grid, every level gets target_size."""
+        # Full grid at 26 shares: sum(i*26 for i=0.01..0.99) = 26 * 49.50 = $1287
+        grid = calculate_static_grid(
+            min_price=D("0.01"),
+            max_price=D("0.99"),
+            grid_step=D("0.01"),
+            target_size=D("26"),
+            budget=D("1300"),
+        )
+        assert len(grid) == 99
+        for _, size in grid:
+            assert size == D("26")
 
     def test_custom_range(self):
         """$0.10-$0.50 at $0.01 step = 41 levels."""
@@ -64,7 +95,7 @@ class TestCalculateStaticGrid:
             min_price=D("0.10"),
             max_price=D("0.50"),
             grid_step=D("0.01"),
-            fixed_size=D("10"),
+            target_size=D("10"),
             budget=D("100000"),
         )
         assert len(grid) == 41
@@ -85,48 +116,25 @@ class TestCalculateStaticGrid:
             min_price=D("0.50"),
             max_price=D("0.50"),
             grid_step=D("0.01"),
-            fixed_size=D("10"),
+            target_size=D("10"),
             budget=D("100"),
         )
         assert len(grid) == 1
         assert grid[0] == (D("0.50"), D("10"))
 
-
-class TestCalculateGridAllocationUnchanged:
-    """Regression: dynamic mode grid allocation is identical to before."""
-
-    def test_flat_basic(self):
-        grid = calculate_grid_allocation(
-            budget=D("100"),
-            grid_levels=10,
-            base_size=D("5"),
-            grid_step=D("0.01"),
-            best_bid=D("0.50"),
-            size_curve="flat",
-        )
-        assert len(grid) > 0
-        # All sizes should be 5 (flat curve)
-        for _, size in grid:
-            assert size == D("5")
-        # Prices should start at best_bid + step
-        assert grid[0][0] == D("0.51")
-
-    def test_budget_capped(self):
-        grid = calculate_grid_allocation(
-            budget=D("5"),
-            grid_levels=30,
-            base_size=D("10"),
-            grid_step=D("0.01"),
-            best_bid=D("0.50"),
-            size_curve="flat",
-        )
-        total = sum(p * s for p, s in grid)
-        assert total <= D("5")
-
-    def test_empty_on_bad_inputs(self):
-        assert calculate_grid_allocation(D("100"), 0, D("5"), D("0.01"), D("0.50")) == []
-        assert calculate_grid_allocation(D("0"), 10, D("5"), D("0.01"), D("0.50")) == []
-        assert calculate_grid_allocation(D("100"), 10, D("5"), D("0.01"), None) == []
+    def test_different_target_sizes(self):
+        """Different target sizes produce correct grids (gabagool sizing table)."""
+        for target in [10, 15, 16, 20, 26]:
+            grid = calculate_static_grid(
+                min_price=D("0.01"),
+                max_price=D("0.99"),
+                grid_step=D("0.01"),
+                target_size=D(str(target)),
+                budget=D("100000"),
+            )
+            assert len(grid) == 99
+            for _, size in grid:
+                assert size == D(str(target))
 
 
 # -----------------------------------------------------------------
@@ -135,39 +143,47 @@ class TestCalculateGridAllocationUnchanged:
 
 
 class TestGridMakerConfig:
-    def test_static_mode_defaults(self):
-        """New fields parse correctly with defaults."""
+    def test_defaults(self):
+        """Default config values for gabagool clone."""
         cfg = GridMakerConfig()
-        assert cfg.grid_mode == "dynamic"
-        assert cfg.fixed_size_shares == D("26")
-        assert cfg.merge_mode == "eager"
+        assert cfg.grid_sizes == {
+            "bitcoin": {"5m": 20, "15m": 15, "1h": 26},
+            "ethereum": {"15m": 10, "1h": 16},
+        }
         assert cfg.merge_batch_interval_sec == 3600
+        assert cfg.min_seconds_to_end == 30
+        assert cfg.entry_delay_sec == 5
 
-    def test_static_mode_values(self):
+    def test_get_size_for_known_combos(self):
+        """get_size_for returns correct sizes for all gabagool combos."""
+        cfg = GridMakerConfig()
+        assert cfg.get_size_for("bitcoin", "5m") == 20
+        assert cfg.get_size_for("bitcoin", "15m") == 15
+        assert cfg.get_size_for("bitcoin", "1h") == 26
+        assert cfg.get_size_for("ethereum", "15m") == 10
+        assert cfg.get_size_for("ethereum", "1h") == 16
+
+    def test_get_size_for_missing_combo(self):
+        """get_size_for returns None for combos not in the sizing table."""
+        cfg = GridMakerConfig()
+        assert cfg.get_size_for("ethereum", "5m") is None
+        assert cfg.get_size_for("dogecoin", "5m") is None
+
+    def test_custom_grid_sizes(self):
         cfg = GridMakerConfig(
-            grid_mode="static",
-            fixed_size_shares=D("10"),
-            merge_mode="batch",
-            merge_batch_interval_sec=1800,
+            grid_sizes={"bitcoin": {"5m": 50}},
         )
-        assert cfg.grid_mode == "static"
-        assert cfg.fixed_size_shares == D("10")
-        assert cfg.merge_mode == "batch"
-        assert cfg.merge_batch_interval_sec == 1800
+        assert cfg.get_size_for("bitcoin", "5m") == 50
+        assert cfg.get_size_for("bitcoin", "15m") is None
 
-    def test_invalid_grid_mode(self):
-        cfg = GridMakerConfig(grid_mode="invalid")
-        with pytest.raises(ValueError, match="grid_mode"):
+    def test_invalid_grid_sizes_zero(self):
+        cfg = GridMakerConfig(grid_sizes={"bitcoin": {"5m": 0}})
+        with pytest.raises(ValueError, match="grid_sizes"):
             validate_config(cfg)
 
-    def test_invalid_merge_mode(self):
-        cfg = GridMakerConfig(merge_mode="invalid")
-        with pytest.raises(ValueError, match="merge_mode"):
-            validate_config(cfg)
-
-    def test_invalid_fixed_size(self):
-        cfg = GridMakerConfig(fixed_size_shares=D("0"))
-        with pytest.raises(ValueError, match="fixed_size_shares"):
+    def test_invalid_empty_grid_sizes(self):
+        cfg = GridMakerConfig(grid_sizes={})
+        with pytest.raises(ValueError, match="grid_sizes must not be empty"):
             validate_config(cfg)
 
     def test_invalid_batch_interval(self):
@@ -175,8 +191,8 @@ class TestGridMakerConfig:
         with pytest.raises(ValueError, match="merge_batch_interval_sec"):
             validate_config(cfg)
 
-    def test_backward_compat_no_new_fields(self):
-        """YAML without new fields loads with current defaults."""
+    def test_backward_compat_no_grid_sizes(self):
+        """YAML without grid_sizes loads with default sizing table."""
         raw = {
             "grid_maker": {
                 "enabled": True,
@@ -185,26 +201,29 @@ class TestGridMakerConfig:
             }
         }
         cfg = load_grid_maker_config(raw)
-        assert cfg.grid_mode == "dynamic"
-        assert cfg.fixed_size_shares == D("26")
-        assert cfg.merge_mode == "eager"
+        assert cfg.grid_sizes == {
+            "bitcoin": {"5m": 20, "15m": 15, "1h": 26},
+            "ethereum": {"15m": 10, "1h": 16},
+        }
         assert cfg.merge_batch_interval_sec == 3600
 
-    def test_load_static_config(self):
-        """YAML with new fields loads correctly."""
+    def test_load_config_with_grid_sizes(self):
+        """YAML with grid_sizes loads correctly."""
         raw = {
             "grid_maker": {
-                "grid_mode": "static",
-                "fixed_size_shares": 10,
-                "merge_mode": "batch",
+                "grid_sizes": {
+                    "bitcoin": {"5m": 30, "1h": 50},
+                },
                 "merge_batch_interval_sec": 1800,
+                "entry_delay_sec": 3,
             }
         }
         cfg = load_grid_maker_config(raw)
-        assert cfg.grid_mode == "static"
-        assert cfg.fixed_size_shares == D("10")
-        assert cfg.merge_mode == "batch"
+        assert cfg.get_size_for("bitcoin", "5m") == 30
+        assert cfg.get_size_for("bitcoin", "1h") == 50
+        assert cfg.get_size_for("bitcoin", "15m") is None
         assert cfg.merge_batch_interval_sec == 1800
+        assert cfg.entry_delay_sec == 3
 
 
 # -----------------------------------------------------------------

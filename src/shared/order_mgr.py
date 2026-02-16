@@ -29,7 +29,7 @@ from shared.models import (
 
 log = logging.getLogger("shared.orders")
 
-ORDER_STALE_TIMEOUT_S = 300.0
+ORDER_STALE_TIMEOUT_S = 7200.0
 ORDER_STATUS_POLL_INTERVAL_S = 1.0
 
 
