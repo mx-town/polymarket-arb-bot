@@ -22,7 +22,7 @@ from observer.persistence.db import init_db, get_engine
 from observer.persistence.schema import obs_sessions
 from observer.persistence.writer import ObserverWriter
 from observer.poller import ActivityPoller
-from observer.positions import PositionPoller
+from observer.positions import PositionPoller, detect_merges_from_changes
 
 
 def _parse_args() -> argparse.Namespace:
@@ -175,6 +175,12 @@ async def _run(cfg) -> None:
                 positions, changes = await asyncio.to_thread(pos_poller.poll)
                 await writer.enqueue_positions(positions)
                 await writer.enqueue_position_changes(changes)
+
+                # Detect merges from simultaneous Up+Down decreases
+                detected = detect_merges_from_changes(changes)
+                for m in detected:
+                    analyzer.ingest_merge_from_position(m["slug"], m["shares"])
+                    await writer.enqueue_detected_merge(m["slug"], m["shares"])
 
             # Merge poll (every 6th tick)
             if tick % 6 == 0:

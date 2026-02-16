@@ -66,6 +66,21 @@ class TradeAnalyzer:
                     merge.token_id[:16], merge.tx_hash[:10],
                 )
 
+    def ingest_merge_from_position(self, slug: str, shares: float) -> None:
+        """Record a merge detected from position changes (no token_id needed)."""
+        window = self._windows.get(slug)
+        if not window:
+            log.debug("MERGE_NO_WINDOW │ slug=%s shares=%.2f", slug, shares)
+            return
+        window.merged_shares += shares
+        window.status = "MERGED"
+        mergeable = min(window.up_shares, window.down_shares)
+        pnl = mergeable * window.estimated_edge if mergeable > 0 else 0.0
+        log.info(
+            "%sMERGE_WINDOW%s │ %s │ merged=%.1f │ pnl=$%.3f │ edge=%.3f",
+            C_GREEN, C_RESET, window.slug, window.merged_shares, pnl, window.estimated_edge,
+        )
+
     def get_window(self, slug: str) -> MarketWindow | None:
         return self._windows.get(slug)
 
@@ -125,9 +140,10 @@ class TradeAnalyzer:
                 window.down_vwap = window.down_cost / window.down_shares
 
         window.combined_cost = window.up_cost + window.down_cost
-        mergeable = min(window.up_shares, window.down_shares)
-        if mergeable > 0:
-            window.estimated_edge = (mergeable - window.combined_cost) / mergeable
+        # Edge per merged pair = 1 - up_vwap - down_vwap (profit as fraction of $1 payout)
+        # Old formula used combined_cost which includes unhedged excess shares
+        if window.up_shares > 0 and window.down_shares > 0:
+            window.estimated_edge = 1.0 - window.up_vwap - window.down_vwap
         else:
             window.estimated_edge = 0.0
 
@@ -203,7 +219,7 @@ def _log_window_hedged(window: MarketWindow) -> None:
 
 def _log_window_merge(window: MarketWindow, merge: ObservedMerge) -> None:
     mergeable = min(window.up_shares, window.down_shares)
-    pnl = mergeable - window.combined_cost if mergeable > 0 else 0.0
+    pnl = mergeable * window.estimated_edge if mergeable > 0 else 0.0
     log.info(
         "%sMERGE_WINDOW%s │ %s │ merged=%.1f │ pnl=$%.3f │ edge=%.3f",
         C_GREEN,

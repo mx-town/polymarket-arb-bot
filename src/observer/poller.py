@@ -68,7 +68,7 @@ class ActivityPoller:
 def _parse_trade(item: dict[str, Any]) -> ObservedTrade | None:
     """Parse an Activity API item into an ObservedTrade."""
     try:
-        return ObservedTrade(
+        trade = ObservedTrade(
             timestamp=str(item.get("timestamp", "")),
             side=item.get("side", ""),
             price=float(item.get("price", 0)),
@@ -86,6 +86,17 @@ def _parse_trade(item: dict[str, Any]) -> ObservedTrade | None:
     except (ValueError, TypeError) as exc:
         log.debug("PARSE_FAIL │ %s │ item=%s", exc, item)
         return None
+
+    # Filter non-trade events (merge settlements, redemptions) that the
+    # Activity API returns with blank side/outcome and price=0.
+    if not trade.side or not trade.outcome or trade.price <= 0:
+        log.debug(
+            "SKIP_NON_TRADE │ tx=%s slug=%s side=%s outcome=%s price=%s",
+            trade.tx_hash[:10], trade.slug, trade.side, trade.outcome, trade.price,
+        )
+        return None
+
+    return trade
 
 
 def _log_trade(trade: ObservedTrade) -> None:

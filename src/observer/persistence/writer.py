@@ -83,6 +83,22 @@ class ObserverWriter:
         async with self._lock:
             self._buffer.extend(rows)
 
+    async def enqueue_detected_merge(self, slug: str, shares: float) -> None:
+        """Queue a merge detected from position changes (synthetic, no tx_hash)."""
+        if shares <= 0:
+            return
+        now = time.time()
+        row = {
+            "ts": now,
+            "tx_hash": f"pos_merge_{slug}_{now:.0f}",
+            "token_id": "",
+            "shares": shares,
+            "block_number": 0,
+            "session_id": self._session_id,
+        }
+        async with self._lock:
+            self._buffer.append((obs_merges, row))
+
     async def enqueue_positions(self, positions: list[ObservedPosition]) -> None:
         if not positions:
             return
@@ -97,6 +113,8 @@ class ObserverWriter:
                 "cash_pnl": p.cash_pnl,
                 "current_value": p.current_value,
                 "cur_price": p.cur_price,
+                "mergeable": int(p.mergeable),
+                "redeemable": int(p.redeemable),
                 "slug": p.slug,
                 "outcome": p.outcome,
                 "session_id": self._session_id,

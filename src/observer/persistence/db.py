@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine as SAEngine
 
 from observer.persistence.schema import metadata
@@ -46,8 +46,24 @@ def init_db(url: str | None = None) -> SAEngine:
         event.listen(_engine, "connect", _set_sqlite_wal)
 
     metadata.create_all(_engine)
+    _migrate(_engine)
     log.info("DB │ initialized at %s", url)
     return _engine
+
+
+def _migrate(engine: SAEngine) -> None:
+    """Add columns that may be missing from older schemas."""
+    migrations = [
+        ("obs_positions", "mergeable", "INTEGER DEFAULT 0"),
+        ("obs_positions", "redeemable", "INTEGER DEFAULT 0"),
+    ]
+    with engine.begin() as conn:
+        for table, column, col_type in migrations:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                log.info("DB │ migrated %s.%s", table, column)
+            except Exception:
+                pass  # column already exists
 
 
 def get_engine() -> SAEngine:

@@ -76,6 +76,8 @@ obs_positions = Table(
     Column("cash_pnl", Float),
     Column("current_value", Float),
     Column("cur_price", Float),
+    Column("mergeable", Integer),
+    Column("redeemable", Integer),
     Column("slug", String(120)),
     Column("outcome", String(10)),
     Column("session_id", String(50)),

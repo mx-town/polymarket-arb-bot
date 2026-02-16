@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from observer.models import C_RESET, C_YELLOW, ObservedPosition
+from observer.models import C_GREEN, C_RESET, C_YELLOW, ObservedPosition
 
 log = logging.getLogger("obs.positions")
 
@@ -127,6 +127,24 @@ def _diff_positions(
                 "old": old.cash_pnl,
                 "new": pos.cash_pnl,
             })
+        if pos.mergeable != old.mergeable:
+            changes.append({
+                "asset": asset,
+                "slug": pos.slug,
+                "outcome": pos.outcome,
+                "field": "mergeable",
+                "old": int(old.mergeable),
+                "new": int(pos.mergeable),
+            })
+        if pos.redeemable != old.redeemable:
+            changes.append({
+                "asset": asset,
+                "slug": pos.slug,
+                "outcome": pos.outcome,
+                "field": "redeemable",
+                "old": int(old.redeemable),
+                "new": int(pos.redeemable),
+            })
 
     for asset in prev:
         if asset not in curr:
@@ -141,6 +159,43 @@ def _diff_positions(
             })
 
     return changes
+
+
+def detect_merges_from_changes(
+    changes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Detect merges from position changes.
+
+    When both Up and Down sides of the same slug decrease in the same snapshot,
+    it's a merge. Returns list of dicts with keys: slug, shares.
+    """
+    # Collect size decreases by slug+outcome
+    decreases: dict[str, dict[str, float]] = {}  # slug -> {outcome -> decrease}
+    for ch in changes:
+        if ch["field"] != "size":
+            continue
+        delta = ch["new"] - ch["old"]
+        if delta >= 0:
+            continue
+        slug = ch["slug"]
+        outcome = ch["outcome"]
+        if slug not in decreases:
+            decreases[slug] = {}
+        decreases[slug][outcome] = abs(delta)
+
+    merges: list[dict[str, Any]] = []
+    for slug, sides in decreases.items():
+        up_dec = sides.get("Up", 0.0)
+        down_dec = sides.get("Down", 0.0)
+        if up_dec > 0 and down_dec > 0:
+            merged = min(up_dec, down_dec)
+            merges.append({"slug": slug, "shares": merged})
+            log.info(
+                "%sMERGE_DETECTED%s │ %s │ shares=%.2f (up -%.2f, down -%.2f)",
+                C_GREEN, C_RESET, slug, merged, up_dec, down_dec,
+            )
+
+    return merges
 
 
 def _log_change(ch: dict[str, Any]) -> None:
